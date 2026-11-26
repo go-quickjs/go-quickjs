@@ -1284,15 +1284,18 @@ func (s *jitState) regTrimLowering(key jitKey, l *jitLowering) {
 		s.dropRegLowering(key, l)
 		return
 	}
+	n := l.footprint()
 	for k, p := range l.progs {
-		if k == held || p == nil {
+		if k == held || p == nil || p == l.progs[held] {
+			// Its own, or the one it shares with the kinds whose program the
+			// code holds (jitRegLowerKinds), which frees nothing.
 			continue
 		}
-		n := p.Footprint()
-		l.bytes -= n
-		s.lowerBytes -= n
 		l.done[k], l.progs[k], l.errs[k] = false, nil, nil
 	}
+	n -= l.footprint()
+	l.bytes -= n
+	s.lowerBytes -= n
 	s.floorAt = 0
 }
 

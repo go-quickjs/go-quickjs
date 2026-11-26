@@ -4170,15 +4170,25 @@ func (s *jitState) lowering(fn *bytecode.Function) *jitLowering {
 // relower drops l's programs, which are lowered again with its hints as
 // they are asked for (jitRegLower): what was compiled from them holds them.
 func (s *jitState) relower(l *jitLowering) {
+	n := l.footprint()
+	l.bytes -= n
+	s.lowerBytes -= n
 	for k := range l.progs {
-		if l.done[k] {
-			n := l.progs[k].Footprint()
-			l.bytes -= n
-			s.lowerBytes -= n
-		}
 		l.done[k], l.progs[k], l.errs[k] = false, nil, nil
 	}
 	l.serial++
+}
+
+// footprint is what l's programs hold, each once: the kinds that share a
+// program (jitRegLowerKinds) hold it once.
+func (l *jitLowering) footprint() int {
+	n := 0
+	for k, p := range l.progs {
+		if p != nil && l.done[k] && !slices.Contains(l.progs[:k], p) {
+			n += p.Footprint()
+		}
+	}
+	return n
 }
 
 // jitBigIntNote is jitRegBigIntSeen's learning: in, the instruction whose

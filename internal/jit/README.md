@@ -150,9 +150,17 @@ has a form with hints (`LowerRegWith`, `Hints` by register pc), what the
 function's code learned at its exits (see [Feedback](#feedback)). Code
 compiled at a function's first call (`bytecode.RegLater`) keeps the names,
 constants and property sites it adds in its `RegCode`, which the lowering
-reads in place of the function's (`regView`). The VM lowers each kind of a
-function's program once and keeps it (`jitRegLower`, `regLowered`, a
-`jitLowering` by the function's key), checked
+reads in place of the function's (`regView`). The three kinds differ only in
+what they refuse -- a callee's refusals are an entry's and more, and an
+entry's program of host operations alone is refused where a callee's is not
+-- so `LowerRegKindsWith` lowers a function once for all three, each kind's
+refusal the one its own lowering gives, at the same check, and the program
+the kinds that take it share the one each would have been lowered to alone
+(`LowerRegForwardWith`'s, which a forwarding callee is lowered to, differs,
+and is lowered apart). The VM lowers a function's program once for the
+kinds that share it and keeps it (`jitRegLower`, `jitRegLowerKinds`,
+`regLowered`, a `jitLowering` by the function's key, which counts a
+program the kinds share once), checked
 once as it is lowered (`ir.Program`'s `Validate`, which marks it `Checked`:
 the builder checks such a program no more, neither at each build nor at
 each ask to inline it, `InlineCalls`): its own compiles and every
@@ -1021,7 +1029,8 @@ before. A lowering ahead no worker has begun once its function has spent
 `jitTakeBackAsks` budgets waiting is taken back, lowered as asked for, as a
 compile is. Under `QJS_JIT_STRESS`'s background, and in the tests that wait
 for the background, the lowering is waited for, so that the compile is made
-where it would have been, from the workers' programs. Typed code's
+where it would have been, from the workers' programs, each lowering the kinds that share their
+program at once (`jitAheadKind`). Typed code's
 lowering is not handed over: its link asks for its code once
 (`jitTypedLinked`). On Octane's Typescript, the root's lowering and its
 callees' had been about 50 of the 254 us a compile in the background spent
@@ -3904,8 +3913,8 @@ call compares the function and its own realm alone, so the slot is given to
 no link of the same function after (`regFreeHint`), whose realm's code that
 template's closures would call.
 
-A function's programs (`regLowered`, one lowering of each kind it was
-asked for) are a cache its compiles are made from, which the budget can
+A function's programs (`regLowered`, one lowering for the kinds that share
+its program, another for a forwarding callee's) are a cache its compiles are made from, which the budget can
 always reclaim: each is the cheapest victim (`jitVictimLowering`), whatever
 its function's entry, but for the program the function's code was compiled
 from, which that code holds and which goes with it (`regLoweringSpare`,

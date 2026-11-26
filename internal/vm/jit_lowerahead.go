@@ -9,7 +9,6 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
-	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 )
 
 // Register code lowered ahead, on a worker, for a compile in the background
@@ -37,20 +36,28 @@ type jitAheadKey struct {
 	kind jitLowerKind
 }
 
-// jitAheadItem is one program a jitAheadJob lowers: of rc, fn's register
-// code, as kind says, with hints h, its key's -- or, ifHostOnly, the
-// fallback lowering of the job's first item, made only where that is
-// refused as host operations alone (jitRegCompile's jitcompile.HostOnly).
-// p and err are the lowering's; failed marks one not made.
+// jitAheadItem is one lowering a jitAheadJob makes: of rc, fn's register
+// code, as kind says, with hints h, its key's, and so the kinds that share
+// its program (jitRegLowerKinds); got is what it made, failed marks one
+// not made. Its key names kind as jitAheadKind does.
 type jitAheadItem struct {
-	at         jitAheadKey
-	rc         *bytecode.RegCode
-	fn         *bytecode.Function
-	h          jitcompile.Hints
-	ifHostOnly bool
-	p          *ir.Program
-	err        error
-	failed     bool
+	at     jitAheadKey
+	kind   jitLowerKind
+	rc     *bytecode.RegCode
+	fn     *bytecode.Function
+	h      jitcompile.Hints
+	got    jitLowered
+	failed bool
+}
+
+// jitAheadKind is the kind a lowering ahead of kind is named by: an
+// entry's for those that share their program (jitLowerShares), made at
+// once.
+func jitAheadKind(kind jitLowerKind) jitLowerKind {
+	if jitLowerShares(kind) {
+		return jitLowerSSA
+	}
+	return kind
 }
 
 // jitAheadJob is the lowerings ahead a compile in the background waits for
@@ -79,17 +86,13 @@ func (j *jitAheadJob) run() {
 	}
 	for i := range j.items {
 		it := &j.items[i]
-		if it.ifHostOnly && (j.items[0].err == nil || !jitcompile.HostOnly(j.items[0].err)) {
-			it.failed = true
-			continue
-		}
 		func() {
 			defer func() {
 				if v := recover(); v != nil {
-					it.p, it.err, it.failed = nil, nil, true
+					it.got, it.failed = jitLowered{}, true
 				}
 			}()
-			it.p, it.err = jitRegLowerWith(it.rc, it.fn, it.at.kind, it.h)
+			it.got = jitRegLowerKinds(it.rc, it.fn, it.kind, it.h)
 		}()
 	}
 	j.state.Store(jitJobDone)
@@ -123,19 +126,19 @@ func (s *jitState) aheadItem(at jitAheadKey, rc *bytecode.RegCode, h *jitcompile
 	return nil, j
 }
 
-// regTakeAhead is the program lowered ahead as at says, of rc with hints h,
-// if a worker made it (aheadItem), taken: the lowering's caller keeps it.
-func (s *jitState) regTakeAhead(at jitAheadKey, rc *bytecode.RegCode, h *jitcompile.Hints) (*ir.Program, error, bool) {
+// regTakeAhead is the lowering ahead at names, of rc with hints h, if a
+// worker made it (aheadItem), taken: the lowering's caller keeps it.
+func (s *jitState) regTakeAhead(at jitAheadKey, rc *bytecode.RegCode, h *jitcompile.Hints) (jitLowered, bool) {
 	it, j := s.aheadItem(at, rc, h)
 	if j != nil && j.state.Load() == jitJobDone {
 		// Taken or not of use: what is asked for next is lowered for it.
 		delete(s.regAhead, at)
 	}
 	if it == nil {
-		return nil, nil, false
+		return jitLowered{}, false
 	}
 	s.aheadTaken++
-	return it.p, it.err, true
+	return it.got, true
 }
 
 // jitRegLowerAhead reports whether the compile in the background of cl's
@@ -168,37 +171,30 @@ func (r *Runtime) jitRegLowerAhead(cl *closure, c *regCode, callee bool) (bool, 
 		if l.done[kind] {
 			return l.errs[kind], true, nil
 		}
-		it, j := s.aheadItem(jitAheadKey{key, kind}, c.rc, &h)
-		if it != nil {
-			return it.err, true, nil
+		at := jitAheadKey{key, jitAheadKind(kind)}
+		it, j := s.aheadItem(at, c.rc, &h)
+		if it != nil && it.got.done[kind] {
+			return it.got.errs[kind], true, nil
 		}
 		if j != nil && j.state.Load() == jitJobDone {
 			// Made of other hints: lowered anew.
-			delete(s.regAhead, jitAheadKey{key, kind})
+			delete(s.regAhead, at)
 			j = nil
 		}
 		return nil, false, j
 	}
-	// The fallback of a program of host operations alone (jitRegCompile).
+	// The fallback of a program of host operations alone (jitRegCompile),
+	// which shares its program (jitRegLowerKinds).
 	fallback := jitLowerHot
 	if callee {
 		fallback = jitLowerInline
 	}
-	var want []jitAheadItem
 	err, ok, pend := ready(jitLowerSSA)
-	switch {
-	case !ok:
-		want = append(want, jitAheadItem{at: jitAheadKey{key, jitLowerSSA}, rc: c.rc, fn: cl.fn, h: h})
-		if !l.done[fallback] {
-			want = append(want, jitAheadItem{at: jitAheadKey{key, fallback}, rc: c.rc, fn: cl.fn, h: h, ifHostOnly: true})
-		}
-	case err == nil || !jitcompile.HostOnly(err) || !callee && !r.jitRegCallsNatively(cl, c):
+	if ok && err != nil && jitcompile.HostOnly(err) && (callee || r.jitRegCallsNatively(cl, c)) {
+		_, ok, pend = ready(fallback)
+	}
+	if ok {
 		return true, s.regAheadRoots[key]
-	default:
-		if _, ok, pend = ready(fallback); ok {
-			return true, s.regAheadRoots[key]
-		}
-		want = append(want, jitAheadItem{at: jitAheadKey{key, fallback}, rc: c.rc, fn: cl.fn, h: h})
 	}
 	if pend != nil {
 		// Waited for: taken back where no worker has begun it in time.
@@ -209,9 +205,9 @@ func (r *Runtime) jitRegLowerAhead(cl *closure, c *regCode, callee bool) (bool, 
 		return r.jitAheadWait(pend), root
 	}
 	j := &jitAheadJob{root: key, done: make(chan struct{})}
-	j.items = want
+	j.items = []jitAheadItem{{at: jitAheadKey{key, jitLowerSSA}, kind: jitLowerSSA, rc: c.rc, fn: cl.fn, h: h}}
 	r.jitRegAheadCallees(cl, func(t *closure, rc *bytecode.RegCode, k jitKey, h jitcompile.Hints) {
-		j.items = append(j.items, jitAheadItem{at: jitAheadKey{k, jitLowerInline}, rc: rc, fn: t.fn, h: h})
+		j.items = append(j.items, jitAheadItem{at: jitAheadKey{k, jitAheadKind(jitLowerInline)}, kind: jitLowerInline, rc: rc, fn: t.fn, h: h})
 	})
 	if s.regAhead == nil {
 		s.regAhead, s.regAheadRoots = map[jitAheadKey]*jitAheadJob{}, map[jitKey]*jitAheadJob{}
@@ -264,7 +260,7 @@ func (r *Runtime) jitRegAheadCallees(root *closure, add func(t *closure, rc *byt
 			return true
 		}
 		key := r.jitRegKeyOf(t)
-		if s.regAhead[jitAheadKey{key, jitLowerInline}] != nil {
+		if s.regAhead[jitAheadKey{key, jitAheadKind(jitLowerInline)}] != nil {
 			return true
 		}
 		var h jitcompile.Hints

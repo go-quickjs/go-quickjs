@@ -1344,6 +1344,12 @@ is under [The projection](#the-projection).
   Projected 50 µs a compile off the goroutine (27 the root's, 25 the
   callees', of which a scan of the caches finds about 80%); *measured*:
   pending.
+  One lowering a function: an entry's, a hot function's and a callee's
+  programs differ only in what they refuse, so a function is lowered once
+  for the three (`LowerRegKindsWith`) and the kinds share the program, its
+  bytes counted once. Of the lowerings Typescript made in the background,
+  about half were a second kind of a function lowered before (86 of the
+  compiles' own, 154 of the callees'); *measured*: pending.
 - **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
   was run beside mir's scan on every compile, given the same function: an
   instruction for each value and the block's end, the frame states' uses

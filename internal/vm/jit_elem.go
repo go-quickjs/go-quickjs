@@ -63,14 +63,18 @@ func (r *Runtime) jitRegLower(cl *closure, rc *bytecode.RegCode, kind jitLowerKi
 	if !l.done[kind] {
 		s := r.jit
 		// Lowered ahead by a worker, if it was (jit_lowerahead.go): the same
-		// program.
-		p, err, ok := s.regTakeAhead(jitAheadKey{key, kind}, rc, &h)
+		// programs.
+		got, ok := s.regTakeAhead(jitAheadKey{key, jitAheadKind(kind)}, rc, &h)
 		if !ok {
-			p, err = jitRegLowerWith(rc, cl.fn, kind, h)
+			got = jitRegLowerKinds(rc, cl.fn, kind, h)
 		}
-		l.progs[kind], l.errs[kind] = p, err
-		l.done[kind] = true
-		n := l.progs[kind].Footprint()
+		n := l.footprint()
+		for k := range got.done {
+			if got.done[k] && !l.done[k] {
+				l.progs[k], l.errs[k], l.done[k] = got.progs[k], got.errs[k], true
+			}
+		}
+		n = l.footprint() - n
 		l.bytes += n
 		s.lowerBytes += n
 	}
@@ -181,6 +185,61 @@ func jitRegLowerWith(rc *bytecode.RegCode, fn *bytecode.Function, kind jitLowerK
 		p.Checked = err == nil
 	}
 	return p, err
+}
+
+// jitLowered is a lowering's programs and their errors by kind, done the
+// kinds it made.
+type jitLowered struct {
+	done  [jitLowerKinds]bool
+	progs [jitLowerKinds]*ir.Program
+	errs  [jitLowerKinds]error
+}
+
+// jitLowerShares reports whether a program of kind is lowered with those
+// of the other kinds that share it (jitRegLowerKinds): an entry's, a hot
+// function's and a callee's, which differ only in what they refuse
+// (jitcompile.LowerRegKindsWith), but not a forwarding callee's.
+func jitLowerShares(kind jitLowerKind) bool { return kind != jitLowerForward }
+
+// jitRegLowerKinds is fn's register code rc lowered as kind says, with
+// hints, and checked, as jitRegLowerWith lowers it, and, where kind shares
+// its program (jitLowerShares), lowered so for the other kinds that do,
+// at once: one program for those that take it, each the one it would have
+// been lowered to alone, checked once. A function compiled and inlined had
+// been lowered twice, about half of the lowerings Octane's Typescript made
+// in the background.
+func jitRegLowerKinds(rc *bytecode.RegCode, fn *bytecode.Function, kind jitLowerKind, h jitcompile.Hints) (out jitLowered) {
+	if !jitLowerShares(kind) {
+		p, err := jitRegLowerWith(rc, fn, kind, h)
+		out.done[kind], out.progs[kind], out.errs[kind] = true, p, err
+		return out
+	}
+	var p *ir.Program
+	var errs [3]error
+	if rc.Typed {
+		// Typed code's, a twin's (asmTwin): one lowering for every kind.
+		p, errs[0] = jitTypedLower(rc, fn)
+		errs[1], errs[2] = errs[0], errs[0]
+	} else {
+		p, errs[0], errs[1], errs[2] = jitcompile.LowerRegKindsWith(rc, fn, h)
+		if p != nil {
+			// Checked once, here, as jitRegLowerWith checks it.
+			err := p.Validate()
+			p.Checked = err == nil
+			for i := range errs {
+				if errs[i] == nil {
+					errs[i] = err
+				}
+			}
+		}
+	}
+	for i, k := range [3]jitLowerKind{jitLowerSSA, jitLowerHot, jitLowerInline} {
+		out.done[k], out.errs[k] = true, errs[i]
+		if errs[i] == nil {
+			out.progs[k] = p
+		}
+	}
+	return out
 }
 
 // jitRegElemRead is the receiver and the key of the element read of the

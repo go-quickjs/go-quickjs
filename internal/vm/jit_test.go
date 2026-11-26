@@ -8558,7 +8558,8 @@ func TestJITSSAKnownReceivers(t *testing.T) {
 // A compile reads its sites (jitRegFeedback's Intrinsic) from the program
 // it compiles, not from the function lowered
 // again for inlining: blocks, whose method reads have no feedback yet, is
-// lowered once, as a function on its own. Lowered for inlining too, a
+// lowered once, as a function on its own, and the kinds that share its
+// program hold that one (jitRegLowerKinds). Lowered for inlining too, a
 // function kept both programs as long as its code lived: RegExp's run
 // blocks, 1.4 MB of them, and the lowering at each compile.
 func TestJITSSACompileLowersOnce(t *testing.T) {
@@ -8586,8 +8587,13 @@ func TestJITSSACompileLowersOnce(t *testing.T) {
 	l := r.jit.lowered[weak.Make(cl.fn)]
 	// The register form's lowerings, by the function's key.
 	l = r.jit.regLowered[r.jitRegKeyOf(cl)]
-	if l == nil || !l.done[jitLowerSSA] || l.done[jitLowerInline] {
+	if l == nil || !l.done[jitLowerSSA] || l.progs[jitLowerSSA] == nil || l.footprint() != l.progs[jitLowerSSA].Footprint() {
 		t.Fatalf("blocks lowered: %+v", l)
+	}
+	for k, p := range l.progs {
+		if p != nil && p != l.progs[jitLowerSSA] {
+			t.Fatalf("blocks lowered again for kind %d: %+v", k, l)
+		}
 	}
 }
 

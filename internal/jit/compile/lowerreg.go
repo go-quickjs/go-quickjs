@@ -127,14 +127,36 @@ func regHints(rc *bytecode.RegCode, p *ir.Program, h Hints, after bool) []int32 
 	return strs
 }
 
+// LowerRegKindsWith lowers fn's register code rc with hints h at once for
+// an entry (LowerRegWith), a function shown to be hot (LowerRegHotWith)
+// and a callee (LowerRegInlineWith), which differ only in what they
+// refuse: the program those that take it share, the program each would
+// have been lowered to alone, and each kind's refusal, its own lowering's.
+func LowerRegKindsWith(rc *bytecode.RegCode, fn *bytecode.Function, h Hints) (p *ir.Program, entry, hot, callee error) {
+	errs := []error{nil, nil, nil}
+	p = lowerRegKindsRecovered(rc, fn, []lowering{{ssa: true, hints: h}, {ssa: true, hot: true, hints: h}, {ssa: true, callee: true, hints: h}}, errs)
+	return p, errs[0], errs[1], errs[2]
+}
+
 // lowerRegRecovered turns a panic in the lowering into a refusal.
-func lowerRegRecovered(rc *bytecode.RegCode, fn *bytecode.Function, m lowering) (p *ir.Program, err error) {
+func lowerRegRecovered(rc *bytecode.RegCode, fn *bytecode.Function, m lowering) (*ir.Program, error) {
+	errs := []error{nil}
+	p := lowerRegKindsRecovered(rc, fn, []lowering{m}, errs)
+	if errs[0] != nil {
+		return nil, errs[0]
+	}
+	return p, nil
+}
+
+// lowerRegKindsRecovered is lowerRegLits of the kinds ms, a panic the
+// refusal of each not refused before it.
+func lowerRegKindsRecovered(rc *bytecode.RegCode, fn *bytecode.Function, ms []lowering, errs []error) (p *ir.Program) {
 	defer func() {
 		if v := recover(); v != nil {
-			p, err = nil, refuse(-1, fmt.Sprintf("internal error: %v", v))
+			p = regRefused(errs, refuse(-1, fmt.Sprintf("internal error: %v", v)))
 		}
 	}()
-	return lowerReg(rc, regView(rc, fn), m)
+	return lowerRegLits(rc, regView(rc, fn), ms, nil, errs)
 }
 
 // regView is fn as rc's instructions see it: code compiled at the
@@ -408,7 +430,7 @@ func (l *regLowering) boolBranch(pc int, reach []bool) bool {
 // R[B] -- nothing committed before the call, so that an exit anywhere runs
 // the instruction whole again, as the interpreter makes it. The window's
 // registers, R[A] and R[A+1], are not written: where they are live past
-// the instruction (litHosts, lowerReg's check), or the method's name is
+// the instruction (litHosts, lowerRegLits' check), or the method's name is
 // not the function's, it reports false and the instruction is Go's whole.
 func (l *regLowering) regexpLit(pc int, w bytecode.RInstr) bool {
 	x := w.X()
@@ -638,43 +660,87 @@ func regStringConst(fn *bytecode.Function, s string) int {
 	return -1
 }
 
-func lowerReg(rc *bytecode.RegCode, fn *bytecode.Function, m lowering) (*ir.Program, error) {
-	return lowerRegLits(rc, fn, m, nil)
-}
-
-// lowerRegLits is lowerReg, the regexp_lit calls at the register pcs in
-// litHosts Go's whole (regexpLit).
-func lowerRegLits(rc *bytecode.RegCode, fn *bytecode.Function, m lowering, litHosts map[int]bool) (*ir.Program, error) {
-	switch {
-	case fn == nil || rc == nil:
-		return nil, refuse(-1, "nil function")
-	case !rc.Wide:
-		return nil, refuse(-1, "no register code")
-	case (fn.TopLevel || fn.IsModule) && m.callee:
-		return nil, refuse(-1, "top-level or module code")
-	case (fn.Async || fn.Generator) && m.callee:
-		return nil, refuse(-1, "async or generator function")
-	case fn.Kind != bytecode.KindNormal && fn.Kind != bytecode.KindArrow && fn.Kind != bytecode.KindMethod && fn.Kind != bytecode.KindConstructor &&
-		fn.Kind != bytecode.KindGetter && fn.Kind != bytecode.KindSetter && fn.Kind != bytecode.KindDerivedConstructor:
-		return nil, refuse(-1, "special function kind")
-	case fn.HasDirectEval || len(fn.EvalScopes) != 0:
-		return nil, refuse(-1, "direct eval")
-	case (fn.UsesArguments || fn.MappedArguments) && !argumentsOwn(fn):
-		return nil, refuse(-1, "arguments object")
-	case len(rc.Code) == 0:
-		return nil, refuse(-1, "no instructions")
-	case rc.NumRegs < 2 || rc.NumRegs > maxSlots || len(fn.Upvalues) > maxSlots || rc.NumRegs+len(fn.Upvalues) > maxSlots || rc.Params < 0 || 2+rc.Params > rc.NumRegs:
-		return nil, refuse(-1, "slot budget")
-	}
-	n := len(rc.Code)
-	for pc := range n {
-		if why := regRefusal(rc, fn, m, pc); why != "" {
-			return nil, refuse(pc, why)
+// regRefused gives err to each of errs that has none yet, the kinds being
+// lowered still, and returns no program.
+func regRefused(errs []error, err error) *ir.Program {
+	for i := range errs {
+		if errs[i] == nil {
+			errs[i] = err
 		}
 	}
+	return nil
+}
+
+// regKindsLeft reports whether any of errs has none yet: a kind being
+// lowered still.
+func regKindsLeft(errs []error) bool {
+	for _, err := range errs {
+		if err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// regFunctionRefusal is the reason fn's register code rc is not lowered as
+// m says whatever its instructions, or "".
+func regFunctionRefusal(rc *bytecode.RegCode, fn *bytecode.Function, m lowering) string {
+	switch {
+	case fn == nil || rc == nil:
+		return "nil function"
+	case !rc.Wide:
+		return "no register code"
+	case (fn.TopLevel || fn.IsModule) && m.callee:
+		return "top-level or module code"
+	case (fn.Async || fn.Generator) && m.callee:
+		return "async or generator function"
+	case fn.Kind != bytecode.KindNormal && fn.Kind != bytecode.KindArrow && fn.Kind != bytecode.KindMethod && fn.Kind != bytecode.KindConstructor &&
+		fn.Kind != bytecode.KindGetter && fn.Kind != bytecode.KindSetter && fn.Kind != bytecode.KindDerivedConstructor:
+		return "special function kind"
+	case fn.HasDirectEval || len(fn.EvalScopes) != 0:
+		return "direct eval"
+	case (fn.UsesArguments || fn.MappedArguments) && !argumentsOwn(fn):
+		return "arguments object"
+	case len(rc.Code) == 0:
+		return "no instructions"
+	case rc.NumRegs < 2 || rc.NumRegs > maxSlots || len(fn.Upvalues) > maxSlots || rc.NumRegs+len(fn.Upvalues) > maxSlots || rc.Params < 0 || 2+rc.Params > rc.NumRegs:
+		return "slot budget"
+	}
+	return ""
+}
+
+// lowerRegLits lowers fn's register code rc for each of the kinds ms at
+// once, the regexp_lit calls at the register pcs in litHosts Go's whole
+// (regexpLit). The kinds differ only in what they refuse (lowering's
+// callee and hot; their cold, forward and hints are ms[0]'s): each refused
+// has its refusal in errs, the one it would have had lowered alone, at the
+// same check, and those that are not share the program it returns, the one
+// each would have been lowered to alone. A kind with a refusal in errs
+// already is not lowered.
+func lowerRegLits(rc *bytecode.RegCode, fn *bytecode.Function, ms []lowering, litHosts map[int]bool, errs []error) *ir.Program {
+	m := ms[0]
+	for i, mk := range ms {
+		if errs[i] != nil {
+			continue
+		}
+		if why := regFunctionRefusal(rc, fn, mk); why != "" {
+			errs[i] = refuse(-1, why)
+			continue
+		}
+		for pc := range len(rc.Code) {
+			if why := regRefusal(rc, fn, mk, pc); why != "" {
+				errs[i] = refuse(pc, why)
+				break
+			}
+		}
+	}
+	if !regKindsLeft(errs) {
+		return nil
+	}
+	n := len(rc.Code)
 	reach, err := regReachable(rc)
 	if err != nil {
-		return nil, err
+		return regRefused(errs, err)
 	}
 	l := &regLowering{rc: rc, fn: fn, m: m, scratch: rc.NumRegs + len(fn.Upvalues), this: -1, litHosts: litHosts, ins: regJumpIns(rc, reach)}
 	if !m.cold {
@@ -711,13 +777,13 @@ func lowerRegLits(rc *bytecode.RegCode, fn *bytecode.Function, m lowering, litHo
 	}
 	start[n] = len(l.code)
 	if l.scratch+l.most > maxSlots {
-		return nil, refuse(-1, "slot budget")
+		return regRefused(errs, refuse(-1, "slot budget"))
 	}
 	for i := range l.code {
 		if l.patch[i] {
 			t := l.code[i].Target
 			if t < 0 || t >= n || !reach[t] {
-				return nil, refuse(int(l.origin[i]), "branch target out of bounds")
+				return regRefused(errs, refuse(int(l.origin[i]), "branch target out of bounds"))
 			}
 			l.code[i].Target = start[t]
 		}
@@ -774,8 +840,13 @@ func lowerRegLits(rc *bytecode.RegCode, fn *bytecode.Function, m lowering, litHo
 			}
 		}
 	}
-	if regHostOnly(p, rc, fn, m) {
-		return nil, refuse(-1, hostOnly)
+	for i, mk := range ms {
+		if errs[i] == nil && regHostOnly(p, rc, fn, mk) {
+			errs[i] = refuse(-1, hostOnly)
+		}
+	}
+	if !regKindsLeft(errs) {
+		return nil
 	}
 	regHints(rc, p, m.hints, false)
 	selectNumericProperties(p, true)
@@ -802,9 +873,9 @@ func lowerRegLits(rc *bytecode.RegCode, fn *bytecode.Function, m lowering, litHo
 		for _, pc := range live {
 			hosts[pc] = true
 		}
-		return lowerRegLits(rc, fn, m, hosts)
+		return lowerRegLits(rc, fn, ms, hosts, errs)
 	}
-	return p, nil
+	return p
 }
 
 // regStringParts makes each conversion of a part where it is -- to_string's
@@ -813,7 +884,7 @@ func lowerRegLits(rc *bytecode.RegCode, fn *bytecode.Function, m lowering, litHo
 // concat converts a primitive that
 // calls nothing the same, so the part needs only checking to be one, not a
 // call of Go of its own. Register code's concat reads its parts where they
-// are, or copies of them in scratch slots (lowerReg's block): a copy of
+// are, or copies of them in scratch slots (lowerRegLits' block): a copy of
 // the part's register into the concat's run is the concat's read. Where
 // anything else reads or writes the register first, a jump lands between
 // them, the code goes elsewhere, or the register is live past the concat
@@ -1988,7 +2059,7 @@ func liveRegs(p *ir.Program, rc *bytecode.RegCode, keepParams bool) {
 			if ins.Check {
 				if w := rc.Code[p.Origin[i]]; w.Op() == bytecode.RDerivedRet {
 					// derived_ret's copy of the this binding, its operand
-					// known undefined (lowerReg's undefinedAt), leaves where
+					// known undefined (the lowering's undefinedAt), leaves where
 					// the slot is unbound for Go to run the instruction,
 					// which reads the operand: live there, its undefined in
 					// the exit's state. Dead to the copy, the exit had left

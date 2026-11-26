@@ -140,9 +140,9 @@ func TestJITLowerAheadAsksAgain(t *testing.T) {
 		t.Fatalf("handed over %d, lowerings ahead %d: want the one lowering waited for", r.jit.bgSubmitted, r.jit.aheadJobs)
 	}
 	j.run()
-	p := j.items[0].p
+	p := j.items[0].got.progs[jitLowerSSA]
 	if p == nil || j.state.Load() != jitJobDone {
-		t.Fatalf("the worker lowered no program (state %d, error %v)", j.state.Load(), j.items[0].err)
+		t.Fatalf("the worker lowered no program (state %d, error %v)", j.state.Load(), j.items[0].got.errs[jitLowerSSA])
 	}
 	for call := 1; r.jit.bgSubmitted == 0; call++ {
 		if call > 100 {
@@ -188,7 +188,7 @@ func TestJITLowerAheadTakeBack(t *testing.T) {
 		t.Fatalf("taken %d: want loop's program lowered on the goroutine", r.jit.aheadTaken)
 	}
 	j.run()
-	if j.state.Load() != jitJobTaken || j.items[0].p != nil {
+	if j.state.Load() != jitJobTaken || j.items[0].got.done[jitLowerSSA] {
 		t.Fatalf("state %d after a worker's run: want it left as taken", j.state.Load())
 	}
 }
