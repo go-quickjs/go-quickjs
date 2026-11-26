@@ -1046,7 +1046,22 @@ is under [The projection](#the-projection).
   runtime returns to its host; its memory table and the RSS of idle
   runtimes are measured with (e). (g): `jitBudgetForFeedback`'s comment
   says what the constant does and when a loop's back-edge budget starts,
-  940 kept. (d) and (e) not done.
+  940 kept. (e): what kept the heap was the runtime's asm.js heaps
+  (zlib's 128 MB buffer), the idle compile workspaces (32 MB) and the
+  code cache, whose code and feedback held the objects their code was
+  compiled against; asm.js heaps are held weakly, idle workspaces go as
+  the runtime returns to its host, and code is parked then, its objects
+  held weakly and checked alive at its next use (internal/jit/README.md,
+  "Parking"). The live heap after Octane fixed -n 1 with the JIT is 156
+  to 161 MB against the interpreter's 107 (Ryzen 9 9950X3D2), from 357
+  to 390; projected, the interpreter's plus 64 MiB. At the default
+  budget (Ryzen 5 3600, -n 3, one runtime): Octane 10,618 to 8,681 ms,
+  live 422 to 152 MB, peak RSS 839 to 618 MB; Typescript 5,438 to 4,183
+  ms, live 288 to 148 MB, its collector's CPU 1,469 to 1,138 ms; 30 idle
+  runtimes that ran the V8 suite 697 MB live and a 922 MB working set,
+  from 792 and 999. Active code's speed, -k 2 with the JIT against
+  895edca5: micro-benchmarks' geometric mean 1.001, Octane +0.3%, ssr
+  +1.0%, fresh +0.4%. (d) not done.
 
 ### Stage 1: tiering and background compiles
 

@@ -20,7 +20,10 @@ package vm
 // which no runtime's Held counts (jit.Workspace). Contexts is how many
 // contexts native code has to run its levels in now, ContextsMost the
 // most it has had, and ContextsShrunk the times it gave back those a
-// deeper recursion took, which Held does not count.
+// deeper recursion took, which Held does not count. Parkings counts the
+// times the runtime parked its code as it returned to its host, Parked the
+// functions' code it parked, and Unparked the code put back as it was at
+// its next use; code parked and not put back was let go of.
 type JITStats struct {
 	Compiled, Entries, Guards, Hosts, Budgets, Interpreted, SSAEntries, SSARecords uint64
 	Held, Budget, Pooled                                                           int64
@@ -29,4 +32,5 @@ type JITStats struct {
 	Inlined, InlinedCode                                                           uint64
 	Contexts, ContextsMost                                                         int
 	ContextsShrunk                                                                 uint64
+	Parkings, Parked, Unparked                                                     uint64
 }

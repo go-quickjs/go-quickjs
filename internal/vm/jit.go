@@ -236,6 +236,10 @@ func (r *Runtime) jitCrossHook() func(f JITFunction, code *mir.Code, err error) 
 //	           its build, as one that asked what its snapshot was not asked
 //	           (jitSnapMiss), for the runtime's goroutine to build at its
 //	           install, so that the path a miss takes is taken by every one
+//	park       park the code as the runtime returns to its host every time,
+//	           not once a flush age (jitReturned), so that code is
+//	           unparked, or let go of for an object that died, at the first
+//	           use after every host's call
 //
 // It is read once, as QJS_NONATIVE is, and each runtime takes a copy.
 type jitStressConfig struct {
@@ -252,6 +256,8 @@ type jitStressConfig struct {
 	// it does -- on-stack replacement, objects carried unmade -- make one
 	// so.
 	primLeave bool
+	// park is QJS_JIT_STRESS's park.
+	park bool
 }
 
 var jitStressDefault = parseJITStress(os.Getenv("QJS_JIT_STRESS"))
@@ -274,6 +280,8 @@ func parseJITStress(spec string) jitStressConfig {
 			mir.CheckAllocations = true
 		case "miss":
 			c.miss = true
+		case "park":
+			c.park = true
 		}
 	}
 	return c
@@ -292,7 +300,8 @@ func (r *Runtime) JITStats() JITStats {
 		Hosts: s.hosts, Budgets: s.budgets, Interpreted: s.interpreted, SSAEntries: s.ssaEntries, SSARecords: s.ssaRecords,
 		Held: int64(s.held()), Budget: int64(r.jitBudget()), Evicted: s.evicted, Refused: s.refusedRoom,
 		Reoptimized: s.reoptimized, Inlined: s.inlined, InlinedCode: s.inlinedCode,
-		Pooled: jit.PooledWorkspaceBytes(), Contexts: len(s.ssaCtxs), ContextsMost: s.ctxMost, ContextsShrunk: s.ctxShrunk}
+		Pooled: jit.PooledWorkspaceBytes(), Contexts: len(s.ssaCtxs), ContextsMost: s.ctxMost, ContextsShrunk: s.ctxShrunk,
+		Parkings: s.parkings, Parked: s.parkedCount, Unparked: s.unparked}
 }
 
 // SetJITBackground has the JIT compile on the process's workers, the
@@ -1333,6 +1342,18 @@ type jitState struct {
 	// otherwise (jitSetEncoding).
 	enc  abi.Encoding
 	opts mir.Options
+	// regParked is the code parked as the runtime returned to its host,
+	// out of regCache, by its function's key (jitRegPark), and parkedAt the
+	// flush's tick of the last parking.
+	regParked map[jitKey]*jitRegEntry
+	parkedAt  uint64
+	// parkedPools are the object pools of parked code, each with what its
+	// source holds weakly (jitParked's pools).
+	parkedPools map[*abi.ObjectPool]*jitParked
+	// parkings counts the parkings, parkedCount the code parked, and
+	// unparked the code put back in the cache as it was (jitRegUnpark),
+	// for tests and the report (JITStats).
+	parkings, parkedCount, unparked uint64
 }
 
 func (r *Runtime) initJIT(enabled bool, memoryLimit int64) {
@@ -1552,6 +1573,16 @@ func (s *jitState) makeRoom(need int) bool {
 	s.age(now)
 	if held = s.held(); held+need <= s.budget {
 		return true
+	}
+	if len(s.regParked) != 0 {
+		// Code parked as the runtime returned to its host, which nothing
+		// has used since, goes first (jitRegPark).
+		for key, e := range s.regParked {
+			s.regUnparkFailed(key, e)
+		}
+		if held = s.held(); held+need <= s.budget {
+			return true
+		}
 	}
 	// The order listed at this epoch's first look, taken from where the
 	// last look left it: listing and sorting all the cache holds at each

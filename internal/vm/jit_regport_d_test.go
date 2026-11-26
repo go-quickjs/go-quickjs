@@ -310,10 +310,15 @@ func jitEntryNamedForTest(r *Runtime, name string) *jitEntry {
 // name, in either form, nil for nothing: the stack form's entry, or, where
 // runtimes run register code, its register code's entry (regCache) --
 // compared by identity, as a test asks whether the cache still holds the
-// same; code says whether it holds code.
+// same; code says whether it holds code. Code parked as the runtime
+// returned to its host (regParked) is code the cache holds.
 func jitCachedForTest(r *Runtime, name string) (held any, code bool) {
 	cl := jitGlobalClosure(r, name)
-	if e := r.jit.regCache[r.jitRegKeyOf(cl)]; e != nil {
+	key := r.jitRegKeyOf(cl)
+	if e := r.jit.regCache[key]; e != nil {
+		return e, e.code != nil
+	}
+	if e := r.jit.regParked[key]; e != nil {
 		return e, e.code != nil
 	}
 	return nil, false

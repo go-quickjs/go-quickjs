@@ -141,6 +141,9 @@ type jitRegEntry struct {
 	// was compiled for, which the tier trace says (jitTierReason).
 	spentAt int64
 	tier    uint8
+	// parked is, for code parked as the runtime returned to its host
+	// (jitRegPark), what it holds weakly meanwhile; nil for any other.
+	parked *jitParked
 }
 
 // loopEntry is the entry, an instruction of the program, of the loop
@@ -184,6 +187,11 @@ func (r *Runtime) jitRegForAs(cl *closure, c *regCode, callee bool) *jitRegEntry
 		return nil
 	}
 	key := r.jitRegKeyOf(cl)
+	if e := s.regParked[key]; e != nil {
+		// Parked as the runtime returned to its host: back in the cache if
+		// what it holds is alive, let go of if not (jitRegUnpark).
+		s.jitRegUnpark(e)
+	}
 	if j := s.regPendingJobs[key]; j != nil {
 		// Being compiled in the background (jitRegSubmit): installed at
 		// a later check -- this ask one where the compile is done, as a
@@ -1144,7 +1152,7 @@ func (s *jitState) regVictims(v []jitVictim, now uint64) []jitVictim {
 	// The state kept of functions the cache holds nothing for -- warming
 	// up, or their code let go of -- reclaimed with the refusals.
 	for key, l := range s.regLearned {
-		if s.regCache[key] != nil || !l.regCounted || !s.regLifeSpare(key, l, called) {
+		if s.regCache[key] != nil || s.regParked[key] != nil || !l.regCounted || !s.regLifeSpare(key, l, called) {
 			continue
 		}
 		v = append(v, jitVictim{key: key, e: l, reg: true, class: jitVictimRefusal, used: l.used, serial: l.serial, bytes: l.bytes})
@@ -1355,7 +1363,7 @@ func (s *jitState) regFlush(tick, now uint64) {
 	// The realms none of whose functions ran: what the JIT keeps of their
 	// functions with no code.
 	for key, l := range s.regLearned {
-		if live[key.realm] || l.used+jitCodeAge > now || !s.regLifeSpare(key, l, called) {
+		if live[key.realm] || l.used+jitCodeAge > now || s.regParked[key] != nil || !s.regLifeSpare(key, l, called) {
 			continue
 		}
 		s.regLetGoLife(key, l)
@@ -1534,6 +1542,9 @@ func (s *jitState) jitRegCloseRetired() {
 // dropRegCode drops every entry of the register code's cache, as the
 // runtime releases its JIT.
 func (s *jitState) dropRegCode() {
+	for key, e := range s.regParked {
+		s.regUnparkFailed(key, e)
+	}
 	for key, e := range s.regCache {
 		s.dropReg(key, e)
 	}

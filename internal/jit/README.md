@@ -3593,9 +3593,59 @@ told under the tier-up above (`jitRegLongWarming`, `jitRegCalledOften`);
 otherwise it warms up as any function does, so that long functions run
 once a frame, as Mandreel's are, do not take the budget.
 
+**Parking** (`jitRegPark`, `jitRegUnpark`, internal/vm/jit_idle.go). Code
+holds strongly what it reads by address -- its calls' targets, the
+prototypes and shapes its checks compare, the closures it inlined, the
+cells and pools it reads, and its own function and closure -- and so does
+what its function learned (`jitLearned`): held so, code compiled while a
+program ran kept that program's objects alive as long as the code lived,
+and the cache, which holds code by its function's key, kept the code
+whether or not anything else reached the function. A library function's
+code held a finished run's closure as its call's target, and through it
+the run's heap; zlib's code its 128 MB heap. V8 holds such objects weakly
+in its code and feedback and deoptimizes code whose objects die, at the
+collection that finds them dead. Go has no such point: a cleanup or a
+finalizer runs after the collector found the object dead, on another
+goroutine, by which time a sweep may have given the object's memory to a
+new object that code comparing the old address would take for it. So code
+holds its objects strongly while it may run and weakly only while it
+cannot. As the runtime returns to its host with no frame running, at most
+once a flush age of the program's running (`jitReturned`, the first a
+flush age after the runtime's first return), the cache parks its code no
+run, native call or compile uses, valid or invalidated: out of the cache
+(`regParked`), its link cleared, so that native callers call Go, its entry
+marked not cached, so that its templates' calls take the path code let go
+of takes; and every pointer to a closure, an object, a shape or a
+function's bytecode its entry, its keep and its function's learned state
+hold becomes a weak pointer, its slot cleared (`jitParked`), the walk going
+into the structures the entry owns alone (`jitParkInto`) and no other;
+its pools are emptied of the objects made for them, filled again from
+their sources when the code next runs out, and its function's learned
+state, which other functions' compiles read, is a copy that holds no
+object meanwhile (`regForgotten`). No compile is under way then: the
+parking waits for the background's. The first use after -- Go's call of
+the function (`jitRegEnter`, `jitRegHot`), a native caller's call of it,
+which leaves for Go (`jitRegLetGoOf`), a compile asked for it
+(`jitRegForAs`), a caller's compile that reads what it learned
+(`jitRegCalleeOf`) -- unparks it: every weak pointer's `Value`, nil from
+before its object's memory can be reused, is read; all alive, the slots
+are written back, the learned state too with what the copy learned
+meanwhile (`regRemembered`), and the code goes back into the cache with
+its link, no compile made; one dead, the code is let go of as the flush
+lets code go, and the function warms up anew. No comparison against an
+address an object no longer has is made. Code still parked at the next
+parking, unused a flush age, is let go of then, but the callees of the
+cache's code (its keeps' `inlined` and `links`), as the flush keeps them;
+and parked code is the first `makeRoom` takes. Active code pays nothing:
+its entries are tested as before, and a parked one takes paths code let go
+of took already, once. The parking also drops `makeRoom`'s list of
+victims, an epoch's, which had kept the entries it listed past the turn.
+After Octane in one runtime the JIT's live heap is the interpreter's and
+some 50 MB, against 250 to 280 MB more before.
+
 **Making room** (`makeRoom`). A compile asks for room for what its entry
 will hold before its code is placed. The cache reclaims, in this order, each
-least recently used first: lowerings (a register function's, but for the
+least recently used first: parked code; lowerings (a register function's, but for the
 program its code holds); refusals remembered; code not used in the last two epochs (old, as V8
 flushes code by age); the workspaces. Code used within two epochs, code that
 runs, and an entry being compiled are never reclaimed. If all it may reclaim

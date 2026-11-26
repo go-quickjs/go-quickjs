@@ -911,7 +911,14 @@ func (r *Runtime) jitRegCalleeOf(k *jitFeedback, cl *closure, p *ir.Program) *ji
 			return c
 		}
 	}
-	c := &jitRegFeedback{fb: &jitFeedback{r: r, fn: cl.fn, cl: cl, e: r.jitState().regLearnedOf(r.jitRegKeyOf(cl)), root: k}, rc: cl.fn.RegCode(), p: p}
+	s, key := r.jitState(), r.jitRegKeyOf(cl)
+	if e := s.regParked[key]; e != nil {
+		// A callee whose code was parked as the runtime returned to its
+		// host: back with what it learned, which its parked state holds,
+		// before the caller is compiled from it (jitRegUnpark).
+		s.jitRegUnpark(e)
+	}
+	c := &jitRegFeedback{fb: &jitFeedback{r: r, fn: cl.fn, cl: cl, e: s.regLearnedOf(key), root: k}, rc: cl.fn.RegCode(), p: p}
 	k.regCallees = append(k.regCallees, c)
 	return c
 }

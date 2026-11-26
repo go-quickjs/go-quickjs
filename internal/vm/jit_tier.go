@@ -205,7 +205,8 @@ func (r *Runtime) jitRegHas(cl *closure) bool {
 // 4.2 million of AWFY's Havlak's hashFn, let go of during CD -- was Go's,
 // each putting off the levels below it.
 func (r *Runtime) jitRegLetGoOf(cl *closure, e *jitRegEntry) bool {
-	if e == nil || e.cached {
+	if e == nil || e.cached || e.parked != nil && r.jit.jitRegUnpark(e) {
+		// Cached, or parked and put back (jitRegUnpark).
 		return false
 	}
 	if life := e.life; life != nil {
@@ -489,6 +490,10 @@ func (r *Runtime) jitRegHot(cl *closure, c *regCode, work int64) *jitRegEntry {
 		return nil
 	}
 	if e := cc.jitReg; e != nil {
+		if e.parked != nil {
+			// Parked as the runtime returned to its host (jitRegUnpark).
+			r.jit.jitRegUnpark(e)
+		}
 		if !e.invalid && e.code != nil && e.cached {
 			if e.life.reopt && r.jitRegLearnedDue(cl, e) {
 				if ne := r.jitRegReoptimize(cl, c, e, -1); ne != nil {
@@ -1115,7 +1120,10 @@ func (r *Runtime) jitRegEnter(f *frame, cl *closure, c *regCode, base, start int
 			return r.runRegFor(f, c, start)
 		}
 	}
-	if e == nil || e.invalid || e.code == nil || !e.cached || !r.jitEnabled {
+	if (e == nil || e.invalid || e.code == nil || !e.cached || !r.jitEnabled) &&
+		(e == nil || e.parked == nil || !r.jitEnabled || !r.jit.jitRegUnpark(e) || e.invalid) {
+		// Not entered, but where it was parked and is put back
+		// (jitRegUnpark), at its first call after.
 		if e != nil && !r.jitRegLetGoOf(cl, e) && e.code == nil {
 			// Let go of by the cache (jitRegLetGoOf) -- code kept for a run
 			// or a native call still in it (regClose) among it, which this
