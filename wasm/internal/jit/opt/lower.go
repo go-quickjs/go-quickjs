@@ -369,8 +369,9 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 				ninst++
 			}
 		}
-		*lb = lsra.Block{Preds: ws.edges.take(len(b.Preds)), Succs: ws.edges.take(len(b.Succs)), Depth: int(b.Depth),
-			Phis: ws.phis.take(len(b.Phis)), Insts: ws.insts.take(ninst)}
+		// Each field set in place: a literal is made aside and copied.
+		lb.Preds, lb.Succs, lb.Depth = ws.edges.take(len(b.Preds)), ws.edges.take(len(b.Succs)), int(b.Depth)
+		lb.Phis, lb.Insts = ws.phis.take(len(b.Phis)), ws.insts.take(ninst)
 		for _, p := range b.Preds {
 			lb.Preds = append(lb.Preds, int(g.index[p.ID]))
 		}
