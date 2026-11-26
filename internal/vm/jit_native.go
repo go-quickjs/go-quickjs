@@ -730,17 +730,97 @@ func (s *jitState) regRoomFor(old *jitRegEntry, need int) bool {
 // no room for it now, or the host places no code. old, where not nil, is
 // the code e replaces once placed (jitRegReplaced).
 func (r *Runtime) jitRegPlace(e *jitRegEntry, c *regCode, rf *jitRegFeedback, f *ssa.Func, mc *mir.Code, looped map[uint32]bool, old *jitRegEntry) bool {
-	return r.jitRegPlaceWith(e, c, rf, f, mc, looped, old, nil)
+	return r.jitRegPlaceWith(e, c, rf, f, mc, looped, old, nil, nil)
+}
+
+// jitRegShaped is what an entry's code describes of itself that the code,
+// its build and its program decide, and nothing of the runtime's
+// (jitRegShapeOf): made where the code is placed, on its worker for a
+// compile in the background (jitRegJob's shaped), and taken into the entry
+// as it is installed (jitRegPlaceWith). need is the code's footprint,
+// hostsLeft the register pcs of the calls it leaves to Go (ssa.Func's
+// HostsLeft), and e an entry holding the rest (takeShape).
+type jitRegShaped struct {
+	e         jitRegEntry
+	need      int
+	hostsLeft []int32
+}
+
+// jitRegShapeOf is the shape (jitRegShaped) of code, the backend's mc of
+// f, built from c's register code lowered as p, with entries at the loops'
+// headers looped. Made at the install of a compile in the background, its
+// scans of the register code and its table of the register code's length
+// had been part of the runtime goroutine's time.
+func jitRegShapeOf(c *regCode, p *ir.Program, f *ssa.Func, mc *mir.Code, code *jit.SSACode, looped map[uint32]bool) *jitRegShaped {
+	sh := &jitRegShaped{need: jit.CodeFootprint(mc)}
+	e := &sh.e
+	e.p = p
+	e.scratch = f.Scratch
+	e.keeps = f.Keeps
+	if f.HomesEnd != 0 {
+		e.frame = f.HomesEnd - p.Locals
+	}
+	if f.Loops {
+		e.frame = max(e.frame, f.LoopsEnd-p.Locals)
+	}
+	for rpc := range looped {
+		if code.HasEntry(p.At(rpc)) {
+			e.loops = append(e.loops, rpc)
+		}
+	}
+	slices.Sort(e.loops)
+	e.findReturns(c.rc)
+	e.rc = c.rc
+	e.at = make([]int32, len(c.rc.Code))
+	for rpc := range e.at {
+		e.at[rpc] = int32(p.At(uint32(rpc)))
+	}
+	e.loopMean = e.irLoopMean(c)
+	e.callsNative = len(mc.Calls) != 0
+	// Register pcs both: a header's PC is its register pc (ssa.Header's PC,
+	// which LowerReg's maps give).
+	e.unresumed = slices.Clone(f.Unresumed)
+	for _, pc := range f.HostsLeft {
+		if pc >= 0 && pc < len(p.Origin) {
+			sh.hostsLeft = append(sh.hostsLeft, int32(p.Origin[pc]))
+		}
+	}
+	e.unentered = slices.Clone(f.Unentered)
+	e.kept = slices.Clone(f.EntryKept)
+	e.kinds = f.Kinds
+	return sh
+}
+
+// takeShape gives e what sh's entry holds of its code's shape
+// (jitRegShapeOf).
+func (e *jitRegEntry) takeShape(sh *jitRegShaped) {
+	x := &sh.e
+	e.scratch, e.keeps, e.frame = x.scratch, x.keeps, x.frame
+	e.loops = x.loops
+	e.retPC, e.retReg, e.retUndef, e.goesOn = x.retPC, x.retReg, x.retUndef, x.goesOn
+	e.rc, e.at, e.loopMean, e.callsNative = x.rc, x.at, x.loopMean, x.callsNative
+	e.unresumed, e.unentered, e.kept, e.kinds = x.unresumed, x.unentered, x.kept, x.kinds
 }
 
 // jitRegPlaceWith is jitRegPlace of code a compile in the background
 // placed already, if placed is not nil (jitRegJob's placed): taken as it
-// is, or closed where there is no room for it.
-func (r *Runtime) jitRegPlaceWith(e *jitRegEntry, c *regCode, rf *jitRegFeedback, f *ssa.Func, mc *mir.Code, looped map[uint32]bool, old *jitRegEntry, placed *jit.SSACode) bool {
+// is, or closed where there is no room for it; sh, with it, is the shape
+// its worker made of it (jitRegShapeOf).
+func (r *Runtime) jitRegPlaceWith(e *jitRegEntry, c *regCode, rf *jitRegFeedback, f *ssa.Func, mc *mir.Code, looped map[uint32]bool, old *jitRegEntry, placed *jit.SSACode, sh *jitRegShaped) bool {
 	s := r.jit
 	p := e.p
+	if placed == nil {
+		// Its shape made of the code placed here.
+		sh = nil
+	}
 	// The contexts' room for its spill slots, which they keep (spillsFor).
-	need, spill := jit.CodeFootprint(mc), s.spillRoom(mc)
+	need := 0
+	if sh != nil {
+		need = sh.need
+	} else {
+		need = jit.CodeFootprint(mc)
+	}
+	spill := s.spillRoom(mc)
 	// And what the compile had its function's state hold besides -- the
 	// pools of the literals, closures and constructions it makes, filled
 	// as it was built -- which regAccount counts once it is placed. Asked
@@ -795,48 +875,19 @@ func (r *Runtime) jitRegPlaceWith(e *jitRegEntry, c *regCode, rf *jitRegFeedback
 	// the room the next compile asks for first.
 	s.learn(len(c.rc.Code), need+p.Footprint())
 	e.targets = jitTargetsOf(e.life)
-	e.scratch = f.Scratch
-	e.keeps = f.Keeps
 	s.ssaKeeps = max(s.ssaKeeps, f.Keeps)
-	if f.HomesEnd != 0 {
-		e.frame = f.HomesEnd - p.Locals
+	if sh == nil {
+		sh = jitRegShapeOf(c, p, f, mc, code, looped)
 	}
-	if f.Loops {
-		e.frame = max(e.frame, f.LoopsEnd-p.Locals)
-	}
-	for rpc := range looped {
-		if code.HasEntry(p.At(rpc)) {
-			e.loops = append(e.loops, rpc)
-		}
-	}
-	slices.Sort(e.loops)
-	e.findReturns(c.rc)
-	e.rc = c.rc
-	e.at = make([]int32, len(c.rc.Code))
-	for rpc := range e.at {
-		e.at[rpc] = int32(p.At(uint32(rpc)))
-	}
-	e.loopMean = e.irLoopMean(c)
-	e.callsNative = len(mc.Calls) != 0
-	// Register pcs both: a header's PC is its register pc (ssa.Header's PC,
-	// which LowerReg's maps give).
-	e.unresumed = slices.Clone(f.Unresumed)
+	e.takeShape(sh)
 	if life := e.life; life != nil {
 		// The register pcs of the calls it leaves to Go (ssa.Func's
 		// HostsLeft), one of which its code has never made is seldom made
-		// (InlineExit): made anew, the list it replaces left as it was for
-		// a snapshot that holds it (ssaHostsLeft).
-		var left []int32
-		for _, pc := range f.HostsLeft {
-			if pc >= 0 && pc < len(p.Origin) {
-				left = append(left, int32(p.Origin[pc]))
-			}
-		}
-		life.ssaHostsLeft = left
+		// (InlineExit): made anew with the shape (jitRegShapeOf), the list
+		// it replaces left as it was for a snapshot that holds it
+		// (ssaHostsLeft).
+		life.ssaHostsLeft = sh.hostsLeft
 	}
-	e.unentered = slices.Clone(f.Unentered)
-	e.kept = slices.Clone(f.EntryKept)
-	e.kinds = f.Kinds
 	// The pools' roots and prototypes escape analysis took, which the
 	// objects it does not make are made with at an exit.
 	rf.fb.keepVirtuals(f.VirtualAsked)

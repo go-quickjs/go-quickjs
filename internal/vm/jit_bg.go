@@ -95,6 +95,9 @@ type jitRegJob struct {
 	// the code placed there.
 	arena  *jit.Arena
 	placed *jit.SSACode
+	// shaped is what the placed code describes of itself, made by the
+	// worker with it (jitRegShapeOf), which its install takes.
+	shaped *jitRegShaped
 	// w is the compile's workspace, taken by its worker (workRecovering),
 	// f the function built in it, enc and opts the encoding and the
 	// backend's switches as they were when it was prepared. backHook is
@@ -422,6 +425,10 @@ func (j *jitRegJob) workRecovering() {
 		// the program's time. Where it cannot be placed, the install
 		// places it, as on the spot.
 		j.placed, _ = jit.NewSSACodeApart(j.arena, j.mc)
+		if j.placed != nil {
+			// And its shape made of it here, which its install takes.
+			j.shaped = jitRegShapeOf(j.c, j.p, f, j.mc, j.placed, j.looped)
+		}
 	}
 }
 
@@ -681,7 +688,7 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 	if e.refusal == "" {
 		if j.err != nil {
 			e.refusal = fmt.Sprintf("%v: %v", jitRefused, j.err)
-		} else if !r.jitRegPlaceWith(e, j.c, j.rf, j.f, j.mc, j.looped, s.jitRegReplaced(j.key, j.osrAt), j.takePlaced()) {
+		} else if !r.jitRegPlaceWith(e, j.c, j.rf, j.f, j.mc, j.looped, s.jitRegReplaced(j.key, j.osrAt), j.takePlaced(), j.shaped) {
 			// No room: asked again at a later sample.
 			s.bgDiscarded++
 			return
