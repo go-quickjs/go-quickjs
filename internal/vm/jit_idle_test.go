@@ -4,8 +4,15 @@ package vm
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
 	"testing"
+	"unsafe"
 	"weak"
 )
 
@@ -187,6 +194,163 @@ func TestJITParkedCodeRestored(t *testing.T) {
 					t.Fatalf("after its code went: %v, %v", v, err)
 				}
 			})
+		}
+	}
+}
+
+// A parked entry that holds the package's static objects -- the caches'
+// sentinels noShape, dictShape and setterNext, and absentHolder, which a
+// cache entry for a property found nowhere holds, all in the binary's
+// data rather than the heap -- keeps them as they are, strongly: a weak
+// pointer cannot be made to one (Go 1.24's weak.Make threw "getWeakHandle
+// on invalid pointer" parking a polymorphic site's entry whose ownShape
+// was noShape), and none dies. The code is put back at its next use as
+// with any other, its statics in place.
+func TestJITParkedCodeKeepsStatics(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r, setEpoch := jitParkRuntime(t, false)
+	fl := jitGlobalClosure(r, "f")
+	key := r.jitRegKeyOf(fl)
+	e := r.jit.regCache[key]
+	statics := []*shape{noShape, dictShape, setterNext, absentHolder.shape}
+	// What a site's entries for them hold: their shapes, the holder, and a
+	// cell holding the holder as a value.
+	kb := e.keep
+	shapes, holders, cells := len(kb.shapes), len(kb.holders), len(kb.cells)
+	kb.shapes = append(kb.shapes, statics...)
+	kb.holders = append(kb.holders, absentHolder)
+	held := Obj(absentHolder)
+	kb.cells = append(kb.cells, &held)
+	jitParkNow(t, r, setEpoch, 1000+jitFlushAge)
+	if r.jit.regParked[key] != e || e.parked == nil || len(e.parked.slots) == 0 {
+		t.Fatal("f's code not parked")
+	}
+	check := func(when string) {
+		t.Helper()
+		if !slices.Equal(kb.shapes[shapes:], statics) {
+			t.Fatalf("%s, the statics' shapes are %v, not %v", when, kb.shapes[shapes:], statics)
+		}
+		if kb.holders[holders] != absentHolder || kb.cells[cells].ref != unsafe.Pointer(absentHolder) {
+			t.Fatalf("%s, absentHolder is not held", when)
+		}
+	}
+	check("parked")
+	for i := 0; i < 3; i++ {
+		runtime.GC()
+	}
+	for i := 0; i < 50; i++ {
+		v, err := r.Run(compileForTest(t, `f(g, 100)`))
+		if err != nil || v.Number() != jitParkWant {
+			t.Fatalf("after the park, round %d: %v, %v", i, v, err)
+		}
+	}
+	if r.jit.regCache[key] != e || e.parked != nil || e.code == nil || !e.cached {
+		t.Fatalf("f's code was not put back: %+v", e)
+	}
+	check("put back")
+}
+
+// jitParkStatic names every object of a type a parked entry holds weakly
+// (jitParkWeak) that the package makes statically: the address of a
+// composite literal of *Object, *closure, *shape or *bytecode.Function
+// type in a package-level variable's initializer, which the compiler
+// allocates in the binary's data, or a package-level variable of such a
+// type itself. A weak pointer cannot be made to one, and parking code
+// whose caches hold one threw on Go 1.24, which the Go of the local runs
+// did not.
+func TestJITParkStaticsListed(t *testing.T) {
+	listed := map[string][]unsafe.Pointer{
+		"noShape":      {unsafe.Pointer(noShape)},
+		"dictShape":    {unsafe.Pointer(dictShape)},
+		"setterNext":   {unsafe.Pointer(setterNext)},
+		"absentHolder": {unsafe.Pointer(absentHolder), unsafe.Pointer(absentHolder.shape)},
+	}
+	weakType := func(pkg string, x ast.Expr) bool {
+		switch x := x.(type) {
+		case *ast.Ident:
+			if pkg == "bytecode" {
+				return x.Name == "Function"
+			}
+			return x.Name == "Object" || x.Name == "closure" || x.Name == "shape"
+		case *ast.SelectorExpr:
+			id, ok := x.X.(*ast.Ident)
+			return ok && pkg == "vm" && id.Name == "bytecode" && x.Sel.Name == "Function"
+		}
+		return false
+	}
+	found := map[string]int{}
+	fset := token.NewFileSet()
+	for pkg, dir := range map[string]string{"vm": ".", "bytecode": "../bytecode"} {
+		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
+		if err != nil || len(files) == 0 {
+			t.Fatalf("%s: %v, %d files", dir, err, len(files))
+		}
+		for _, name := range files {
+			if strings.HasSuffix(name, "_test.go") {
+				continue
+			}
+			f, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, d := range f.Decls {
+				g, ok := d.(*ast.GenDecl)
+				if !ok || g.Tok != token.VAR {
+					continue
+				}
+				for _, sp := range g.Specs {
+					vs := sp.(*ast.ValueSpec)
+					static := 0
+					if vs.Type != nil {
+						ty := vs.Type
+						if a, ok := ty.(*ast.ArrayType); ok && a.Len != nil {
+							ty = a.Elt
+						}
+						if weakType(pkg, ty) {
+							static++
+						}
+					}
+					for _, v := range vs.Values {
+						ast.Inspect(v, func(n ast.Node) bool {
+							switch n := n.(type) {
+							case *ast.FuncLit:
+								// What a function makes, at the package's
+								// initialization or later, is the heap's.
+								return false
+							case *ast.UnaryExpr:
+								if c, ok := n.X.(*ast.CompositeLit); ok && n.Op == token.AND && weakType(pkg, c.Type) {
+									static++
+								}
+							}
+							return true
+						})
+					}
+					if static != 0 {
+						for _, id := range vs.Names {
+							found[pkg+"."+id.Name] += static
+						}
+					}
+				}
+			}
+		}
+	}
+	for name, n := range found {
+		short := strings.TrimPrefix(name, "vm.")
+		if len(listed[short]) != n {
+			t.Errorf("%s makes %d static objects a parked entry would hold weakly; the test lists %d: "+
+				"have jitParkStatic hold them and list them here", name, n, len(listed[short]))
+		}
+	}
+	for name, ps := range listed {
+		if found["vm."+name] == 0 {
+			t.Errorf("%s is listed, but makes no static object", name)
+		}
+		for i, p := range ps {
+			if !jitParkStatic(p) {
+				t.Errorf("%s's static object %d is not jitParkStatic's", name, i)
+			}
 		}
 	}
 }

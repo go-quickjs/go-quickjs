@@ -118,19 +118,33 @@ type jitParkSlot struct {
 	w  weak.Pointer[byte]
 }
 
-// hold clears the pointer slot at, keeping a weak pointer to what it held.
+// hold clears the pointer slot at, keeping a weak pointer to what it held;
+// a slot holding one of the package's static objects (jitParkStatic) stays
+// as it is.
 func (p *jitParked) hold(at *unsafe.Pointer) {
-	if *at == nil {
+	if *at == nil || jitParkStatic(*at) {
 		return
 	}
 	p.slots = append(p.slots, jitParkSlot{at: at, w: weak.Make((*byte)(*at))})
 	*at = nil
 }
 
+// jitParkStatic reports whether x is one of the objects of jitParkWeak's
+// types that the package makes as its variables' literals: the caches'
+// sentinels, and the holder of what is found nowhere. The linker puts such
+// an object in the binary's data, not the heap, and a weak pointer cannot
+// be made to it -- Go 1.24's weak.Make throws -- nor is one needed, since
+// it never dies: a slot holding one is held strongly, as it is.
+// TestJITParkStaticsListed holds the list to the package's literals.
+func jitParkStatic(x unsafe.Pointer) bool {
+	return x == unsafe.Pointer(noShape) || x == unsafe.Pointer(dictShape) || x == unsafe.Pointer(setterNext) ||
+		x == unsafe.Pointer(absentHolder) || x == unsafe.Pointer(absentHolder.shape)
+}
+
 // The types whose pointers a parked entry holds weakly: what holds a
-// program's objects, all of them allocated in the heap -- a pointer
-// to any other may name a package's variable, which a weak pointer
-// cannot be made to.
+// program's objects, allocated in the heap but for the package's own
+// statics (jitParkStatic) -- a pointer to any other type may name a
+// package's variable, which a weak pointer cannot be made to.
 var (
 	jitParkWeak = map[reflect.Type]bool{
 		reflect.TypeFor[*Object]():  true,
@@ -176,7 +190,8 @@ func (p *jitParked) walk(v reflect.Value) {
 	case reflect.Struct:
 		if t == jitParkValue {
 			// A value of an object's tag holds the object, an accessor
-			// pair or a template, each the heap's.
+			// pair or a template, each the heap's but for the statics
+			// hold leaves as they are.
 			x := (*Value)(unsafe.Pointer(v.UnsafeAddr()))
 			if b := math.Float64bits(x.num); b == objectBits || b == accessorBits || b == templateBits {
 				p.hold(&x.ref)

@@ -3618,7 +3618,11 @@ marked not cached, so that its templates' calls take the path code let go
 of takes; and every pointer to a closure, an object, a shape or a
 function's bytecode its entry, its keep and its function's learned state
 hold becomes a weak pointer, its slot cleared (`jitParked`), the walk going
-into the structures the entry owns alone (`jitParkInto`) and no other;
+into the structures the entry owns alone (`jitParkInto`) and no other --
+but for the package's own static objects, the caches' sentinels and
+`absentHolder` (`jitParkStatic`), which are the binary's data rather than
+the heap's, which a weak pointer cannot be made to, and never die: their
+slots keep them;
 its pools are emptied of the objects made for them, filled again from
 their sources when the code next runs out, and its function's learned
 state, which other functions' compiles read, is a copy that holds no
