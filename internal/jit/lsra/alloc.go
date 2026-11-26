@@ -234,6 +234,9 @@ type Allocator struct {
 	posBlock []int32
 	blockW   []float64
 
+	// moved says the scan took a web apart or moved a web's start.
+	moved bool
+
 	// The function being allocated, where splitting is allowed (split),
 	// its positions' end (maxPos), and whether its events are known.
 	f           *Func
@@ -788,6 +791,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	// A web it would spill of more than one register is taken apart
 	// instead, its registers scanned again each on its own, each hinted to
 	// the others' registers: they may find registers in its holes.
+	al.moved = false
 	for cls, regs := range cfg.Classes {
 		active, inactive := al.active[:0], al.inactive[:0]
 		// The webs to scan: the class's, in order of their starts, and
@@ -804,6 +808,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			if len(w.members) < 2 {
 				return false
 			}
+			al.moved = true
 			ps := al.parts[:0]
 			for _, m := range w.members {
 				p := single(m)
@@ -1010,14 +1015,18 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	}
 	lap(PhaseScan)
 
-	// The webs as the scan left them, some taken apart.
-	list = list[:0]
-	for v, w := range webs {
-		if w != nil && w.members[0] == VReg(v) {
-			list = append(list, w)
+	// The webs as the scan left them, some taken apart, in order of their
+	// starts: as they were where it took none apart and a hole moved no
+	// web's start.
+	if al.moved {
+		list = list[:0]
+		for v, w := range webs {
+			if w != nil && w.members[0] == VReg(v) {
+				list = append(list, w)
+			}
 		}
+		al.sortByStart(list, pos)
 	}
-	al.sortByStart(list, pos)
 	al.list = list
 
 	// Slots: for the webs spilled, and those in registers that live across

@@ -547,7 +547,11 @@ func (al *Allocator) punch(a *web, h hole) {
 	if cap(out) < len(full)+len(holes) {
 		out = al.rngs.take(len(full) + len(holes))
 	}
+	was := a.start()
 	sp.full, sp.holes, a.ranges = full, holes, subtractInto(out[:0], full, holes)
+	if len(a.ranges) == 0 || a.start() != was {
+		al.moved = true
+	}
 	sp.holeW += evW
 	sp.moveW += h.cost - evW
 	a.dense = 0
