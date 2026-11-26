@@ -636,6 +636,38 @@ Its shape:
 Stage 10's spike builds this collector and measures its young
 collections' cost and its fragmentation against the copying prototype's.
 
+**Shared with the WebAssembly engine.** The WebAssembly engine is on a
+par with Node on its programs and kernels except where it allocates GC
+objects: docs/wasm.md's `gc` and `arrays` run at 10x and 8x Node's
+time, and what is left there is Go's -- each object's allocation, the
+collector's marking, the barrier while it marks -- though native code
+takes its objects from pools and an allocation stub. The collector is
+built to serve both engines:
+
+- **A package of its own** (`internal/heap`), imported by package vm and
+  by the WebAssembly engine, as `internal/atomicwait` is; the engines
+  stay apart (`TestEnginesApart`).
+- **Typed layouts as an object kind.** A WebAssembly struct or array has
+  a layout fixed at validation, every field's kind known; the collector
+  traces it from its type, with no shape to read.
+- **Exact roots.** The WebAssembly engine's frames hold references only
+  in their reference slots, and its tables and globals are known, so its
+  roots are precise; its JIT already stores references only through a
+  barrier routine of its own (`wasmNativeStoreRef`) and keeps none in a
+  register across an exit, so moving it to the card mark is contained.
+- **One mutator per heap.** A JavaScript runtime has one; a store's heap
+  needs its calls serialized, or a safepoint handshake across the
+  goroutines that may call into it. What the WebAssembly API promises is
+  checked before the store's heap is designed.
+- **Interop:** a WebAssembly struct seen from JavaScript and a JavaScript
+  object passed as `externref` are references in one heap, not handles
+  between two.
+
+WebAssembly GC objects are the easier first user: typed, with exact roots
+and a contained barrier, and the gap there is the collector's alone, where
+JavaScript's also needs the value representation. Stage 10's spike may
+prove the collector on them first (decision D13).
+
 **External arrays under the engine heap.** An ArrayBuffer's object lives
 in the engine heap; its bytes stay where they are -- the host's shared
 slice, a Go slice, a WebAssembly memory's store -- reached through a
@@ -1363,6 +1395,7 @@ The maintainer took these on 2026-11-26.
 | D10 | The order as listed, the baseline moved up to follow stage 2 if stage 2 leaves goal 2 unmet | goal 2 may be met by stage 2, and the baseline is the largest risk |
 | D11 | The maintainer runs the V8 suite on the M5 Max at each composite stage's end, the per-suite ratios against the table under The goals | timing stays on the Ryzen, and the M5 Max's Go-bound suites weigh differently |
 | D12 | CacheIR-style feedback and trial inlining are the next project's | the snapshot as data takes CacheIR's cheap half now, and trial inlining needs the baseline first |
+| D13 | *Open:* whether stage 10's spike proves the collector on WebAssembly GC objects first | they are typed, with exact roots and a contained barrier, and their 8 to 10x gap to Node is the collector's alone; the WebAssembly engine is otherwise out of this project's scope |
 
 ## The risks
 
