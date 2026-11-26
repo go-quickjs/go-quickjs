@@ -2902,10 +2902,27 @@ const (
 // instruction are 3.1 to a register one. So each of its instructions
 // counts 20/17 of one, rounded; a slot program's count one each.
 func inlineSize(p *ir.Program) int {
-	if p.Origin != nil {
-		return (len(p.Code)*20 + 8) / 17
+	return inlineSizeOf(len(p.Code), p.Origin != nil)
+}
+
+// inlineSizeOf is inlineSize of a program of n instructions, a register
+// program's where reg says.
+func inlineSizeOf(n int, reg bool) int {
+	if reg {
+		return (n*20 + 8) / 17
 	}
-	return len(p.Code)
+	return n
+}
+
+// MayInlineSize reports whether a register program of n instructions or
+// more may be inlined, as far as its size says: whether one of n is within
+// the bound every inlining of a callee checks (InlineCalls,
+// InlineCallsGiven, NeverInlined). A program longer than n is no more
+// likely, its size growing with n. The VM's snapshot for a compile in the
+// background copies the caches of a callee only where its register code,
+// which lowers to at least an instruction for each of its own, passes.
+func MayInlineSize(n int) bool {
+	return inlineSizeOf(n, true) <= maxInline
 }
 
 // inlineFits reports whether a callee of n instructions may be inlined
