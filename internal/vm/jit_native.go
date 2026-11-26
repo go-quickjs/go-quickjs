@@ -803,13 +803,15 @@ func (r *Runtime) jitRegPlaceWith(e *jitRegEntry, c *regCode, rf *jitRegFeedback
 	if life := e.life; life != nil {
 		// The register pcs of the calls it leaves to Go (ssa.Func's
 		// HostsLeft), one of which its code has never made is seldom made
-		// (InlineExit).
-		life.ssaHostsLeft = life.ssaHostsLeft[:0]
+		// (InlineExit): made anew, the list it replaces left as it was for
+		// a snapshot that holds it (ssaHostsLeft).
+		var left []int32
 		for _, pc := range f.HostsLeft {
 			if pc >= 0 && pc < len(p.Origin) {
-				life.ssaHostsLeft = append(life.ssaHostsLeft, int32(p.Origin[pc]))
+				left = append(left, int32(p.Origin[pc]))
 			}
 		}
+		life.ssaHostsLeft = left
 	}
 	e.unentered = slices.Clone(f.Unentered)
 	e.kept = slices.Clone(f.EntryKept)

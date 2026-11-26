@@ -642,12 +642,7 @@ func (r *Runtime) jitRegCallSeenOf(f *frame, c *regCode, e *jitRegEntry, rpc int
 	}
 	if l := r.jitRegLearnedFor(f, e); l != nil {
 		// Made: a call no longer seldom made (InlineExit).
-		if len(l.regCallsMade) != len(c.rc.Code) {
-			l.regCallsMade = make([]uint8, len(c.rc.Code))
-		}
-		if l.regCallsMade[rpc] < ^uint8(0) {
-			l.regCallsMade[rpc]++
-		}
+		l.regCallMade(len(c.rc.Code), rpc)
 	}
 	if e.invalid {
 		return false
@@ -2650,7 +2645,7 @@ func (f *jitRegFeedback) InlineExit(pc int) bool {
 	}
 	rpc := int(f.p.Origin[pc])
 	l := f.fb.e
-	made := l != nil && rpc < len(l.regCallsMade) && l.regCallsMade[rpc] != 0
+	made := l != nil && jitRegCallMadeIn(l.regCallsMade, rpc)
 	switch jitRegCallOp(w.Op()) {
 	case bytecode.RThrow, bytecode.RThrowRef:
 		return true
@@ -2667,6 +2662,32 @@ func (f *jitRegFeedback) InlineExit(pc int) bool {
 		return l != nil && !made && slices.Contains(l.ssaHostsLeft, int32(rpc)) && f.fb.r.jitRegCodeRan(f.fb.cl, l)
 	}
 	return false
+}
+
+// regCallMade marks register pc rpc of e's register code, n instructions
+// long, a call made (regCallsMade): the set made anew, with its bit, at the
+// pc's first call, and for code of another length; the set it replaces
+// left as it was.
+func (e *jitEntry) regCallMade(n, rpc int) {
+	if rpc < 0 || rpc >= n {
+		return
+	}
+	if e.regCallsMadeOf != n {
+		e.regCallsMade, e.regCallsMadeOf = nil, n
+	}
+	if jitRegCallMadeIn(e.regCallsMade, rpc) {
+		return
+	}
+	set := make([]uint64, (n+63)/64)
+	copy(set, e.regCallsMade)
+	set[rpc>>6] |= 1 << (rpc & 63)
+	e.regCallsMade = set
+}
+
+// jitRegCallMadeIn reports whether set, a jitEntry's regCallsMade, marks
+// register pc rpc.
+func jitRegCallMadeIn(set []uint64, rpc int) bool {
+	return rpc >= 0 && rpc>>6 < len(set) && set[rpc>>6]&(1<<(rpc&63)) != 0
 }
 
 // jitRegCodeRan reports whether cl's function's register code, whose

@@ -814,12 +814,19 @@ type jitEntry struct {
 	// ssaHostsLeft are the PCs of the host operations of its own the code
 	// leaves to Go (ssa.Func's HostsLeft): a call there its code has never
 	// been seen to make is one seldom made (jitRegFeedback's InlineExit).
+	// Each install makes it anew, never writing the list it replaces, so
+	// that a copy of its header is the list as it was when copied.
 	ssaHostsLeft []int32
-	// regCallsMade counts, of register code's learning, the calls Go made
-	// for its code or at its exits, by register pc (jitRegCallSeen): a call
-	// its code leaves to Go and has never made is seldom made (jitRegFeedback's
-	// InlineExit).
-	regCallsMade []uint8
+	// regCallsMade marks, of register code's learning, the register pcs of
+	// the calls Go made for its code or at its exits (jitRegCallSeen), a
+	// bit each, of register code regCallsMadeOf instructions long: a call
+	// its code leaves to Go and has never made is seldom made
+	// (jitRegFeedback's InlineExit). A pc's first call makes the set anew,
+	// a copy with its bit, never writing the set it replaces, so that a
+	// copy of its header is the set as it was when copied. A count, made
+	// in place, had been read only for whether it was 0.
+	regCallsMade   []uint64
+	regCallsMadeOf int
 	// osrFrames counts the calls that went on in the code kept for a loop,
 	// up to jitFramesLeaving, and osrCalls is the function's calls when the
 	// count began (jitRegFramesLeave).
