@@ -2955,18 +2955,34 @@ func jitGoArg(ctx *abi.Context, i int) Value {
 // call's checks: after jitInlineExits the call is not inlined but made
 // natively, if the callee's code allows it, and the code is compiled
 // again.
+//
+// The counts are kept in lists made anew, never written in place, as every
+// write of the learned calls is (TestJITLearnedListsPersist): a snapshot's
+// copy of a list, which a worker reads, holds its header. A call's count
+// stops at jitInlineExits, so that a list is made anew at most so often for
+// each of its calls.
 func (r *Runtime) jitInlineLeft(e *jitEntry, pc int) {
+	own := false
 	for i := range e.nativeCalls {
 		// A loop's callback inlined in it (jitFeedback's callbackInline),
 		// called natively once it has left too often.
 		if x := &e.nativeCalls[i]; int(x.pc) == pc && x.forEach && !x.cbLeft {
+			if !own {
+				e.nativeCalls, own = slices.Clone(e.nativeCalls), true
+				x = &e.nativeCalls[i]
+			}
 			if x.exits++; x.exits >= jitInlineExits {
 				x.cbLeft, e.inlineReopt = true, true
 			}
 		}
 	}
+	own = false
 	for i := range e.inlines {
 		if x := &e.inlines[i]; int(x.pc) == pc && !slices.Contains(e.notInline, x.pc) {
+			if !own {
+				e.inlines, own = slices.Clone(e.inlines), true
+				x = &e.inlines[i]
+			}
 			if x.exits++; x.exits >= jitInlineExits {
 				e.notInline = append(e.notInline, x.pc)
 				if e.callSites != nil {

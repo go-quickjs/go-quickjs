@@ -5,6 +5,7 @@ package vm
 import (
 	"os"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit"
@@ -17,6 +18,14 @@ import (
 // state rather than its copy then answers otherwise. Each family's test
 // file appends its own in an init.
 var jitSnapScribblers []func(r *Runtime, s *jitSnapshot) (restore func())
+
+// jitSnapGatheredAt are the families' reports of a question of a derived
+// method that their gather asked of the feedback on the runtime's
+// goroutine, the method derived at the other PCs: the snapshot holds the
+// effect that asking took, which the feedback asked again gives no more
+// (askedOf), so it is not compared. Each family's test file appends its
+// own in an init.
+var jitSnapGatheredAt []func(s *jitSnapshot, m jitSnapMethod, arg int64) bool
 
 // jitSnapLiveAsk is what call, asking fb a question, appended to fb's
 // lists and to its keep's, fb's left as they were: the effect the
@@ -165,7 +174,9 @@ func TestJITSnapshotDerivesFromItsCopy(t *testing.T) {
 					continue
 				}
 				for pc, op := range s.ops {
-					if jitSnapAsks[op]&(1<<m) != 0 {
+					if jitSnapAsks[op]&(1<<m) != 0 && !slices.ContainsFunc(jitSnapGatheredAt, func(g func(*jitSnapshot, jitSnapMethod, int64) bool) bool {
+						return g(s, m, int64(pc))
+					}) {
 						ask(m, int64(pc))
 					}
 				}
@@ -304,4 +315,30 @@ func TestJITSnapshotBuildsTheSame(t *testing.T) {
 		t.Fatal("nothing built")
 	}
 	t.Logf("%d functions built four times each, %d differed", built, differ)
+}
+
+// TestJITSnapshotDeriveStages holds a snapshot's derivations to run stage
+// by stage (jitSnapDeriveStage), each stage's after every earlier one's,
+// in the order each stage's were appended, whatever the files that
+// appended them: Inline's appends to the learned calls are there for
+// NativeCalls' and Resumed's.
+func TestJITSnapshotDeriveStages(t *testing.T) {
+	var ran []int
+	var derivers [jitDeriveStages][]func(s *jitSnapshot)
+	for i := jitDeriveStages; i > 0; i-- {
+		stage := i - 1
+		for k := range 2 {
+			at := int(stage)*2 + k
+			derivers[stage] = append(derivers[stage], func(*jitSnapshot) { ran = append(ran, at) })
+		}
+	}
+	(&jitSnapshot{}).runDerivers(&derivers)
+	for i, at := range ran {
+		if at != i {
+			t.Fatalf("derivations ran in the order %v", ran)
+		}
+	}
+	if len(ran) != 2*int(jitDeriveStages) {
+		t.Fatalf("%d derivations of %d ran", len(ran), 2*int(jitDeriveStages))
+	}
 }

@@ -87,7 +87,7 @@ func (r *Runtime) jitRegForEachSeen(f *frame, e *jitRegEntry, rpc int, callee, r
 			return
 		}
 		if x.cbObj != cb.Object() && !x.byCode {
-			x.byCode = true
+			l.nativeCalls = jitLearnedByCode(l.nativeCalls, i)
 			r.jitRegReopt(f.cl, e)
 		}
 		r.jitRegNativeCalleeN(cl, cl.reg, calls, f.cl)

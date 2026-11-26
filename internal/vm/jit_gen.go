@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"slices"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -208,7 +209,10 @@ func (r *Runtime) jitRegGenSeen(f *frame, e *jitRegEntry, rpc int, it *Object) {
 		if len(gs.cls) >= jitGenTargets {
 			return
 		}
-		gs.cls = append(gs.cls, g.cl)
+		// Written anew, never in place: a snapshot's copy of the list
+		// may hold the old (TestJITLearnedListsPersist).
+		l.genSteps = slices.Clone(l.genSteps)
+		l.genSteps[i].cls = append(slices.Clip(gs.cls), g.cl)
 		r.jitRegGenLearned(cl, e)
 		return
 	}

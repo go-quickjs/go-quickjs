@@ -847,6 +847,12 @@ func (fb *jitFeedback) selfCallPCs() []int32 {
 // snapshotStatePCs visits the sparse lists backing the state questions.
 // Unlisted PCs already have false answers in jitRegSnapshot.get.
 func (fb *jitRegFeedback) snapshotStatePCs(s *jitSnapshot) {
+	if t := &s.d.calls.tg; t.gathered {
+		// Derived on the worker, from the learning as it is now and what
+		// the derivations append to it (jitTargetsDerive).
+		t.late(fb)
+		return
+	}
 	e := fb.fb.e
 	if e == nil {
 		return
@@ -1037,18 +1043,27 @@ func (f *jitRegFeedback) NativeCalls(pc int) []ssa.CallSite {
 
 // nativeCalls is NativeCalls' answer, found.
 func (f *jitRegFeedback) nativeCalls(pc int) []ssa.CallSite {
-	w, op, ok := f.at(pc)
-	if ok && op == ir.IterStep && w.Op() == bytecode.RIterNext && !f.p.Code[pc].When && !f.p.Code[pc].Rest {
+	q := f.callCtx()
+	return q.nativeCalls(pc)
+}
+
+// nativeCalls is NativeCalls' answer, of q's source. What it answers
+// reading the heap, or making what the runtime keeps, it asks of the live
+// feedback (mustLive), at the PCs a snapshot's gather asks on the
+// runtime's goroutine (callsLive).
+func (q *jitCallCtx) nativeCalls(pc int) []ssa.CallSite {
+	w, op, ok := jitRegAt(q.p, q.rc, pc)
+	if ok && op == ir.IterStep && w.Op() == bytecode.RIterNext && !q.p.Code[pc].When && !q.p.Code[pc].Rest {
 		// A loop's step's native call of its iterator's next
 		// (regStepSites).
-		return f.regStepSites(pc)
+		return q.mustLive().regStepSites(pc)
 	}
-	if ok && (op == ir.Host && f.p.Code[pc].Whole || op == ir.FieldDefine && w.Op() == bytecode.RDefineField) {
+	if ok && (op == ir.Host && q.p.Code[pc].Whole || op == ir.FieldDefine && w.Op() == bytecode.RDefineField) {
 		// An instruction Go runs whole, its fast paths native code's
 		// (regWholeSite).
-		return f.regWholeSite(pc, w)
+		return q.mustLive().regWholeSite(pc, w)
 	}
-	if !ok || op != ir.Host || !f.p.Code[pc].Window {
+	if !ok || op != ir.Host || !q.p.Code[pc].Window {
 		return nil
 	}
 	switch w.Op() {
@@ -1061,10 +1076,10 @@ func (f *jitRegFeedback) nativeCalls(pc int) []ssa.CallSite {
 		// proxy's trap.
 		return []ssa.CallSite{{Go: ssa.GoCall, InstanceOf: true, Argc: 1, ThisSlot: -1}}
 	}
-	rpc := int(f.p.Origin[pc])
+	rpc := int(q.p.Origin[pc])
 	if w.Op() == bytecode.RSuperCall {
 		// A derived constructor's super(...) (regSuperSites).
-		return f.regSuperSites(pc, w)
+		return q.mustLive().regSuperSites(pc, w)
 	}
 	if w.Op() == bytecode.RLit {
 		// regexp_lit's call of the method its expansion read, of its one
@@ -1073,12 +1088,13 @@ func (f *jitRegFeedback) nativeCalls(pc int) []ssa.CallSite {
 		// receiver the literal's RegExp from its pool (regLitPool), which
 		// the leaf gives back to it (ssa.CallSite's Give,
 		// jitRegExpLeafGive).
+		f := q.mustLive()
 		if !f.regLitFed(pc) {
 			return nil
 		}
 		return []ssa.CallSite{{Go: ssa.GoCall, Argc: 1, Method: true, ThisSlot: -1, Give: f.regLitPool(pc, w)}}
 	}
-	if rpc < len(f.rc.Marks) && f.rc.Marks[rpc]&bytecode.RMarkTail != 0 {
+	if rpc < len(q.rc.Marks) && q.rc.Marks[rpc]&bytecode.RMarkTail != 0 {
 		return nil
 	}
 	// A call in tail position (tail_call_w, tail_call_method_w) is made as
@@ -1090,10 +1106,11 @@ func (f *jitRegFeedback) nativeCalls(pc int) []ssa.CallSite {
 		// Go, which makes it from the frame's arguments in the context --
 		// Array.apply(null, arguments) without a frame (jitForwardPlain) --
 		// the realm's apply checked by the code.
-		if !f.p.Forwards || f.fb.r.applyFn == nil {
+		f := q.mustLive()
+		if !q.p.Forwards || f.fb.r.applyFn == nil {
 			return nil
 		}
-		if sites := f.regCallSites(pc, w, 2, false); len(sites) != 0 {
+		if sites := q.callSites(pc, w, 2, false); len(sites) != 0 {
 			if l := f.fb.e; l != nil && jitCountAt(l.nativeCalls, rpc) >= jitCallTargets {
 				// As many as it calls natively: any other Go's.
 				sites[0].Generic = true
@@ -1113,19 +1130,22 @@ func (f *jitRegFeedback) nativeCalls(pc int) []ssa.CallSite {
 	// makes the call (mir's windowGoCall) -- not a call of Go alone, which
 	// has nowhere else to take them from, nor a built-in's.
 	wide := n > abi.MaxGoArgs
-	if site, ok := f.regAllocSite(rpc, w, argc); ok && !wide {
-		return []ssa.CallSite{site}
+	if w.Op() == bytecode.RNewW {
+		f := q.mustLive()
+		if site, ok := f.regAllocSite(rpc, w, argc); ok && !wide {
+			return []ssa.CallSite{site}
+		}
+		if l := f.fb.e; !wide && l != nil && slices.Contains(l.genericCalls, int32(rpc)) {
+			// A construction that met more functions than it constructs
+			// with natively (jitRegGenericNew) -- classes a loop makes
+			// anew, each with a prototype of its own -- is Go's from native
+			// code, whatever it constructs with, as V8's code constructs
+			// through its generic Construct builtin.
+			return []ssa.CallSite{{Go: ssa.GoCall, Argc: argc, New: true, ThisSlot: -1}}
+		}
 	}
-	if l := f.fb.e; w.Op() == bytecode.RNewW && !wide && l != nil && slices.Contains(l.genericCalls, int32(rpc)) {
-		// A construction that met more functions than it constructs with
-		// natively (jitRegGenericNew) -- classes a loop makes anew, each
-		// with a prototype of its own -- is Go's from native code, whatever
-		// it constructs with, as V8's code constructs through its generic
-		// Construct builtin.
-		return []ssa.CallSite{{Go: ssa.GoCall, Argc: argc, New: true, ThisSlot: -1}}
-	}
-	if sites := f.regCallSites(pc, w, argc, method); len(sites) != 0 {
-		if l := f.fb.e; w.Op() != bytecode.RNewW && l != nil && (jitCountAt(l.nativeCalls, rpc) >= jitCallTargets || slices.Contains(l.genericCalls, int32(rpc))) {
+	if sites := q.callSites(pc, w, argc, method); len(sites) != 0 {
+		if l := q.src.learned(); w.Op() != bytecode.RNewW && l != nil && (jitCountAt(l.nativeCalls, rpc) >= jitCallTargets || slices.Contains(l.genericCalls, int32(rpc))) {
 			// As many as it calls natively: any other function it calls
 			// through its link (ssa.CallSite's Generic) -- where Go had
 			// made every call past them, AWFY's Richards' tasks' functions,
@@ -1134,33 +1154,138 @@ func (f *jitRegFeedback) nativeCalls(pc int) []ssa.CallSite {
 			// from native code: x.toString() of objects and numbers, where
 			// each number's call had left native code.
 			sites[0].Generic = true
-			sites[0].GenericEnv, sites[0].GenericRealm = uintptr(unsafe.Pointer(f.fb.cl.env)), uintptr(unsafe.Pointer(f.fb.cl.realm))
-			// Typed code's call through a function table: any of its
-			// functions by the call's index (regTableEntries).
-			sites[0].Table, sites[0].TableLen = f.regTableEntries(pc, w, argc)
+			sites[0].GenericEnv, sites[0].GenericRealm = uintptr(unsafe.Pointer(q.cl.env)), uintptr(unsafe.Pointer(q.cl.realm))
+			if q.rc.Typed {
+				// Typed code's call through a function table: any of its
+				// functions by the call's index (regTableEntries).
+				sites[0].Table, sites[0].TableLen = q.mustLive().regTableEntries(pc, w, argc)
+			}
 		}
 		return sites
 	}
-	if site, ok := f.regBuiltinSite(w, argc, method); ok {
-		// Made natively of its operands, however many (mir's push).
-		return []ssa.CallSite{site}
+	if q.builtinAt(w, method) {
+		if site, ok := q.mustLive().regBuiltinSite(w, argc, method); ok {
+			// Made natively of its operands, however many (mir's push).
+			return []ssa.CallSite{site}
+		}
 	}
 	if wide {
 		return nil
 	}
 	site := ssa.CallSite{Go: ssa.GoCall, Argc: argc, Method: method, New: w.Op() == bytecode.RNewW, ThisSlot: -1}
-	if method {
+	if method && q.litAt(rpc, w) {
 		// A RegExp literal's call, whose RegExp a leaf's call gives back
 		// to the literal's pool (ssa.CallSite's Give).
-		site.Give = f.regLitPool(pc, w)
+		site.Give = q.mustLive().regLitPool(pc, w)
 	}
 	// A call of the realm's next on generators the code resumes natively
 	// (regGenNextSite), or a generator function's call, its generator made
 	// natively (regGenMakeSite).
-	if f.regGenNextSite(rpc, &site); site.Pool == 0 {
-		f.regGenMakeSite(rpc, &site)
+	if q.genAt(rpc) {
+		f := q.mustLive()
+		if f.regGenNextSite(rpc, &site); site.Pool == 0 {
+			f.regGenMakeSite(rpc, &site)
+		}
 	}
 	return []ssa.CallSite{site}
+}
+
+// callSites is regCallSites' answer, of q's source.
+func (q *jitCallCtx) callSites(pc int, w bytecode.RInstr, argc int, method bool) []ssa.CallSite {
+	var t jitRegTargets
+	q.callTargets(&t, pc, w, argc, method)
+	if t.n == 0 {
+		return nil
+	}
+	return slices.Clone(t.sites[:t.n])
+}
+
+// builtinAt reports whether the call w's site's cache holds a built-in the
+// call may make natively (regBuiltinSite): a method call's of a native
+// function.
+func (q *jitCallCtx) builtinAt(w bytecode.RInstr, method bool) bool {
+	if !method {
+		return false
+	}
+	calls := q.src.calls(int(w.C()))
+	if uint(w.C()) >= uint(len(calls)) {
+		return false
+	}
+	e := &calls[w.C()]
+	return e.kind&^regCallMarks == regCallNative && e.callee != nil
+}
+
+// litAt reports whether the method call w at register pc rpc is marked to
+// give a RegExp literal back (regLitPool).
+func (q *jitCallCtx) litAt(rpc int, w bytecode.RInstr) bool {
+	return w.Op() == bytecode.RCallMW && rpc < len(q.rc.Marks) && q.rc.Marks[rpc]&(bytecode.RMarkLitArg|bytecode.RMarkLitRecv) != 0
+}
+
+// genAt reports whether the code learned generators resumed or made at
+// register pc rpc (regGenNextSite, regGenMakeSite).
+func (q *jitCallCtx) genAt(rpc int) bool {
+	l := q.src.learned()
+	if l == nil {
+		return false
+	}
+	for i := range l.genSteps {
+		if int(l.genSteps[i].pc) == rpc {
+			return true
+		}
+	}
+	for i := range l.genMakes {
+		// Its pc alone: its pool is made in place at its first ask
+		// (jitGenMakePool), on the runtime's goroutine.
+		if int(l.genMakes[i].pc) == rpc {
+			return true
+		}
+	}
+	return false
+}
+
+// callsLive reports whether NativeCalls' answer at the program's
+// instruction pc asks the live feedback (mustLive): what a snapshot's
+// gather asks on the runtime's goroutine, where the asking reads the heap
+// -- a binding's value, a typed table, the prototypes a built-in's call
+// checks -- or makes what the runtime keeps -- a pool, a literal, register
+// code. It answers from the copy as nativeCalls would, and says yes
+// wherever that may come to mustLive: never too seldom, a derivation that
+// came to one would panic.
+func (q *jitCallCtx) callsLive(pc int) bool {
+	w, op, ok := jitRegAt(q.p, q.rc, pc)
+	if !ok {
+		return false
+	}
+	if q.rc.Typed {
+		// Typed code's calls read its tables (regTableTargets).
+		return true
+	}
+	c := &q.p.Code[pc]
+	if op == ir.IterStep && w.Op() == bytecode.RIterNext && !c.When && !c.Rest ||
+		op == ir.Host && c.Whole || op == ir.FieldDefine && w.Op() == bytecode.RDefineField {
+		return true
+	}
+	if op != ir.Host || !c.Window {
+		return false
+	}
+	switch w.Op() {
+	case bytecode.RTypeof, bytecode.RInstanceOf, bytecode.RInstanceOfNext:
+		return false
+	case bytecode.RSuperCall, bytecode.RLit, bytecode.RApplyArgs, bytecode.RNewW:
+		return true
+	}
+	rpc := int(q.p.Origin[pc])
+	if rpc < len(q.rc.Marks) && q.rc.Marks[rpc]&bytecode.RMarkTail != 0 {
+		return false
+	}
+	calls := q.src.calls(int(w.C()))
+	if uint(w.C()) >= uint(len(calls)) || calls[w.C()].callee == nil {
+		// Unfilled: the binding read before it holds the function now
+		// (regViaNow, regConstructorNow).
+		return true
+	}
+	method := w.Op().MethodCall()
+	return q.builtinAt(w, method) || method && q.litAt(rpc, w) || q.genAt(rpc)
 }
 
 // regBuiltinSite is the call of a built-in native code makes itself whose

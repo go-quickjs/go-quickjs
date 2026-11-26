@@ -1318,6 +1318,18 @@ is under [The projection](#the-projection).
   (`CharCode`, `Substring`, `IndexOf` and the like, 71,000 questions, a
   few hundred answered), from the closures' call caches copied whole
   once a compile, which `NativeCalls` and `Inline` read next.
+  `NativeCalls` is derived on the worker from those copies, with
+  `Resumed`, `EntryGeneric` and `ViaLeaf`, which read what it learns:
+  about 49,000 questions over Octane's functions, 18% of the
+  snapshot's time in the profile made twenty times over (projected 15
+  to 30 µs of the goroutine's part). The goroutine asks it only where
+  it reads the heap or makes what the runtime keeps -- constructions,
+  `super()`, `apply`, typed code, an empty site's binding, a built-in's
+  checks -- and takes the facts of the targets the copies name and
+  their links. What the answer learns, the appends to the learned
+  calls, the finish writes once the compile is done with, as V8's
+  concurrent compiles write no feedback. *Measured*: with the gate's
+  `compilediff` and the goroutine's part, to come.
 - **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
   was run beside mir's scan on every compile, given the same function: an
   instruction for each value and the block's end, the frame states' uses

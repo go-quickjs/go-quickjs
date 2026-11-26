@@ -276,12 +276,8 @@ func (s *jitState) regLinkUpdate(key jitKey, e *jitRegEntry) {
 // holds is learned too, so that a call of it Go makes, its code not
 // compiled yet, is not taken for news.
 func (f *jitRegFeedback) regCallSites(pc int, w bytecode.RInstr, argc int, method bool) []ssa.CallSite {
-	var t jitRegTargets
-	f.regCallTargets(&t, pc, w, argc, method)
-	if t.n == 0 {
-		return nil
-	}
-	return slices.Clone(t.sites[:t.n])
+	q := f.callCtx()
+	return q.callSites(pc, w, argc, method)
 }
 
 // jitRegTargets is regCallTargets' answer: up to jitCallTargets native
@@ -755,7 +751,9 @@ func (r *Runtime) jitRegCallSeenOf(f *frame, c *regCode, e *jitRegEntry, rpc int
 				}
 				return false
 			}
-			x.byCode = true
+			// Written anew, never in place: a snapshot's copy of the list
+			// is read by a worker (TestJITLearnedListsPersist).
+			l.nativeCalls = jitLearnedByCode(l.nativeCalls, i)
 			r.jitRegReopt(f.cl, e)
 			return true
 		}
@@ -825,7 +823,7 @@ func (r *Runtime) jitRegCallSeenOf(f *frame, c *regCode, e *jitRegEntry, rpc int
 			}); k >= 0 {
 				// Another object of a function it met, called by its code
 				// (ssa.CallSite's ByCode), as below.
-				l.nativeCalls[k].byCode = true
+				l.nativeCalls = jitLearnedByCode(l.nativeCalls, k)
 				continue
 			}
 			learned = r.jitRegCallTarget(l, w, m) || learned
@@ -840,6 +838,16 @@ func (r *Runtime) jitRegCallSeenOf(f *frame, c *regCode, e *jitRegEntry, rpc int
 	}
 	r.jitRegReopt(f.cl, e)
 	return true
+}
+
+// jitLearnedByCode is list, a function's learned native calls, with its
+// element i marked called by its code (jitInline's byCode): a list of its
+// own, the one given left as it was, which a snapshot's copy may hold
+// while a worker reads it (jitSnapshot's derivations).
+func jitLearnedByCode(list []jitInline, i int) []jitInline {
+	out := slices.Clone(list)
+	out[i].byCode = true
+	return out
 }
 
 // jitRegGenericNew learns in l that the construction at register pc rpc,

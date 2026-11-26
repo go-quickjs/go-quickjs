@@ -90,6 +90,10 @@ type jitSnapLists struct {
 	pools                 []*abi.ObjectPool
 }
 
+// jitSnapDerivedLinks is the span list of the links a derivation's
+// effects name, kept apart from gained's (jitSnapData's derivedLinks).
+const jitSnapDerivedLinks = 8
+
 // jitSnapLens are the lengths of a feedback's lists (jitSnapLists), all a
 // question's effect is found by: most questions append nothing.
 type jitSnapLens [8]int
@@ -106,8 +110,9 @@ type jitSnapEffect struct {
 }
 
 // jitSnapSpan is a run of a list a question appended to (list, a list of
-// jitSnapLists by its index in jitSnapLens; kept, of the keep's, not the
-// asked feedback's own), from:to of the root's gained list of it.
+// jitSnapLists by its index in jitSnapLens, or jitSnapDerivedLinks; kept,
+// of the keep's, not the asked feedback's own), from:to of the root's
+// gained list of it.
 type jitSnapSpan struct {
 	list     uint8
 	kept     bool
@@ -319,7 +324,14 @@ func (root *jitSnapshot) take(f *jitFeedback, before jitSnapLens, kept bool) {
 	f.shapes = jitSnapGained(root, 0, kept, f.shapes, before[0], &g.shapes)
 	f.holders = jitSnapGained(root, 1, kept, f.holders, before[1], &g.holders)
 	f.cells = jitSnapGained(root, 2, kept, f.cells, before[2], &g.cells)
-	f.links = jitSnapGained(root, 3, kept, f.links, before[3], &g.links)
+	if root.d.deriving {
+		// A derivation's, on the worker, apart from what holdsLink reads on
+		// the runtime's goroutine meanwhile: links its gathers made, which
+		// gained holds already (gatherLink).
+		f.links = jitSnapGained(root, jitSnapDerivedLinks, kept, f.links, before[3], &root.d.derivedLinks)
+	} else {
+		f.links = jitSnapGained(root, 3, kept, f.links, before[3], &g.links)
+	}
 	f.inlined = jitSnapGained(root, 4, kept, f.inlined, before[4], &g.inlined)
 	f.made = jitSnapGained(root, 5, kept, f.made, before[5], &g.made)
 	f.linked = jitSnapGained(root, 6, kept, f.linked, before[6], &g.linked)
@@ -363,6 +375,8 @@ func (root *jitSnapshot) lists(e jitSnapEffect) (own, kept jitSnapLists) {
 			l.cells = g.cells[a:b:b]
 		case 3:
 			l.links = g.links[a:b:b]
+		case jitSnapDerivedLinks:
+			l.links = root.d.derivedLinks[a:b:b]
 		case 4:
 			l.inlined = g.inlined[a:b:b]
 		case 5:

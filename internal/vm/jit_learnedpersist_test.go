@@ -28,6 +28,13 @@ function f(n, o, x, y, m) {
 for (let k = 0; k < 40; k++) f(200, { k: 1 }, a, b, 1000)
 for (let k = 0; k < 40; k++) f(200, { j: 0, k: 2 }, b, a, 7)
 for (let k = 0; k < 40; k++) f(200, { k: 3 }, a, a, 3)
+function mk(k) { return function () { return k } }
+function g(n) { let s = 0; for (let i = 0; i < n; i++) s += mk(i)(); return s }
+for (let k = 0; k < 40; k++) g(200)
+function* g1() { yield 1; yield 2 }
+function* g2() { yield 3 }
+function h(n) { let s = 0; for (let i = 0; i < n; i++) for (const v of (i % 2 ? g1() : g2())) s += v; return s }
+for (let k = 0; k < 40; k++) h(200)
 `
 
 // jitLearnedLists are the lists of a function's learning a snapshot of its
@@ -40,8 +47,47 @@ func jitLearnedLists(e *jitEntry) map[string]any {
 		m["bigints"], m["bigwide"] = l.bigints, l.bigwide
 		m["typedReads"], m["stringReads"], m["keyedReads"], m["keyedWrites"] = l.typedReads, l.stringReads, l.keyedReads, l.keyedWrites
 		m["notInline"], m["genericCalls"] = l.notInline, l.genericCalls
+		m["nativeCalls"], m["inlines"], m["viaLeaves"] = l.nativeCalls, l.inlines, l.viaLeaves
+		m["genSteps"], m["stepResults"], m["genMakes"] = l.genSteps, l.stepResults, l.genMakes
 	}
 	return m
+}
+
+// jitLearnedCall is a learned call as a list's header holds it, its pool
+// by whether it has one: a pool's objects are the code's to take.
+type jitLearnedCall struct {
+	pc                          int32
+	cl, cb                      *closure
+	obj, cbObj, proto, parent   *Object
+	active                      *Object
+	exits                       uint32
+	via, forEach, byCode, isNew bool
+	cbLeft                      bool
+}
+
+func jitLearnedCalls(v []jitInline) []jitLearnedCall {
+	out := make([]jitLearnedCall, len(v))
+	for i, x := range v {
+		out[i] = jitLearnedCall{x.pc, x.cl, x.cb, x.obj, x.cbObj, x.proto, x.parent, x.active, x.exits, x.via, x.forEach, x.byCode, x.pool != nil, x.cbLeft}
+	}
+	return out
+}
+
+// jitGenStepsDeep is genSteps with each step's closures copied: what a
+// header of the list holds, deep.
+func jitGenStepsDeep(v []jitGenStep) []jitGenStep {
+	out := slices.Clone(v)
+	for i := range out {
+		out[i].cls = slices.Clone(out[i].cls)
+	}
+	return out
+}
+
+// jitGenMakeAt is what of a generator function's call a snapshot reads: its
+// pc and function, not its pool, made at its first ask.
+type jitGenMakeAt struct {
+	pc  int32
+	obj *Object
 }
 
 // jitListClone is a list of jitLearnedLists' with its elements copied, and
@@ -54,6 +100,20 @@ func jitListClone(x any) (any, unsafe.Pointer, int) {
 		return slices.Clone(v), unsafe.Pointer(unsafe.SliceData(v)), len(v)
 	case []uint64:
 		return slices.Clone(v), unsafe.Pointer(unsafe.SliceData(v)), len(v)
+	case []jitInline:
+		return jitLearnedCalls(v), unsafe.Pointer(unsafe.SliceData(v)), len(v)
+	case []jitViaLeaf:
+		return slices.Clone(v), unsafe.Pointer(unsafe.SliceData(v)), len(v)
+	case []jitGenStep:
+		return jitGenStepsDeep(v), unsafe.Pointer(unsafe.SliceData(v)), len(v)
+	case []jitStepResult:
+		return slices.Clone(v), unsafe.Pointer(unsafe.SliceData(v)), len(v)
+	case []jitGenMake:
+		at := make([]jitGenMakeAt, len(v))
+		for i, x := range v {
+			at[i] = jitGenMakeAt{x.pc, x.obj}
+		}
+		return at, unsafe.Pointer(unsafe.SliceData(v)), len(v)
 	}
 	panic("jitListClone: unknown list")
 }
@@ -68,7 +128,9 @@ func jitListClone(x any) (any, unsafe.Pointer, int) {
 // array of one taken before it, which a list filled again in place with
 // what it held would be, unchanged to the comparison. Truncated and filled
 // again in place, or counted in place, a list a snapshot holds had changed
-// under the worker reading it.
+// under the worker reading it. The learned calls are held so too, a
+// target marked called by its code and a step's generators grown among
+// their writes, each a list made anew.
 func TestJITLearnedListsPersist(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -133,6 +195,19 @@ func TestJITLearnedListsPersist(t *testing.T) {
 			t.Errorf("no %s taken was moved past: the test does not reach its writes", name)
 		}
 	}
+	// The writes that had been in place: a call's target marked called by
+	// its code, and a step's generators' functions grown.
+	byCode, grown := false, false
+	for _, e := range r.jitState().regLearned {
+		if e.jitLearned == nil {
+			continue
+		}
+		byCode = byCode || slices.ContainsFunc(e.nativeCalls, func(x jitInline) bool { return x.byCode })
+		grown = grown || slices.ContainsFunc(e.genSteps, func(x jitGenStep) bool { return len(x.cls) > 1 })
+	}
+	if !byCode || !grown {
+		t.Errorf("a call marked by its code %v, a step's generators grown %v: the test does not reach their writes", byCode, grown)
+	}
 }
 
 // jitSameList reports whether two lists of jitListClone's have the same
@@ -145,6 +220,16 @@ func jitSameList(a, b any) bool {
 		return slices.Equal(v, b.([]uint32))
 	case []uint64:
 		return slices.Equal(v, b.([]uint64))
+	case []jitLearnedCall:
+		return slices.Equal(v, b.([]jitLearnedCall))
+	case []jitViaLeaf:
+		return slices.Equal(v, b.([]jitViaLeaf))
+	case []jitGenStep:
+		return slices.EqualFunc(v, b.([]jitGenStep), func(x, y jitGenStep) bool { return x.pc == y.pc && slices.Equal(x.cls, y.cls) })
+	case []jitStepResult:
+		return slices.Equal(v, b.([]jitStepResult))
+	case []jitGenMakeAt:
+		return slices.Equal(v, b.([]jitGenMakeAt))
 	}
 	return false
 }

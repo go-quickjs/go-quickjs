@@ -27,11 +27,14 @@ package vm
 // on the spot, derives from the live caches as the worker does from their
 // copy.
 //
-// A derivation may append no link to its effects: what the snapshot took
-// back of links the runtime's goroutine reads while the job is pending
-// (holdsLink), and a link is the runtime's to make. Nor may an answer of
-// it name a pool or a leaf (jitSnapPools, Leaf's), which the snapshot
-// asks of at the goroutine once the asking is done.
+// A derivation may append to its effects no link but one its compile's
+// gathers made (gatherLink): a link is the runtime's to make, and the
+// runtime's goroutine holds those the job may call through while it is
+// pending (holdsLink). Nor may an answer of it name a pool or a leaf
+// (jitSnapPools, Leaf's), which the snapshot asks of at the goroutine once
+// the asking is done. What it would write of the runtime's -- the
+// learning's appends -- it keeps, for its family's finish to write once
+// the compile is done with (jitSnapFinishers).
 
 // jitSnapData is what a snapshot's gathers copied, by method family, for
 // its derivations.
@@ -63,6 +66,15 @@ type jitSnapData struct {
 	// copies, the root's, are the closures' copies its compile's gathers
 	// made (closureCopy).
 	copies map[*closure]*jitClosureCopy
+	// links, the root's, are the links its compile's gathers made
+	// (gatherLink): the only ones a derivation's effects may name.
+	links map[*jitLink]struct{}
+	// deriving, the root's, marks a compile whose derivations have begun,
+	// and derivedLinks, the root's, what their effects took back of links
+	// (take): written on the worker, apart from gained's links, which the
+	// runtime's goroutine reads while the job is pending (holdsLink).
+	deriving     bool
+	derivedLinks []*jitLink
 }
 
 // jitClosureCopy is what of a closure's state a compile's gathers copy, on
@@ -152,10 +164,30 @@ var jitSnapDerived, jitSnapAskedAtGather uint64
 // jitSnapFuncGatherers are the gathers of the derived methods' families, each
 // run once a snapshot, on the runtime's goroutine, before its PCs are
 // asked; jitSnapDerivers their derivations, run once a snapshot, on the
-// worker. Each family appends its own in an init of its file.
+// worker, by stage (jitSnapDeriveStage). Each family appends its own in an
+// init of its file.
 var (
 	jitSnapFuncGatherers []func(s *jitSnapshot, fb *jitRegFeedback)
-	jitSnapDerivers      []func(s *jitSnapshot)
+	jitSnapDerivers      [jitDeriveStages][]func(s *jitSnapshot)
+)
+
+// jitSnapDeriveStage is when a family's derivation runs among the others'
+// of a snapshot, a stage's after every earlier stage's, whatever the
+// files they are in: what a derivation appends to the copy of the
+// learning (jitCallSrc's learned), a later stage's reads.
+type jitSnapDeriveStage uint8
+
+const (
+	// jitDeriveCopies are the derivations that read their copies alone
+	// and append to no learned list: the property sites', the learning's
+	// methods', the calls' built-ins'.
+	jitDeriveCopies jitSnapDeriveStage = iota
+	// jitDeriveInline is Inline's, which appends to the learned calls.
+	jitDeriveInline
+	// jitDeriveTargets is NativeCalls', which appends to them too, and
+	// the methods that read what both appended (Resumed).
+	jitDeriveTargets
+	jitDeriveStages
 )
 
 // jitSnapFinishers are the families' finishes of a snapshot whose
@@ -212,21 +244,22 @@ func (s *jitSnapshot) derive() {
 	if s.d.derived {
 		return
 	}
-	s.d.derived = true
-	if len(jitSnapDerivers) == 0 {
-		return
-	}
-	all := append([]*jitSnapshot{s}, mapValues(s.callees)...)
-	for _, c := range all {
-		if !c.d.gathered {
-			// A callee asked nothing (nestReg).
-			continue
-		}
+	s.d.derived, s.d.deriving = true, true
+	// The snapshots whose gathers ran, in the order they ran: a callee
+	// that asked nothing (nestReg) has none.
+	for _, c := range s.d.nodes {
 		c.bind()
-		for _, d := range jitSnapDerivers {
-			d(c)
-		}
+		c.runDerivers(&jitSnapDerivers)
 		c.a.seal()
+	}
+}
+
+// runDerivers runs derivers' derivations of s, stage by stage.
+func (s *jitSnapshot) runDerivers(derivers *[jitDeriveStages][]func(s *jitSnapshot)) {
+	for _, stage := range derivers {
+		for _, d := range stage {
+			d(s)
+		}
 	}
 }
 
@@ -290,11 +323,44 @@ func (s *jitSnapshot) sinkOf() *jitFeedback {
 	return s.sink
 }
 
+// gatherLink keeps l, a link a gather of s made or found on the runtime's
+// goroutine (regLinkOf), in the root's gained links, which the runtime
+// lets go of none of while the compile is pending (holdsLink), and among
+// those a derivation's effects may name (endDerived).
+func (s *jitSnapshot) gatherLink(l *jitLink) *jitLink {
+	root := s.root
+	if _, ok := root.d.links[l]; ok {
+		return l
+	}
+	if root.d.links == nil {
+		root.d.links = map[*jitLink]struct{}{}
+	}
+	root.d.links[l] = struct{}{}
+	root.gained.links = append(root.gained.links, l)
+	return l
+}
+
 // endDerived is end for a derivation's question, its effects appended to
-// sink since before: no link among them (jitSnapshot's derivations).
+// sink since before: no link among them but those its compile's gathers
+// made (gatherLink), which the runtime's goroutine holds while the job is
+// pending; a link is the runtime's to make.
 func (s *jitSnapshot) endDerived(sink *jitFeedback, before [2]jitSnapLens) int32 {
-	if len(sink.links) != before[0][3] || len(sink.keep().links) != before[1][3] {
-		panic("jit: a snapshot's derivation appended a link")
+	s.derivedLinks(sink.links, before[0][3])
+	if k := sink.keep(); k != sink {
+		s.derivedLinks(k.links, before[1][3])
 	}
 	return s.end(sink, before)
+}
+
+// derivedLinks panics where links past n, a derivation's, has one its
+// compile's gathers did not make.
+func (s *jitSnapshot) derivedLinks(links []*jitLink, n int) {
+	if len(links) <= n {
+		return
+	}
+	for _, l := range links[n:] {
+		if _, ok := s.root.d.links[l]; !ok {
+			panic("jit: a snapshot's derivation appended a link its gather did not make")
+		}
+	}
 }

@@ -213,7 +213,7 @@ func init() {
 	jitSnapAskedAtGather |= 1<<snapAccessor | 1<<snapStringProperty
 	jitSnapFuncGatherers = append(jitSnapFuncGatherers, gatherProperty, gatherPropertyAsked)
 	jitSnapBinders = append(jitSnapBinders, bindPropertyAsked)
-	jitSnapDerivers = append(jitSnapDerivers, deriveProperty)
+	jitSnapDerivers[jitDeriveCopies] = append(jitSnapDerivers[jitDeriveCopies], deriveProperty)
 }
 
 // gatherProperty copies, for s, the snapshot of fb, what its property

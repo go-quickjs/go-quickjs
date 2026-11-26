@@ -38,6 +38,8 @@ type jitCallsData struct {
 	r      *Runtime
 	copied []regCallCache
 	realm  jitRealmCallees
+	// tg is what NativeCalls' derivation is made of (jit_snaptargets.go).
+	tg jitTargetsData
 }
 
 // jitRealmCallees are the realm's built-ins the calls' methods compare a
@@ -60,7 +62,7 @@ const jitCallsMethods uint64 = 1<<snapCharCode | 1<<snapSubstring | 1<<snapFromC
 func init() {
 	jitSnapDerived |= jitCallsMethods
 	jitSnapFuncGatherers = append(jitSnapFuncGatherers, jitCallsGather)
-	jitSnapDerivers = append(jitSnapDerivers, jitCallsDerive)
+	jitSnapDerivers[jitDeriveCopies] = append(jitSnapDerivers[jitDeriveCopies], jitCallsDerive)
 }
 
 // realmCallees is r's built-ins the calls' methods compare with, now.

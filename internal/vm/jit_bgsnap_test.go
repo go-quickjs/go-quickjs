@@ -57,11 +57,11 @@ func TestJITBackgroundSnapshotStatePCs(t *testing.T) {
 				}
 			}
 			snap := jitRegSnapshotOf(fb, j.p)
-			// Replace every source after capture, including the cached call PCs.
-			clear(e.resumed)
-			clear(e.failedEntries)
-			clear(e.nativeCalls)
-			clear(e.inlines)
+			// Replace every source after capture, including the cached call
+			// PCs: the learned lists as exits replace them, made anew, never
+			// written in place (TestJITLearnedListsPersist), which a snapshot
+			// takes by their headers; the cache in place.
+			e.resumed, e.failedEntries, e.nativeCalls, e.inlines = nil, nil, nil, nil
 			clear(fb.fb.selfCalls)
 			for pc := range n {
 				if got, want := snap.Resumed(pc), slices.Contains(resumed, pc); got != want {

@@ -62,7 +62,7 @@ const jitNativeMethods uint64 = 1<<snapGeneric | 1<<snapBigInt | 1<<snapBigIntWi
 func init() {
 	jitSnapDerived |= jitNativeMethods
 	jitSnapFuncGatherers = append(jitSnapFuncGatherers, jitNativeGather)
-	jitSnapDerivers = append(jitSnapDerivers, jitNativeDerive)
+	jitSnapDerivers[jitDeriveCopies] = append(jitSnapDerivers[jitDeriveCopies], jitNativeDerive)
 }
 
 // native is f's record of its function's learning and marks, the live
