@@ -67,6 +67,20 @@ func (c *chunks[T]) fill() *T {
 	return p
 }
 
+// rest returns the values of the chunk fill takes them from next as an
+// earlier allocation left them, all taken, for a caller that sets each it
+// uses in order and gives the rest back (unuse) before any other fill.
+func (c *chunks[T]) rest() []T {
+	c.fill()
+	c.n--
+	r := c.bufs[c.i][c.n:]
+	c.n = len(c.bufs[c.i])
+	return r
+}
+
+// unuse gives back the last k values rest returned.
+func (c *chunks[T]) unuse(k int) { c.n -= k }
+
 // reset empties the chunks for the next allocation.
 func (c *chunks[T]) reset() { c.i, c.n = 0, 0 }
 

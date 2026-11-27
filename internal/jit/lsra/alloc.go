@@ -1532,16 +1532,18 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 // empty words.
 func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []clobber) []clobber {
 	n, nb := len(f.Class), len(f.Blocks)
-	cls := f.Class
+	// Each register's tables of n, which an index found below n in one
+	// is in for all, unchecked.
+	cls := f.Class[:n]
 	globals, edgeArgs, argOff := al.globals, al.edgeArgs, al.argOff
-	weight, defW, defAt, starts, ends := al.weight, al.defW, al.defAt, al.starts, al.ends
+	weight, defW, defAt, starts, ends := al.weight[:n], al.defW[:n], al.defAt[:n], al.starts, al.ends
 	// last is each register's range found last, which begins first, or
 	// none (to 0); before[v] is, plus one, the index of the node of the
 	// one found before it, which begins after it, or 0, each node's next
 	// the one found before it.
-	last := grown(al.last, n)
+	last := grown(al.last, n)[:n]
 	clear(last)
-	before := grown(al.before, n)
+	before := grown(al.before, n)[:n]
 	clear(before)
 	nodes := al.nodes[:0]
 	sw := al.outSumW
@@ -1590,7 +1592,7 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 			u := start + 2 + 2*int32(j)
 			regs, nu, nd := in.Regs, int(in.NUses), int(in.NUses)+int(in.NDefs)
 			for _, d := range regs[nu:nd] {
-				if d < 0 || cls[d] == NoClass {
+				if uint(d) >= uint(n) || cls[d] == NoClass {
 					continue
 				}
 				weight[d] += w
@@ -1614,7 +1616,7 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 				}
 			}
 			for _, v := range regs[:nu] {
-				if v < 0 || cls[v] == NoClass {
+				if uint(v) >= uint(n) || cls[v] == NoClass {
 					continue
 				}
 				weight[v] += w
@@ -1632,7 +1634,7 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 			for _, t := range regs[nd:] {
 				// Live from the reads to the writes, and heavier than
 				// anything it meets, which gives way to it.
-				if t < 0 || cls[t] == NoClass {
+				if uint(t) >= uint(n) || cls[t] == NoClass {
 					continue
 				}
 				weight[t] = math.Inf(1)
@@ -1654,7 +1656,7 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 		}
 		for _, p := range b.Phis {
 			d := p.Def
-			if d < 0 || cls[d] == NoClass {
+			if uint(d) >= uint(n) || cls[d] == NoClass {
 				continue
 			}
 			weight[d] += w
@@ -1689,12 +1691,18 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 // that lives across a call is stored where each of its registers is
 // defined, in its register or not: its definitions weigh nothing.
 func (al *Allocator) single(v VReg) *web {
+	w := al.pool.fill()
+	al.setSingle(w, v, al.ranges[v], append(al.vregs.take(1), v), &al.vacross[v])
+	return w
+}
+
+// setSingle makes w the web of its own of v, of ranges rs, members m (v
+// alone) and what it lives across a.
+func (al *Allocator) setSingle(w *web, v VReg, rs []rng, m []VReg, a *vacross) {
 	f := al.f
 	// Every field set in place: a literal is made aside and copied.
-	w := al.pool.fill()
-	a := &al.vacross[v]
-	w.ranges, w.cur, w.reg, w.dense = al.ranges[v], 0, -1, 0
-	w.members = append(al.vregs.take(1), v)
+	w.ranges, w.cur, w.reg, w.dense = rs, 0, -1, 0
+	w.members = m
 	w.weight, w.callWeight, w.avoid = al.weight[v], a.weight, a.avoid
 	w.hints = nil
 	w.fixed, w.arrive, w.width, w.slot = -1, 0, widthOf(f, v), -1
@@ -1706,7 +1714,6 @@ func (al *Allocator) single(v VReg) *web {
 	if w.calls {
 		w.weight -= al.defW[v]
 	}
-	return w
 }
 
 // acrossOf is what v, of ranges rs, lives across (vacross).
@@ -1760,6 +1767,11 @@ func (al *Allocator) layoutRanges() {
 	last, before, nodes, ranges, webs, vacr := al.last, al.before, al.nodes, al.ranges, al.webs, al.vacross
 	clobIdx := al.clobIdx
 	flat := al.rngs.take(al.nregs + len(nodes))
+	// The webs from the pool's chunks a run at a time, and their members
+	// from one array of them, each its own.
+	ws := al.pool.rest()
+	members := al.vregs.take(al.nregs)[:al.nregs]
+	nm := 0
 	for v := range last {
 		l := last[v]
 		if l.to == 0 {
@@ -1783,8 +1795,17 @@ func (al *Allocator) layoutRanges() {
 			ac = al.acrossOf(VReg(v), rs)
 		}
 		vacr[v] = ac
-		webs[v] = al.single(VReg(v))
+		if len(ws) == 0 {
+			ws = al.pool.rest()
+		}
+		w := &ws[0]
+		ws = ws[1:]
+		members[nm] = VReg(v)
+		al.setSingle(w, VReg(v), rs, members[nm:nm+1:nm+1], &ac)
+		nm++
+		webs[v] = w
 	}
+	al.pool.unuse(len(ws))
 	al.nodes = nodes[:0]
 }
 

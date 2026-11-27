@@ -1527,3 +1527,36 @@ func TestJoinApart(t *testing.T) {
 		}
 	}
 }
+
+// TestChunksRest takes values from chunks by fill and by runs of rest
+// given back in part, over allocations, and checks that no value is given
+// twice in an allocation.
+func TestChunksRest(t *testing.T) {
+	rnd := rand.New(rand.NewPCG(97, 101))
+	var c chunks[web]
+	for range 200 {
+		c.reset()
+		seen := map[*web]bool{}
+		take := func(w *web) {
+			if seen[w] {
+				t.Fatalf("a value given twice")
+			}
+			seen[w] = true
+		}
+		for range rnd.IntN(40) {
+			if rnd.IntN(2) == 0 {
+				take(c.fill())
+				continue
+			}
+			ws := c.rest()
+			if len(ws) == 0 {
+				t.Fatalf("rest gave none")
+			}
+			k := min(len(ws), 1+rnd.IntN(300))
+			for i := range ws[:k] {
+				take(&ws[i])
+			}
+			c.unuse(len(ws) - k)
+		}
+	}
+}
