@@ -1735,7 +1735,30 @@ is under [The projection](#the-projection).
 - **Gate:** no `jitRegFrameOp` in Earley's profile; a test that the JIT
   is not slower than the interpreter on Earley; the marking rule's tests
   for the new stores (`jitMarkingForTest`, `TestJITSameWorkWhileMarking`).
-- **Status:** in progress.
+- **Status:** landed. Native code reads a native callee's own arguments,
+  takes the cells of functions capturing up to sixteen locals and the
+  closures from their pools, gives a call's entry cells back where no
+  closure took them, makes rest parameters' arrays and unmapped arguments
+  objects from pools, and finds a native callee's level in one load from
+  the code its context names. Measured on a Ryzen 5 3600 against the
+  stage's base (fresh processes, medians), beside the projection: Earley
+  with the JIT 126.1 to 66.6 ms, 1.89x (projected 1.7 to 2.1x; compiling
+  in the background 117.2 to 61.7, 1.90x); the gate met, `jitRegFrameOp`'s
+  calls on Earley 588,835 to 416 in 30 warm runs and the JIT 26% faster
+  than the interpreter on Earley (66.6 ms against 90.2; the interpreter
+  level, 90.8 at the base); EarleyBoyer's fixed work 628.7 to 578.9 ms,
+  1.09x, below the projected 1.3 to 1.45x, while its score rose 1.58x
+  (5,750 to 9,098) and the V8 suite's composite +6.6% (7,775 to 8,287),
+  past the projected +3.3 to 4.7%; the suite's fixed work -1.7% (705.6 to
+  693.5 ms), the interpreter's composite level (3,096 to 3,089).
+  Micro-benchmarks with the JIT: `closure_cells_ten` 368 to 41.8 ns,
+  `args_read` 466 to 133, `closure_make` 64.4 to 26.5,
+  `closure_many_locals` 71.0 to 32.8, `rest_param` 176 to 93.9,
+  `closure_kept_cells` 479 to 260, `arguments_object` 373 to 260;
+  generators, methods and calls level or faster. The price, the store of
+  the code's id at each native call's entry: `call_mutual` +2.1% and
+  `tail_mutual` +1.7%, each slower at 2 of 4 placements, none 3% slower at
+  all four.
 - **Status, the level in the context:** done: every native entry names its
   code in the context (`abi.Context`'s `Code`: the call entry, the tail
   entry, a generator's resumption, an id stored as an immediate; none
