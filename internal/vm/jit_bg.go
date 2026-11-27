@@ -81,8 +81,11 @@ type jitRegJob struct {
 	// e is the entry being made, its program p, rf its feedback, which a
 	// build on the runtime's goroutine asks, snap that feedback asked ahead,
 	// which the worker's build asks.
-	e    *jitRegEntry
-	p    *ir.Program
+	e *jitRegEntry
+	p *ir.Program
+	// root, where not nil, is what the worker lowers p of (lowerRoot): a
+	// compile handed over with its program not lowered (jitRegHandOver).
+	root *jitRegRoot
 	rf   *jitRegFeedback
 	snap *jitRegSnapshot
 	// links are the links rf's keep held as it was handed over, which,
@@ -252,10 +255,6 @@ func (r *Runtime) jitRegWaited(cl *closure, work int64) {
 	if j := r.jit.regPendingJobs[r.jitRegKeyOf(cl)]; j != nil {
 		j.waited.Add(work)
 	}
-	if j := r.jit.regAheadRoots[r.jitRegKeyOf(cl)]; j != nil {
-		// Or its lowering ahead (jitRegLowerAhead).
-		j.waited.Add(work)
-	}
 }
 
 // jitRegDropStale drops the runtime's compiles in the background that no
@@ -290,8 +289,10 @@ func (r *Runtime) jitRegDropStale() {
 		}
 		if j.snap != nil && !j.key.gone() {
 			// Dropped, no worker having begun it: derived here for what its
-			// asking appends to the function's learning (finish).
-			j.snap.s.finish()
+			// asking appends to the function's learning (finish), its
+			// program lowered here where it has none (lowerRoot).
+			j.lowerRoot()
+			j.finishSnap()
 		}
 		j.snap = nil
 		if j.unstarted {
@@ -382,6 +383,12 @@ func (j *jitRegJob) workRecovering() {
 		// Taken here, on the worker or on the runtime's goroutine that
 		// took the compile back (jitRegTakeBack), not as it was prepared.
 		j.w = jit.GetWorkspaceOnWorker()
+	}
+	// Its program lowered here, where the runtime's goroutine handed it
+	// over with none (jit_bgroot.go), and given to its snapshot.
+	j.lowerRoot()
+	if j.root != nil && j.root.err != nil {
+		return
 	}
 	if j.miss {
 		// Left as a miss (QJS_JIT_STRESS's miss).
@@ -566,9 +573,6 @@ func (s *jitState) jitRegAbandonJobs() {
 		}
 	}
 	s.regJobs, s.regPendingJobs = nil, nil
-	// The lowerings ahead, which hold nothing of the runtime's: their
-	// workers make them for none.
-	s.regAhead, s.regAheadRoots = nil, nil
 }
 
 // jitRegInstall is j's install on the runtime's goroutine: the code
@@ -604,11 +608,22 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 	}()
 	e := j.e
 	e.took += j.took
+	if rt := j.root; rt != nil {
+		// Its program, lowered by its worker -- here where none ran --
+		// kept in the function's lowering as one lowered here is
+		// (regKeepLoweredAt), the entry's marks of its kind.
+		j.lowerRoot()
+		r.regKeepLoweredAt(j.cl, rt.rc, &rt.h, &rt.got)
+		e.p, e.callee, e.hostOnly = j.p, rt.asCallee, rt.asHostOnly
+		if rt.err != nil {
+			e.refusal = rt.err.Error()
+		}
+	}
 	if j.snap != nil && !j.key.gone() {
 		// What its derivations deferred of the function's learning, written
 		// whatever comes of the compile, as the asking had written it
 		// when the compile was prepared (jitSnapFinishers).
-		j.snap.s.finish()
+		j.finishSnap()
 	}
 	old := s.regCache[j.key]
 	if j.osrAt != 0 {

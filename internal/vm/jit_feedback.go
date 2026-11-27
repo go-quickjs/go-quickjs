@@ -52,11 +52,25 @@ type jitRegFeedback struct {
 // jitRegFeedbackFor is cl's register code's feedback for p, the program
 // LowerReg made of it.
 func (r *Runtime) jitRegFeedbackFor(cl *closure, p *ir.Program) *jitRegFeedback {
-	if cl == nil || cl.fn == nil || cl.fn.RegCode() == nil || p == nil || p.Origin == nil {
+	if p == nil || p.Origin == nil {
+		return nil
+	}
+	f := r.jitRegFeedbackOf(cl)
+	if f != nil {
+		f.p = p
+	}
+	return f
+}
+
+// jitRegFeedbackOf is cl's register code's feedback with no program yet:
+// a compile in the background's, whose worker lowers the program
+// (jitRegJob's lowerRoot).
+func (r *Runtime) jitRegFeedbackOf(cl *closure) *jitRegFeedback {
+	if cl == nil || cl.fn == nil || cl.fn.RegCode() == nil {
 		return nil
 	}
 	fb := &jitFeedback{r: r, fn: cl.fn, cl: cl, e: r.jitState().regLearnedOf(r.jitRegKeyOf(cl)), keepLimit: r.jitTest.keepLimit}
-	return &jitRegFeedback{fb: fb, rc: cl.fn.RegCode(), p: p}
+	return &jitRegFeedback{fb: fb, rc: cl.fn.RegCode()}
 }
 
 // at is the register instruction of the program's instruction pc, and what

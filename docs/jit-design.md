@@ -1342,8 +1342,8 @@ is under [The projection](#the-projection).
   whose function's program is not lowered for its hints hands the
   lowering, and its callees' that the call sites' caches name, to the
   workers and is asked for again a quarter of a budget later, taking the
-  workers' programs, the same ones, at its next ask
-  (`jit_lowerahead.go`); projected 50 µs a compile off the goroutine (27
+  workers' programs, the same ones, at its next ask (since retired,
+  the root lowered by its own compile's worker: below); projected 50 µs a compile off the goroutine (27
   the root's, 25 the callees', of which a scan of the caches finds about
   80%). One lowering a function: an entry's, a hot function's and a
   callee's programs differ only in what they refuse, so a function is
@@ -1454,13 +1454,42 @@ is under [The projection](#the-projection).
   compile's own function may be gathered of no program too
   (`jitRegSnapshotOf` of none, `program` binding it on the worker,
   `CellsPool` derived there): over Octane's functions 733 of 738 are, the
-  other 5 taking a forwarder. The root's lowering on the worker is next,
-  with the lowering ahead retired. Of what stays on the goroutine, a
-  question costs about 0.2 µs of the asking itself, whatever the method:
-  the seven of no argument whose answer is the runtime's are asked of the
+  other 5 taking a forwarder. Of what stays on the goroutine, a question
+  costs about 0.2 µs of the asking itself, whatever the method: the
+  seven of no argument whose answer is the runtime's are asked of the
   root alone and its nodes answer from its table, the questions of no
-  argument 4.5 µs a compile at the median and 7.0 at the mean to 3.0
-  and 3.9 (three runs each).
+  argument 4.5 µs a compile at the median and 7.0 at the mean to 3.0 and
+  3.9 (three runs each). The root lowered on its compile's worker: the
+  compile is handed over once, its hints copied, and the worker lowers
+  it first (`lowerRoot`, `jit_bgroot.go`), binding the snapshot to its
+  program; the install keeps the programs in the function's lowering
+  (`regKeepLoweredAt`). The lowering ahead, its jobs, its callees' scan
+  and its deferral of a quarter budget, is retired. A function whose
+  lowering is known refused is refused on the spot, one of host
+  operations alone where neither its native callers nor a native call it
+  makes compile it, as the base decided before its feedback was asked;
+  gathered all the same, 512 of Typescript's 1,141 roots handed over
+  were refused on the worker, nearly all a function asked again. A
+  host-only function's first ask still gathers and then refuses (54 of 683
+  roots on Typescript, 1.3 of 43 ms of the preparation, 66 over the rest
+  of Octane): the base lowered it on the goroutine, about 27 µs, where
+  its gather now takes about as long (28 KB and 27 µs on average over
+  Octane's host-only functions) and makes what it gathers live; deciding
+  it before the gather would need `regHostOnly` of the register code,
+  not of the program. The retirement's compiles come sooner: the lowering ahead's
+  deferral, a quarter budget before a compile whose program was not
+  lowered, had been warm-up too. *Measured* (Ryzen 5 3600, Typescript
+  in the background, 8 runs each alternated, QPC): prep 59.8 µs median
+  to 52; install 6.6 to 7.2; the hand-over 4.0 to 4.4; the run ~1,535
+  to ~1,568 ms (+2%), the first compiles at 0.926 of the base's
+  invocations, ~593 compiles a run to ~622, method/unfed and read/poly
+  deopts 21 and 53 to 24 and 57. The quarter budget's wait put back
+  before the hand-over took the run from ~1,574 to ~1,541 ms, the
+  compiles at the base's invocations (stage 5's tier-up policy, below):
+  part of what the lowering ahead had been credited with was that
+  warm-up. The wait is not kept: the line before the lowering ahead
+  (d5d80845) had none, its first compiles at 0.870 of the base's
+  invocations and its run 1,608 ms.
 - **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
   was run beside mir's scan on every compile, given the same function: an
   instruction for each value and the block's end, the frame states' uses
@@ -1617,6 +1646,15 @@ and 2.
   back-off, the raise -- timed against what was before it on the first
   runs and the suites, and kept only where it gains.
 - **Takes up:** performance-plan.md's "The tier-up's budgets".
+- **Evidence for the policy:** stage 2's lowering ahead held a compile in
+  the background a quarter of its budget while its program was lowered,
+  and so compiled later; retired, Typescript's compiles came at 0.926 of
+  the invocations and its run went from ~1,541 to ~1,574 ms with the
+  wait and without it (Ryzen 5 3600, in the background, 6 runs each):
+  ~602 compiles a run to ~615, more deopts of method/unfed and
+  read/poly. A later compile on more feedback paid on Typescript even
+  waiting in the interpreter; the policy's delays are to be timed
+  against that, and elsewhere, where waiting costs interpreter time.
 - **Status:** not started.
 
 ### Stage 6: the call path

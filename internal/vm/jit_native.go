@@ -371,9 +371,6 @@ func (r *Runtime) jitRegCached(key jitKey, e *jitRegEntry) {
 func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool, frameAt int) (made *jitRegEntry) {
 	s := r.jit
 	defer s.jitHintsOnce()()
-	// ahead marks a compile asked for again once its program is lowered
-	// ahead (jitRegLowerAhead).
-	ahead := false
 	if clock := r.jitCompileClock(); clock != nil && !s.timingGoroutine {
 		// The runtime goroutine's part of it, for the tier trace
 		// (JITGoroutineTimes): a compile within it is part of it, and a
@@ -390,9 +387,6 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 			case made != nil && made.p != nil:
 				t.Spot += d
 				t.Spots++
-			case ahead:
-				t.Ahead += d
-				t.Aheads++
 			}
 		}()
 	}
@@ -423,20 +417,6 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 		s.refusedRoom++
 		return nil
 	}
-	if background {
-		// Its program, and its callees', lowered ahead on a worker
-		// (jit_lowerahead.go), not here: asked for again at a later sample
-		// until they are. What of them the compile does not take is let go
-		// of once it is made.
-		ok, j := r.jitRegLowerAhead(cl, c, callee)
-		if !ok {
-			ahead = true
-			return nil
-		}
-		if j != nil {
-			defer s.regAheadEnd(j)
-		}
-	}
 	e := &jitRegEntry{key: key, life: life, used: s.epoch()}
 	e.tier = jitTierReason(life, callee, osrAt != 0)
 	// Its state kept while the compile fills and counts it: the room made
@@ -453,6 +433,10 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 		// compiled -- deferred as one refused room for its code
 		// (jitRegPlace) -- rather than compiled and thrown away.
 		e.life.deferred, e.life.generation = true, s.generation
+		return nil
+	}
+	if background && !c.rc.Typed && r.jitRegHandOver(cl, c, key, e, callee, frameAt, osrAt) {
+		// Handed to the workers, its program lowered there (jit_bgroot.go).
 		return nil
 	}
 	p, err := r.jitRegLower(cl, c.rc, jitLowerSSA)
@@ -497,20 +481,8 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 		// Asked ahead here, built on a worker (jit_bg.go).
 		snap := jitRegSnapshotOf(rf, p)
 		if !snap.s.bad {
-			j := &jitRegJob{cl: cl, c: c, key: key, realm: r.Realm, callee: callee, e: e, p: p, rf: rf, snap: snap, deopts: e.life.deopts, asks: e.life.reoptAsks, frameAt: frameAt,
-				enc: s.enc, opts: s.opts, miss: r.jitStress.miss, arena: s.arena, backHook: r.jitTest.workspaceBack, replayHook: r.jitTest.bgReplayed,
-				links: slices.Clone(rf.fb.keep().links)}
-			if r.jitTest.placeAtInstall {
-				// Placed by the install, from the backend's code in the
-				// workspace, as where the worker cannot place it.
-				j.arena = nil
-			}
-			if osrAt != 0 {
-				// The code kept beside the cache's for a loop
-				// (jitRegLoopCode), installed beside that code if it is
-				// still the function's then.
-				j.osrAt, j.osrBeside = osrAt, s.regCache[key]
-			}
+			j := r.jitRegJobOf(cl, c, key, e, rf, snap, callee, frameAt, osrAt)
+			j.p = p
 			r.jitRegSubmit(j)
 			return nil
 		}
@@ -572,6 +544,28 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 		r.jitRegCompileRepeat(cl, c, p, keepLimit, frameAt)
 	}
 	return e
+}
+
+// jitRegJobOf is the job of cl's function's compile in the background, its
+// register code c, its key key, its entry e, its feedback rf asked ahead
+// as snap, its program the job's to be given (jitRegJob's p, or lowerRoot).
+func (r *Runtime) jitRegJobOf(cl *closure, c *regCode, key jitKey, e *jitRegEntry, rf *jitRegFeedback, snap *jitRegSnapshot, callee bool, frameAt, osrAt int) *jitRegJob {
+	s := r.jit
+	j := &jitRegJob{cl: cl, c: c, key: key, realm: r.Realm, callee: callee, e: e, rf: rf, snap: snap, deopts: e.life.deopts, asks: e.life.reoptAsks, frameAt: frameAt,
+		enc: s.enc, opts: s.opts, miss: r.jitStress.miss, arena: s.arena, backHook: r.jitTest.workspaceBack, replayHook: r.jitTest.bgReplayed,
+		links: slices.Clone(rf.fb.keep().links)}
+	if r.jitTest.placeAtInstall {
+		// Placed by the install, from the backend's code in the
+		// workspace, as where the worker cannot place it.
+		j.arena = nil
+	}
+	if osrAt != 0 {
+		// The code kept beside the cache's for a loop
+		// (jitRegLoopCode), installed beside that code if it is
+		// still the function's then.
+		j.osrAt, j.osrBeside = osrAt, s.regCache[key]
+	}
+	return j
 }
 
 // jitRegLap ends phase ph of a register compile the host times

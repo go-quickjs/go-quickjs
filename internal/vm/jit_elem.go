@@ -56,18 +56,13 @@ func regStringAddOf(c *regCode, pc int) {
 // lowered, its error the lowering's: checked at every ask, the checks of
 // the callees inlined were a sixth of the build's time.
 func (r *Runtime) jitRegLower(cl *closure, rc *bytecode.RegCode, kind jitLowerKind) (*ir.Program, error) {
-	key, l, h := r.jitRegLowering(cl, rc)
+	_, l, h := r.jitRegLowering(cl, rc)
 	if l == nil {
 		return jitRegLowerWith(rc, cl.fn, kind, h)
 	}
 	if !l.done[kind] {
 		s := r.jit
-		// Lowered ahead by a worker, if it was (jit_lowerahead.go): the same
-		// programs.
-		got, ok := s.regTakeAhead(jitAheadKey{key, jitAheadKind(kind)}, rc, &h)
-		if !ok {
-			got = jitRegLowerKinds(rc, cl.fn, kind, h)
-		}
+		got := jitRegLowerKinds(rc, cl.fn, kind, h)
 		s.regKeepLowered(l, &got)
 	}
 	return l.progs[kind], l.errs[kind]
@@ -77,9 +72,8 @@ func (r *Runtime) jitRegLower(cl *closure, rc *bytecode.RegCode, kind jitLowerKi
 // lowered of the kinds l has none of, made of the function's register code
 // with l's hints, and counts it in what the JIT holds once for each program
 // (jitLowering's footprint): a lowering made on the runtime's goroutine
-// (jitRegLower), taken of the workers' ahead (regTakeAhead), or made on a
-// worker for a snapshot's derivation and kept at the install
-// (regKeepLoweredAt). It reports whether it kept any.
+// (jitRegLower), or made on a worker for a compile in the background and
+// kept at its install (regKeepLoweredAt). It reports whether it kept any.
 func (s *jitState) regKeepLowered(l *jitLowering, got *jitLowered) bool {
 	n := l.footprint()
 	kept := false
@@ -222,8 +216,8 @@ func (r *Runtime) jitRegLowered(key jitKey, cl *closure) (jitKey, *jitLowering, 
 // lattice, which the hints are taken from, are written as the code runs --
 // so the asks after the first, each a scan of both, the register code's
 // length, would take nothing: the root's twice a compile in the
-// background, at its ask (jitRegLowerAhead) and at its lowering, and a
-// callee's at each of its calls the snapshot asks to inline.
+// background at its lowering and its snapshot's asks, and a callee's at
+// each of its calls the snapshot asks to inline.
 func (s *jitState) jitHintsOnce() func() {
 	s.hintsDepth++
 	return func() {
@@ -812,4 +806,10 @@ func (st *regState) addPropMark(pc int, w bytecode.RInstr, obj, b Value) error {
 		regStringAddOf(st.c, pc)
 	}
 	return st.r.regAddProp(st.cl, st.c, w, obj, b)
+}
+
+// jitHintsSame reports whether a and b are the same hints, list by list.
+func jitHintsSame(a, b *jitcompile.Hints) bool {
+	return a.KeepParams == b.KeepParams && slices.Equal(a.StringAdds, b.StringAdds) && slices.Equal(a.ElementReads, b.ElementReads) &&
+		slices.Equal(a.StringReads, b.StringReads) && slices.Equal(a.WholeOps, b.WholeOps)
 }

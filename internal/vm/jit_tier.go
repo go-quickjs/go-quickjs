@@ -507,9 +507,6 @@ func (r *Runtime) jitRegHot(cl *closure, c *regCode, work int64) *jitRegEntry {
 		// if one waits (jitRegWaited).
 		r.jitDrain()
 		r.jitRegWaited(cl, work)
-	} else if r.jit != nil && len(r.jit.regAheadRoots) != 0 {
-		// Its lowering ahead, if one waits (jitRegLowerAhead).
-		r.jitRegWaited(cl, work)
 	}
 	cc := cl.closureCode
 	if cc.jitRegRefused {
@@ -594,13 +591,6 @@ func (r *Runtime) jitRegHot(cl *closure, c *regCode, work int64) *jitRegEntry {
 			// call of Go, until the code was installed: the waiting
 			// slower than the interpreter.
 			life.tierBudget, life.tierMark = jitRegBudget(r.jitCallThreshold, c), jitFeedbackMark(cl)
-		} else if j := r.jit.regAheadRoots[r.jitRegKeyOf(cl)]; j != nil && j.state.Load() != jitJobDone {
-			// Its program being lowered ahead (jitRegLowerAhead): asked for
-			// again once it has spent a part of a budget more, about what
-			// the lowering takes on a worker. Asked at every sample, each a
-			// back edge's check, a call of Go, a compile asked again some
-			// eleven times, about 27 us of the goroutine's.
-			life.tierBudget, life.tierMark = max(jitRegBudget(r.jitCallThreshold, c)/jitAheadBudgetPart, 1), jitFeedbackMark(cl)
 		}
 		// Or not handed over, the background with as many compiles as it
 		// may have (jobsFull): asked for again at the next sample, the

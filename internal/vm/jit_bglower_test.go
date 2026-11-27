@@ -12,13 +12,13 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
-// A compile in the background takes its programs lowered ahead by a worker
-// (jit_lowerahead.go), and they are the programs the goroutine lowers: each
-// kept in the runtime's lowerings is what jitRegLowerWith makes of its
-// register code and hints, and the code gives the interpreter's answers.
-// Under QJS_JIT_STRESS's background the lowering is waited for, so that
-// the compile is made where it would have been.
-func TestJITLowerAheadSamePrograms(t *testing.T) {
+// A compile in the background keeps the programs each kind's lowering
+// makes: each kept in the runtime's lowerings is what jitRegLowerWith makes
+// of its register code and hints, the kinds that share their program
+// lowered once (jitRegLowerKinds), and the code gives the interpreter's
+// answers. The compiles are handed over with no program, their own
+// function lowered by their worker (lowerRoot).
+func TestJITBackgroundSamePrograms(t *testing.T) {
 	t.Parallel()
 	for _, marking := range []bool{false, true} {
 		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
@@ -39,6 +39,17 @@ func TestJITLowerAheadSamePrograms(t *testing.T) {
 					want += regNativeShow(r, v, err) + ";"
 				}
 			}
+			var mu sync.Mutex
+			roots := 0
+			jitTestSwitch(t, func(c *jitTestConfig) {
+				c.bgReplayed = func(j *jitRegJob) {
+					mu.Lock()
+					defer mu.Unlock()
+					if j.root != nil && j.root.lowered && j.p != nil {
+						roots++
+					}
+				}
+			})
 			r := newTestRuntime(t, Config{JIT: true})
 			t.Cleanup(r.Close)
 			r.SetJITWarmUp(1, 1)
@@ -57,12 +68,14 @@ func TestJITLowerAheadSamePrograms(t *testing.T) {
 				t.Fatalf("got %q, want the interpreter's %q", got, want)
 			}
 			s := r.jit
-			if s.aheadJobs == 0 || s.aheadTaken == 0 || s.bgSubmitted == 0 {
-				t.Fatalf("%d lowerings ahead, %d programs taken of them, %d compiles handed over: want some of each", s.aheadJobs, s.aheadTaken, s.bgSubmitted)
+			if s.bgSubmitted == 0 {
+				t.Fatal("no compile handed over")
 			}
-			if len(s.regAhead) != 0 || len(s.regAheadRoots) != 0 {
-				t.Errorf("%d lowerings ahead and %d roots kept after the compiles", len(s.regAhead), len(s.regAheadRoots))
+			mu.Lock()
+			if roots == 0 {
+				t.Error("no compile's function lowered on its worker")
 			}
+			mu.Unlock()
 			if s.regSnapMisses != 0 {
 				t.Errorf("%d snapshot misses", s.regSnapMisses)
 			}
@@ -84,116 +97,6 @@ func TestJITLowerAheadSamePrograms(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// jitAheadForTest is a runtime that compiles in the background with no
-// worker given its lowerings ahead (jitTestConfig's aheadUnstarted), with
-// loop, a function of a loop, defined, and loop's closure and key.
-func jitAheadForTest(t *testing.T) (*Runtime, *closure, jitKey) {
-	t.Helper()
-	r := jitBackgroundRuntime(t)
-	r.jitTest.aheadUnstarted = true
-	// A budget a call does a fraction of: asks a few calls apart.
-	r.jitCallThreshold = jitInvocationsForMaglev
-	if _, err := r.Run(compileForTest(t, `function loop(n){let s=0;for(let i=0;i<n;i++)s=(s+i)|0;return s}`)); err != nil {
-		t.Fatal(err)
-	}
-	cl := jitGlobalClosureForTest(r, "loop")
-	return r, cl, r.jitRegKeyOf(cl)
-}
-
-// jitAheadPendingForTest calls loop until its compile waits for its
-// lowering ahead, which it returns.
-func jitAheadPendingForTest(t *testing.T, r *Runtime, cl *closure, key jitKey) *jitAheadJob {
-	t.Helper()
-	for call := 1; ; call++ {
-		jitCallForTest(t, r, `loop(200)`, 19900)
-		if r.jit == nil {
-			continue
-		}
-		if j := r.jit.regAheadRoots[key]; j != nil {
-			return j
-		}
-		if call > 100 {
-			t.Fatalf("no lowering ahead (%s)", jitBackgroundStateForTest(r, cl))
-		}
-	}
-}
-
-// A compile in the background whose program is not lowered hands its
-// lowering to the workers and is asked for again a part of a budget later
-// (jitAheadBudgetPart), not at every sample, nothing compiled meanwhile;
-// asked again once the worker has lowered it, it takes the worker's
-// program and is handed over, and what it did not take is let go of.
-func TestJITLowerAheadAsksAgain(t *testing.T) {
-	t.Parallel()
-	r, cl, key := jitAheadForTest(t)
-	j := jitAheadPendingForTest(t, r, cl, key)
-	budget := jitRegBudget(r.jitCallThreshold, cl.reg)
-	if life := r.jitRegLifeOf(cl); life.tierBudget <= 0 || life.tierBudget > budget/jitAheadBudgetPart {
-		t.Fatalf("budget left %d: want a part of %d, %d, counted while the lowering waits", life.tierBudget, budget, budget/jitAheadBudgetPart)
-	}
-	if r.jit.bgSubmitted != 0 || jitHasCodeOfForTest(r, cl) || len(j.items) == 0 || j.items[0].at != (jitAheadKey{key, jitLowerSSA}) {
-		t.Fatalf("handed over %d, code %v, items %+v: want loop's own program waited for, nothing compiled", r.jit.bgSubmitted, jitHasCodeOfForTest(r, cl), j.items)
-	}
-	for range 3 {
-		jitCallForTest(t, r, `loop(200)`, 19900)
-	}
-	if r.jit.bgSubmitted != 0 || r.jit.regAheadRoots[key] != j || r.jit.aheadJobs != 1 {
-		t.Fatalf("handed over %d, lowerings ahead %d: want the one lowering waited for", r.jit.bgSubmitted, r.jit.aheadJobs)
-	}
-	j.run()
-	p := j.items[0].got.progs[jitLowerSSA]
-	if p == nil || j.state.Load() != jitJobDone {
-		t.Fatalf("the worker lowered no program (state %d, error %v)", j.state.Load(), j.items[0].got.errs[jitLowerSSA])
-	}
-	for call := 1; r.jit.bgSubmitted == 0; call++ {
-		if call > 100 {
-			t.Fatalf("never handed over (%s)", jitBackgroundStateForTest(r, cl))
-		}
-		jitCallForTest(t, r, `loop(200)`, 19900)
-	}
-	if l := r.jit.regLowered[key]; l == nil || l.progs[jitLowerSSA] != p || r.jit.aheadTaken == 0 {
-		t.Fatalf("taken %d: want loop's program the worker's", r.jit.aheadTaken)
-	}
-	if len(r.jit.regAhead) != 0 || len(r.jit.regAheadRoots) != 0 {
-		t.Fatalf("%d lowerings ahead, %d roots kept after the compile", len(r.jit.regAhead), len(r.jit.regAheadRoots))
-	}
-	if pj := r.jit.regPendingJobs[key]; pj != nil {
-		<-pj.done
-	}
-	for call := 1; !jitHasCodeOfForTest(r, cl); call++ {
-		if call > 100 {
-			t.Fatalf("never installed (%s)", jitBackgroundStateForTest(r, cl))
-		}
-		jitCallForTest(t, r, `loop(200)`, 19900)
-	}
-}
-
-// A lowering ahead no worker has begun once its function has spent
-// jitTakeBackAsks budgets waiting is taken back: the compile goes on, its
-// program lowered on the goroutine, and a worker that comes to it after
-// leaves it.
-func TestJITLowerAheadTakeBack(t *testing.T) {
-	t.Parallel()
-	r, cl, key := jitAheadForTest(t)
-	j := jitAheadPendingForTest(t, r, cl, key)
-	for call := 1; r.jit.bgSubmitted == 0; call++ {
-		if call > 400 {
-			t.Fatalf("never handed over, waited %d (%s)", j.waited.Load(), jitBackgroundStateForTest(r, cl))
-		}
-		jitCallForTest(t, r, `loop(200)`, 19900)
-	}
-	if j.state.Load() != jitJobTaken || j.waited.Load() < jitTakeBackAsks*jitRegBudget(r.jitCallThreshold, cl.reg) {
-		t.Fatalf("state %d, waited %d: want it taken back after %d budgets", j.state.Load(), j.waited.Load(), jitTakeBackAsks)
-	}
-	if l := r.jit.regLowered[key]; l == nil || l.progs[jitLowerSSA] == nil || r.jit.aheadTaken != 0 {
-		t.Fatalf("taken %d: want loop's program lowered on the goroutine", r.jit.aheadTaken)
-	}
-	j.run()
-	if j.state.Load() != jitJobTaken || j.items[0].got.done[jitLowerSSA] {
-		t.Fatalf("state %d after a worker's run: want it left as taken", j.state.Load())
 	}
 }
 
@@ -276,53 +179,6 @@ func TestJITReplayLinksHeldAtHandOver(t *testing.T) {
 	defer mu.Unlock()
 	if replays == 0 || links == 0 {
 		t.Fatalf("%d replays, %d links in their keeps: want some of each", replays, links)
-	}
-}
-
-// A compile takes its function's hints at the ask where it goes on, not at
-// the ask that handed its lowering over (jitHintsOnce holds them within
-// one ask's compile alone): a mark the interpreter adds between the two
-// leaves the worker's program, lowered without it, untaken, and the
-// compile is made from the program the goroutine lowers with the mark,
-// as it would have been made with no lowering ahead.
-func TestJITLowerAheadHintsAtTheAskThatGoesOn(t *testing.T) {
-	t.Parallel()
-	r, cl, key := jitAheadForTest(t)
-	j := jitAheadPendingForTest(t, r, cl, key)
-	j.run()
-	if j.state.Load() != jitJobDone || j.items[0].got.progs[jitLowerSSA] == nil {
-		t.Fatalf("the worker lowered no program (state %d)", j.state.Load())
-	}
-	add := -1
-	for pc, w := range cl.reg.rc.Code {
-		switch w.Op() {
-		case bytecode.RAdd, bytecode.RAddI, bytecode.RAddI32, bytecode.RAddII32:
-			add = pc
-		}
-	}
-	if add < 0 {
-		t.Fatalf("no addition in loop's register code:\n%s", cl.reg.rc)
-	}
-	// Met a string meanwhile, as the interpreter's slow path marks it.
-	regStringAddOf(cl.reg, add)
-	for call := 1; r.jit.bgSubmitted == 0; call++ {
-		if call > 100 {
-			t.Fatalf("never handed over (%s)", jitBackgroundStateForTest(r, cl))
-		}
-		jitCallForTest(t, r, `loop(200)`, 19900)
-	}
-	l := r.jit.regLowered[key]
-	if l == nil || !slices.Contains(l.hints.StringAdds, int32(add)) {
-		t.Fatalf("hints %+v: want the addition at %d taken", l, add)
-	}
-	if p := l.progs[jitLowerSSA]; p == nil || p == j.items[0].got.progs[jitLowerSSA] || r.jit.aheadTaken != 0 {
-		t.Fatalf("taken %d: want the worker's program, lowered without the mark, left", r.jit.aheadTaken)
-	}
-	h := l.hints
-	h.KeepParams = r.nodeQuirks && !cl.fn.Strict
-	want, err := jitRegLowerWith(cl.reg.rc, cl.fn, jitLowerSSA, h)
-	if err != nil || !reflect.DeepEqual(l.progs[jitLowerSSA], want) {
-		t.Fatalf("the program compiled is not the goroutine's lowering with the mark (%v)", err)
 	}
 }
 
