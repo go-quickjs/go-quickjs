@@ -1362,7 +1362,31 @@ is under [The projection](#the-projection).
   derivations (the stack, three runs each): preparation 101 and 207 to
   60 and 130, install 13.1 and 29 to 10.5 and 15.8, Typescript 1,618 to
   1,561 ms (-3.5%), ssr's FirstRender 235.5 to 230.3 ms (-2.2%). The
-  goal is preparation 15 and 30, install 10 median.
+  goal is preparation 15 and 30, install 10 median. Then the install:
+  the workspace given back unrewound, rewound by the worker that takes
+  it next (3.6 µs of the install to 0.4); the code's description made
+  on its worker (the table of the register code's length, its loops'
+  and returns' scans); a keep's links made each once on the worker,
+  their hold counting each with no search (keeps of 25 links on
+  average, 626 at most, two thirds of them repeats); each function's
+  hints taken once a compile. The install, by phase timers on the
+  stack: 14.5 µs a compile to 9.0-9.5, against the base's 30.8 (the
+  `-jittier` line's mean). What is left is the cache's bookkeeping,
+  which reads and writes the runtime's tables (the code it replaces let
+  go of, its link, its callers joined), about 4.7 µs, of which the
+  measures of a function's learned state (`learnedBytes`, a walk of its
+  lists at each account) are the most; kept current as the lists grow,
+  rather than walked, they would be a later option. The hand-over of a
+  lowering ahead costs 10 µs, 4.0 its callees' scan and 3.5 the
+  workers' queue and a worker started; once the snapshot's gathers need
+  no program, a compile hands over once and its worker lowers the root
+  and its callees as it derives, keeping them at the install
+  (`regKeepLoweredAt`, the hints copied by `jitRegHintsCopy`), and the
+  lowering ahead goes. A worker that waits a moment for its next task,
+  woken by the hand-over rather than started anew, was tried: the
+  hand-over 4.0 to 3.7 µs, within the runs' noise -- waking the
+  worker's thread is the cost, whether it waits or is started -- and
+  dropped.
 - **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
   was run beside mir's scan on every compile, given the same function: an
   instruction for each value and the block's end, the frame states' uses
