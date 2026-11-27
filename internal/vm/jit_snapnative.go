@@ -45,6 +45,14 @@ type jitNativeData struct {
 	// bit by register pc; marked, whether the code has them.
 	big, wide, heap []uint32
 	marked          bool
+	// unknown are the register pcs whose operand met nothing before the
+	// function ran to its end (jitNativeGather), of cl; markUnknown marks
+	// the lattice to be marked taken for nothing at the finish, and
+	// unknownUnasked one no PC of the program asks Operands at an unknown
+	// of (jitNativeBind).
+	cl                          *closure
+	unknown                     []int32
+	markUnknown, unknownUnasked bool
 	// ops is the operands' lattice (jitLatticeAt), lattice whether the
 	// code has one; counts the calls' counts (Frequency), nil where it
 	// answers nothing.
@@ -62,6 +70,8 @@ const jitNativeMethods uint64 = 1<<snapGeneric | 1<<snapBigInt | 1<<snapBigIntWi
 func init() {
 	jitSnapDerived |= jitNativeMethods
 	jitSnapFuncGatherers = append(jitSnapFuncGatherers, jitNativeGather)
+	jitSnapBinders = append(jitSnapBinders, jitNativeBind)
+	jitSnapFinishers = append(jitSnapFinishers, jitNativeFinish)
 	jitSnapDerivers[jitDeriveCopies] = append(jitSnapDerivers[jitDeriveCopies], jitNativeDerive)
 }
 
@@ -128,28 +138,79 @@ func jitBigMarkWords(w []atomic.Uint32) []uint32 {
 }
 
 // jitNativeGather is the family's gather of s, fb's snapshot: what the
-// worker derives the learning's methods from. An operand that met nothing
-// before the function ran to its end marks the lattice taken for nothing
-// (jitLatticeUnknown), as the feedback's question would have: the
-// runtime's to write, here, not the worker's.
+// worker derives the learning's methods from, of the register code alone
+// (jitSnapBinders). An operand that met nothing before the function ran
+// to its end marks the lattice taken for nothing (jitLatticeUnknown), as
+// the feedback's question of a PC lowered from it would have: the gather
+// finds the register pcs that may (unknown), and the binding marks it
+// where a PC of the program asks Operands at one (jitNativeBind).
 func jitNativeGather(s *jitSnapshot, fb *jitRegFeedback) {
 	d := &s.d.native
 	fb.gatherNative(d, true)
 	if !d.lattice || jitLatticeRanOps(d.ops) {
 		return
 	}
-	for pc, op := range s.ops {
-		if jitSnapAsks[op]&(1<<snapOperands) != 0 {
-			if _, _, unknown := d.operands(pc); unknown {
-				jitLatticeUnknown(fb.fb.cl)
-				return
-			}
+	d.cl = fb.fb.cl
+	for rpc := range d.rc.Code {
+		if _, _, unknown := d.operandsAt(rpc); unknown {
+			d.unknown = append(d.unknown, int32(rpc))
 		}
+	}
+	if len(d.unknown) != 0 && fb.p != nil {
+		// Lowered already: marked here, before the gathers after this one,
+		// as the asking marked it (jitNativeBind's, at once).
+		jitNativeMark(d, fb.p)
 	}
 }
 
-// jitNativeDerive puts s's answers of the learning's methods, at every PC
-// whose op asks each, from what the gather took. They have no effect: they
+// jitNativeMark marks d's closure's lattice taken for nothing where a PC
+// of p asks Operands at one of d's unknown register pcs, and no more is
+// to be marked of it.
+func jitNativeMark(d *jitNativeData, p *ir.Program) {
+	for pc := range p.Code {
+		if jitSnapAsks[p.Code[pc].Op]&(1<<snapOperands) != 0 && slices.Contains(d.unknown, int32(p.Origin[pc])) {
+			jitLatticeUnknown(d.cl)
+			d.unknown = nil
+			return
+		}
+	}
+	d.unknownUnasked = true
+	d.unknown = nil
+}
+
+// jitNativeBind marks the lattice of s's closure taken for nothing
+// (jitLatticeUnknown) where a PC of its program asks Operands at a
+// register pc whose operand met nothing (jitNativeGather's unknown), as
+// the asking's question there did: at once where the program is bound at
+// the gather, on the runtime's goroutine; else at the compile's finish
+// (jitNativeFinish), the interpreter's lattice no worker's to write.
+func jitNativeBind(s *jitSnapshot) {
+	d := &s.d.native
+	if len(d.unknown) == 0 {
+		return
+	}
+	for pc, op := range s.ops {
+		if jitSnapAsks[op]&(1<<snapOperands) != 0 && slices.Contains(d.unknown, int32(s.p.Origin[pc])) {
+			d.markUnknown = true
+			break
+		}
+	}
+	d.unknownUnasked = !d.markUnknown
+	if d.markUnknown && !s.root.d.deriving {
+		jitLatticeUnknown(d.cl)
+		d.markUnknown = false
+	}
+}
+
+// jitNativeFinish marks the lattice a worker's binding found taken for
+// nothing (jitNativeBind), at the compile's finish.
+func jitNativeFinish(s *jitSnapshot) {
+	if d := &s.d.native; d.markUnknown {
+		jitLatticeUnknown(d.cl)
+		d.markUnknown = false
+	}
+}
+
 // append to no list.
 func jitNativeDerive(s *jitSnapshot) {
 	d := &s.d.native
@@ -431,6 +492,11 @@ func (d *jitNativeData) operands(pc int) (k ssa.Operands, ok, unknown bool) {
 	if !in {
 		return 0, false, false
 	}
+	return d.operandsAt(rpc)
+}
+
+// operandsAt is operands' of register pc rpc.
+func (d *jitNativeData) operandsAt(rpc int) (k ssa.Operands, ok, unknown bool) {
 	if d.lattice && rpc < len(d.ops) && rpc < len(d.rc.Code) && d.rc.Code[rpc].Op().Lattice() != bytecode.LatticeNone {
 		k, ok = abi.Operands(d.ops[rpc]), true
 	}

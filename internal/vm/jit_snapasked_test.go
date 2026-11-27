@@ -135,6 +135,9 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 					unbound[snapStringProperty]++
 				}
 			}
+			if s.d.native.unknownUnasked {
+				unbound[snapOperands]++
+			}
 			// What the calls' gather made by register pc (jitTargetsBind)
 			// where no PC asks NativeCalls: a pool made early.
 			tg := &s.d.calls.tg
@@ -204,6 +207,6 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 	if functions == 0 || compared == 0 {
 		t.Fatalf("%d functions, %d answers compared", functions, compared)
 	}
-	t.Logf("%d functions, %d questions compared; asked by register pc at no PC: %d Accessor, %d StringProperty; made by register pc at no PC: %d NativeCalls",
-		functions, compared, unbound[snapAccessor], unbound[snapStringProperty], unbound[snapNativeCalls])
+	t.Logf("%d functions, %d questions compared; asked by register pc at no PC: %d Accessor, %d StringProperty; made by register pc at no PC: %d NativeCalls, %d Operands",
+		functions, compared, unbound[snapAccessor], unbound[snapStringProperty], unbound[snapNativeCalls], unbound[snapOperands])
 }
