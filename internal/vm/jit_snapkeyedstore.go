@@ -165,7 +165,7 @@ func deriveKeyedStore(s *jitSnapshot) {
 		s.heard(snapKeyedStore, int64(pc), ok, site, ok)
 		if ok || eff != 0 {
 			s.a.KeyedStore.reserve(int(s.room[snapKeyedStore]))
-			s.a.KeyedStore.put(int64(pc), eff, ok, jitSnapAnsKeyedStore{site, ok})
+			s.a.KeyedStore.put(int64(pc), eff, ok, jitSnapAnsKeyedStore{r0: site, r1: ok})
 		}
 	}
 }

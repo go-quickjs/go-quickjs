@@ -399,7 +399,7 @@ func deriveProperty(s *jitSnapshot) {
 		s.heard(snapProperty, int64(pc), ok, site, ok)
 		if ok || eff != 0 {
 			s.a.Property.reserve(int(s.room[snapProperty]))
-			s.a.Property.put(int64(pc), eff, ok, jitSnapAnsProperty{site, ok})
+			s.a.Property.put(int64(pc), eff, ok, jitSnapAnsProperty{r0: site, r1: ok})
 		}
 	}
 }
@@ -470,6 +470,9 @@ func (d *jitPropData) askedAt(s *jitSnapshot, fb *jitRegFeedback, rpc int, w byt
 // register pc, a write's where write says: its effect's index past 0, and
 // its results.
 type jitPropAsked[T any] struct {
+	// Nothing compares it: comparable, the type had an equality function
+	// the compiler lays out among package vm's code.
+	_     [0]func()
 	rpc   int32
 	write bool
 	eff   int32
@@ -491,7 +494,7 @@ func (d *jitPropData) askAccessor(s *jitSnapshot, fb *jitRegFeedback, rpc int, k
 		r0.Inline = &nested
 	}
 	if r1 || eff != 0 {
-		d.accessors = append(d.accessors, jitPropAsked[jitSnapAnsAccessor]{rpc: int32(rpc), write: write, eff: eff, ok: r1, v: jitSnapAnsAccessor{r0, r1}})
+		d.accessors = append(d.accessors, jitPropAsked[jitSnapAnsAccessor]{rpc: int32(rpc), write: write, eff: eff, ok: r1, v: jitSnapAnsAccessor{r0: r0, r1: r1}})
 	}
 }
 
@@ -502,7 +505,7 @@ func (d *jitPropData) askString(s *jitSnapshot, fb *jitRegFeedback, rpc int, key
 	r0, r1 := fb.stringPropertyAt(rpc, key, c)
 	eff := s.end(fb.fb, before)
 	if r1 || eff != 0 {
-		d.strings = append(d.strings, jitPropAsked[jitSnapAnsStringProperty]{rpc: int32(rpc), eff: eff, ok: r1, v: jitSnapAnsStringProperty{r0, r1}})
+		d.strings = append(d.strings, jitPropAsked[jitSnapAnsStringProperty]{rpc: int32(rpc), eff: eff, ok: r1, v: jitSnapAnsStringProperty{r0: r0, r1: r1}})
 	}
 }
 

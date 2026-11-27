@@ -62,7 +62,7 @@ func deriveCells(s *jitSnapshot) {
 		d.made = d.pool
 	}
 	s.heard(snapCellsPool, 0, true, r0, r1, r2)
-	s.a.CellsPool.put(0, eff, true, jitSnapAnsCellsPool{r0, r1, r2})
+	s.a.CellsPool.put(0, eff, true, jitSnapAnsCellsPool{r0: r0, r1: r1, r2: r2})
 }
 
 // finishCells gives the learning the pool the derivation made, where it

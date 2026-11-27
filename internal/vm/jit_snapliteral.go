@@ -32,6 +32,9 @@ type jitLiteralData struct {
 // jitDefineAsked is a Define answer gathered for field i of the object
 // literal at register pc rpc.
 type jitDefineAsked struct {
+	// Nothing compares it: comparable, the type had an equality function
+	// the compiler lays out among package vm's code.
+	_     [0]func()
 	rpc   int32
 	i     int32
 	eff   int32
@@ -94,7 +97,7 @@ func gatherLiteral(s *jitSnapshot, fb *jitRegFeedback) {
 			s.root.d.pools = append(append(s.root.d.pools, own.pools...), kept.pools...)
 		}
 		if r1 || eff != 0 {
-			d.lits = append(d.lits, jitPropAsked[jitSnapAnsLiteral]{rpc: int32(rpc), eff: eff, ok: r1, v: jitSnapAnsLiteral{r0, r1}})
+			d.lits = append(d.lits, jitPropAsked[jitSnapAnsLiteral]{rpc: int32(rpc), eff: eff, ok: r1, v: jitSnapAnsLiteral{r0: r0, r1: r1}})
 		}
 		if w.Op() != bytecode.RNewObjectLit || rpc >= len(rc.Aux) || int(rc.Aux[rpc]) >= len(rc.ObjKeys) {
 			continue
@@ -104,7 +107,7 @@ func gatherLiteral(s *jitSnapshot, fb *jitRegFeedback) {
 			r0, r1 := fb.defineAt(rpc, w, i)
 			eff := s.end(fb.fb, before)
 			if r1 || eff != 0 {
-				d.defs = append(d.defs, jitDefineAsked{rpc: int32(rpc), i: int32(i), eff: eff, ok: r1, v: jitSnapAnsDefine{r0, r1}})
+				d.defs = append(d.defs, jitDefineAsked{rpc: int32(rpc), i: int32(i), eff: eff, ok: r1, v: jitSnapAnsDefine{r0: r0, r1: r1}})
 			}
 		}
 	}

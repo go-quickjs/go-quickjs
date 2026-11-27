@@ -643,7 +643,7 @@ func deriveInline(s *jitSnapshot) {
 				s.heard(m, at, r2, r0, r1, r2)
 				if r2 || eff != 0 {
 					a.CalledClosure.reserve(int(s.room[m]))
-					a.CalledClosure.put(at, eff, r2, jitSnapAnsCalledClosure{r0, r1, r2})
+					a.CalledClosure.put(at, eff, r2, jitSnapAnsCalledClosure{r0: r0, r1: r1, r2: r2})
 				}
 			case snapInline:
 				r0, r1 := jitInlineOf(q, pc, src)
@@ -651,7 +651,7 @@ func deriveInline(s *jitSnapshot) {
 				s.heard(m, at, r1, r0, r1)
 				if r1 || eff != 0 {
 					a.Inline.reserve(int(s.room[m]))
-					a.Inline.put(at, eff, r1, jitSnapAnsInline{r0, r1})
+					a.Inline.put(at, eff, r1, jitSnapAnsInline{r0: r0, r1: r1})
 				}
 			case snapForEach:
 				r0, r1 := jitForEachOf(q, pc, src)
@@ -659,7 +659,7 @@ func deriveInline(s *jitSnapshot) {
 				s.heard(m, at, r1, r0, r1)
 				if r1 || eff != 0 {
 					a.ForEach.reserve(int(s.room[m]))
-					a.ForEach.put(at, eff, r1, jitSnapAnsForEach{r0, r1})
+					a.ForEach.put(at, eff, r1, jitSnapAnsForEach{r0: r0, r1: r1})
 				}
 			}
 		}

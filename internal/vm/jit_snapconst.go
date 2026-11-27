@@ -184,7 +184,7 @@ func deriveConst(s *jitSnapshot) {
 			s.heard(snapStringCell, int64(pc), r1, r0, r1)
 			if r1 || eff != 0 {
 				s.a.StringCell.reserve(int(s.room[snapStringCell]))
-				s.a.StringCell.put(int64(pc), eff, r1, jitSnapAnsStringCell{r0, r1})
+				s.a.StringCell.put(int64(pc), eff, r1, jitSnapAnsStringCell{r0: r0, r1: r1})
 			}
 		}
 		if asks&(1<<snapStringContent) != 0 {
@@ -192,7 +192,7 @@ func deriveConst(s *jitSnapshot) {
 			s.heard(snapStringContent, int64(pc), r1, r0, r1)
 			if r1 {
 				s.a.StringContent.reserve(int(s.room[snapStringContent]))
-				s.a.StringContent.put(int64(pc), 0, r1, jitSnapAnsStringContent{r0, r1})
+				s.a.StringContent.put(int64(pc), 0, r1, jitSnapAnsStringContent{r0: r0, r1: r1})
 			}
 		}
 		if asks&(1<<snapBigIntCell) != 0 {
@@ -202,7 +202,7 @@ func deriveConst(s *jitSnapshot) {
 			s.heard(snapBigIntCell, int64(pc), r3, r0, r1, r2, r3)
 			if r3 || eff != 0 {
 				s.a.BigIntCell.reserve(int(s.room[snapBigIntCell]))
-				s.a.BigIntCell.put(int64(pc), eff, r3, jitSnapAnsBigIntCell{r0, r1, r2, r3})
+				s.a.BigIntCell.put(int64(pc), eff, r3, jitSnapAnsBigIntCell{r0: r0, r1: r1, r2: r2, r3: r3})
 			}
 		}
 		if asks&(1<<snapRawMath) != 0 {
@@ -210,7 +210,7 @@ func deriveConst(s *jitSnapshot) {
 			s.heard(snapRawMath, int64(pc), r1, r0, r1)
 			if r1 {
 				s.a.RawMath.reserve(int(s.room[snapRawMath]))
-				s.a.RawMath.put(int64(pc), 0, r1, jitSnapAnsRawMath{r0, r1})
+				s.a.RawMath.put(int64(pc), 0, r1, jitSnapAnsRawMath{r0: r0, r1: r1})
 			}
 		}
 		if asks&(1<<snapUpvalueTyped) != 0 {
@@ -222,7 +222,7 @@ func deriveConst(s *jitSnapshot) {
 			s.heard(snapUpvalueTyped, int64(pc), r1, r0, r1)
 			if r1 {
 				s.a.UpvalueTyped.reserve(int(s.room[snapUpvalueTyped]))
-				s.a.UpvalueTyped.put(int64(pc), 0, r1, jitSnapAnsUpvalueTyped{r0, r1})
+				s.a.UpvalueTyped.put(int64(pc), 0, r1, jitSnapAnsUpvalueTyped{r0: r0, r1: r1})
 			}
 		}
 	}

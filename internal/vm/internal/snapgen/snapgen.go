@@ -217,12 +217,18 @@ func registerSnapshot(b *bytes.Buffer, ms, regs []method) error {
 			fmt.Fprintf(b, " | 1<<snap%s", m.name)
 		}
 	}
-	b.WriteString("\n\n// The answers' results, by method.\n")
+	b.WriteString("\n\n// The answers' results, by method. Nothing compares them: one of more\n" +
+		"// than one result, not all bytes, has a blank field first, since,\n" +
+		"// comparable, the padding after its bool had given it an equality\n" +
+		"// function the compiler lays out among package vm's code.\n")
 	for _, m := range regs {
 		if !known[m.name] {
 			return fmt.Errorf("jitRegFeedback's %s is no method of jitFeedback's", m.name)
 		}
 		fmt.Fprintf(b, "type jitSnapAns%s struct {\n", m.name)
+		if uncompared(m) {
+			b.WriteString("\t_ [0]func()\n")
+		}
 		for i, t := range m.results {
 			fmt.Fprintf(b, "\tr%d %s\n", i, t)
 		}
@@ -317,7 +323,7 @@ func registerSnapshot(b *bytes.Buffer, ms, regs []method) error {
 		}
 		fmt.Fprintf(b, "\tif jitSnapDerived&(1<<snap%s) == 0%s {\n\t\tbefore := s.begin(fb.fb)\n\t\t%s := fb.%s()\n\t\teff := s.end(fb.fb, before)\n", m.name, root, rs, m.name)
 		fmt.Fprintf(b, "\t\tif h := fb.fb.r.jitTest.snapAsked; h != nil {\n\t\t\th(s, snap%s, 0, true, []any{%s})\n\t\t}\n", m.name, rs)
-		fmt.Fprintf(b, "\t\ts.a.%s.put(0, eff, true, jitSnapAns%s{%s})\n\t}\n", m.name, m.name, rs)
+		fmt.Fprintf(b, "\t\ts.a.%s.put(0, eff, true, jitSnapAns%s{%s})\n\t}\n", m.name, m.name, keyed(m))
 	}
 	if wide != len(compileWide) {
 		return fmt.Errorf("compileWide names %d methods, %d of them register methods of no argument", len(compileWide), wide)
@@ -342,7 +348,7 @@ func registerSnapshot(b *bytes.Buffer, ms, regs []method) error {
 		last := len(m.results) - 1
 		fmt.Fprintf(b, "\tok := %s\n", answered(m.results[last], fmt.Sprintf("r%d", last)))
 		fmt.Fprintf(b, "\tif h := fb.fb.r.jitTest.snapAsked; h != nil {\n\t\th(s, snap%s, int64(pc), ok, []any{%s})\n\t}\n", m.name, rs)
-		fmt.Fprintf(b, "\tif ok || eff != 0 {\n\t\ts.a.%s.reserve(int(s.room[snap%s]))\n\t\ts.a.%s.put(int64(pc), eff, ok, jitSnapAns%s{%s})\n\t}\n}\n\n", m.name, m.name, m.name, m.name, rs)
+		fmt.Fprintf(b, "\tif ok || eff != 0 {\n\t\ts.a.%s.reserve(int(s.room[snap%s]))\n\t\ts.a.%s.put(int64(pc), eff, ok, jitSnapAns%s{%s})\n\t}\n}\n\n", m.name, m.name, m.name, m.name, keyed(m))
 	}
 	b.WriteString("// jitRegSnapAskers are the register askers by method, nil for one the\n" +
 		"// register feedback has not or of another argument.\n" +
@@ -367,6 +373,34 @@ func results(m method) string {
 	var rs []string
 	for i := range m.results {
 		rs = append(rs, fmt.Sprintf("r%d", i))
+	}
+	return strings.Join(rs, ", ")
+}
+
+// uncompared reports whether m's answer's type has a blank field that
+// makes it not comparable: one of more than one result, not all bytes,
+// whose padding would have given it an equality function. One of a
+// result alone, or of bytes alone, compares as memory, and its blank
+// field would have grown it and its table's entries.
+func uncompared(m method) bool {
+	if len(m.results) < 2 {
+		return false
+	}
+	for _, t := range m.results {
+		if t != "bool" && t != "uint8" {
+			return true
+		}
+	}
+	return false
+}
+
+// keyed is m's results as the fields of its answer's literal, each by its
+// name: an answer's type may have a blank field first (uncompared), which
+// no literal of its fields in order can leave out.
+func keyed(m method) string {
+	var rs []string
+	for i := range m.results {
+		rs = append(rs, fmt.Sprintf("r%d: r%d", i, i))
 	}
 	return strings.Join(rs, ", ")
 }

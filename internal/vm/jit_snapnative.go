@@ -222,13 +222,13 @@ func jitNativeDerive(s *jitSnapshot) {
 	{
 		r0, r1 := d.bigIntSole()
 		s.heard(snapBigIntSole, 0, true, r0, r1)
-		a.BigIntSole.put(0, 0, true, jitSnapAnsBigIntSole{r0, r1})
+		a.BigIntSole.put(0, 0, true, jitSnapAnsBigIntSole{r0: r0, r1: r1})
 		p0 := d.pureBody()
 		s.heard(snapPureBody, 0, true, p0)
-		a.PureBody.put(0, 0, true, jitSnapAnsPureBody{p0})
+		a.PureBody.put(0, 0, true, jitSnapAnsPureBody{r0: p0})
 		g0 := d.goCalls()
 		s.heard(snapGoCalls, 0, true, g0)
-		a.GoCalls.put(0, 0, true, jitSnapAnsGoCalls{g0})
+		a.GoCalls.put(0, 0, true, jitSnapAnsGoCalls{r0: g0})
 	}
 	for pc, op := range s.ops {
 		asks := jitSnapAsks[op] & jitNativeMethods
@@ -241,7 +241,7 @@ func jitNativeDerive(s *jitSnapshot) {
 			s.heard(snapGeneric, at, r0, r0)
 			if r0 {
 				a.Generic.reserve(int(s.room[snapGeneric]))
-				a.Generic.put(at, 0, true, jitSnapAnsGeneric{r0})
+				a.Generic.put(at, 0, true, jitSnapAnsGeneric{r0: r0})
 			}
 		}
 		if asks&(1<<snapBigInt) != 0 {
@@ -249,7 +249,7 @@ func jitNativeDerive(s *jitSnapshot) {
 			s.heard(snapBigInt, at, r0, r0)
 			if r0 {
 				a.BigInt.reserve(int(s.room[snapBigInt]))
-				a.BigInt.put(at, 0, true, jitSnapAnsBigInt{r0})
+				a.BigInt.put(at, 0, true, jitSnapAnsBigInt{r0: r0})
 			}
 		}
 		if asks&(1<<snapBigIntWide) != 0 {
@@ -257,7 +257,7 @@ func jitNativeDerive(s *jitSnapshot) {
 			s.heard(snapBigIntWide, at, r0, r0)
 			if r0 {
 				a.BigIntWide.reserve(int(s.room[snapBigIntWide]))
-				a.BigIntWide.put(at, 0, true, jitSnapAnsBigIntWide{r0})
+				a.BigIntWide.put(at, 0, true, jitSnapAnsBigIntWide{r0: r0})
 			}
 		}
 		if asks&(1<<snapBigIntFailed) != 0 {
@@ -265,7 +265,7 @@ func jitNativeDerive(s *jitSnapshot) {
 			s.heard(snapBigIntFailed, at, r0, r0)
 			if r0 {
 				a.BigIntFailed.reserve(int(s.room[snapBigIntFailed]))
-				a.BigIntFailed.put(at, 0, true, jitSnapAnsBigIntFailed{r0})
+				a.BigIntFailed.put(at, 0, true, jitSnapAnsBigIntFailed{r0: r0})
 			}
 		}
 		if asks&(1<<snapStringRead) != 0 {
@@ -273,7 +273,7 @@ func jitNativeDerive(s *jitSnapshot) {
 			s.heard(snapStringRead, at, r0, r0)
 			if r0 {
 				a.StringRead.reserve(int(s.room[snapStringRead]))
-				a.StringRead.put(at, 0, true, jitSnapAnsStringRead{r0})
+				a.StringRead.put(at, 0, true, jitSnapAnsStringRead{r0: r0})
 			}
 		}
 		if asks&(1<<snapTypedRead) != 0 {
@@ -281,7 +281,7 @@ func jitNativeDerive(s *jitSnapshot) {
 			s.heard(snapTypedRead, at, r0, r0)
 			if r0 {
 				a.TypedRead.reserve(int(s.room[snapTypedRead]))
-				a.TypedRead.put(at, 0, true, jitSnapAnsTypedRead{r0})
+				a.TypedRead.put(at, 0, true, jitSnapAnsTypedRead{r0: r0})
 			}
 		}
 		if asks&(1<<snapTypedBigRead) != 0 {
@@ -289,7 +289,7 @@ func jitNativeDerive(s *jitSnapshot) {
 			s.heard(snapTypedBigRead, at, r1, r0, r1)
 			if r1 {
 				a.TypedBigRead.reserve(int(s.room[snapTypedBigRead]))
-				a.TypedBigRead.put(at, 0, true, jitSnapAnsTypedBigRead{r0, r1})
+				a.TypedBigRead.put(at, 0, true, jitSnapAnsTypedBigRead{r0: r0, r1: r1})
 			}
 		}
 		if asks&(1<<snapKeyedRead) != 0 {
@@ -297,7 +297,7 @@ func jitNativeDerive(s *jitSnapshot) {
 			s.heard(snapKeyedRead, at, r0, r0)
 			if r0 {
 				a.KeyedRead.reserve(int(s.room[snapKeyedRead]))
-				a.KeyedRead.put(at, 0, true, jitSnapAnsKeyedRead{r0})
+				a.KeyedRead.put(at, 0, true, jitSnapAnsKeyedRead{r0: r0})
 			}
 		}
 		if asks&(1<<snapKeyedWrite) != 0 {
@@ -305,7 +305,7 @@ func jitNativeDerive(s *jitSnapshot) {
 			s.heard(snapKeyedWrite, at, r0, r0)
 			if r0 {
 				a.KeyedWrite.reserve(int(s.room[snapKeyedWrite]))
-				a.KeyedWrite.put(at, 0, true, jitSnapAnsKeyedWrite{r0})
+				a.KeyedWrite.put(at, 0, true, jitSnapAnsKeyedWrite{r0: r0})
 			}
 		}
 		if asks&(1<<snapCallShape) != 0 {
@@ -313,7 +313,7 @@ func jitNativeDerive(s *jitSnapshot) {
 			s.heard(snapCallShape, at, r2, r0, r1, r2)
 			if r2 {
 				a.CallShape.reserve(int(s.room[snapCallShape]))
-				a.CallShape.put(at, 0, true, jitSnapAnsCallShape{r0, r1, r2})
+				a.CallShape.put(at, 0, true, jitSnapAnsCallShape{r0: r0, r1: r1, r2: r2})
 			}
 		}
 		if asks&(1<<snapFrequency) != 0 {
@@ -321,7 +321,7 @@ func jitNativeDerive(s *jitSnapshot) {
 			s.heard(snapFrequency, at, r1, r0, r1)
 			if r1 {
 				a.Frequency.reserve(int(s.room[snapFrequency]))
-				a.Frequency.put(at, 0, true, jitSnapAnsFrequency{r0, r1})
+				a.Frequency.put(at, 0, true, jitSnapAnsFrequency{r0: r0, r1: r1})
 			}
 		}
 		if asks&(1<<snapOperands) != 0 {
@@ -329,7 +329,7 @@ func jitNativeDerive(s *jitSnapshot) {
 			s.heard(snapOperands, at, r1, r0, r1)
 			if r1 {
 				a.Operands.reserve(int(s.room[snapOperands]))
-				a.Operands.put(at, 0, true, jitSnapAnsOperands{r0, r1})
+				a.Operands.put(at, 0, true, jitSnapAnsOperands{r0: r0, r1: r1})
 			}
 		}
 		if asks&(1<<snapInlineExit) != 0 {
@@ -337,7 +337,7 @@ func jitNativeDerive(s *jitSnapshot) {
 			s.heard(snapInlineExit, at, r0, r0)
 			if r0 {
 				a.InlineExit.reserve(int(s.room[snapInlineExit]))
-				a.InlineExit.put(at, 0, true, jitSnapAnsInlineExit{r0})
+				a.InlineExit.put(at, 0, true, jitSnapAnsInlineExit{r0: r0})
 			}
 		}
 	}

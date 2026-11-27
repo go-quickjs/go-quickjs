@@ -114,7 +114,7 @@ func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 		if h := fb.fb.r.jitTest.snapAsked; h != nil {
 			h(s, snapVirtualRoot, int64(pool), true, []any{shape, proto, ok})
 		}
-		s.a.VirtualRoot.put(int64(pool), 0, true, jitSnapAnsVirtualRoot{shape, proto, ok})
+		s.a.VirtualRoot.put(int64(pool), 0, true, jitSnapAnsVirtualRoot{r0: shape, r1: proto, r2: ok})
 	}
 	for _, fn := range fns {
 		k := fb.LeafKind(fn)
@@ -127,7 +127,7 @@ func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 			if h != nil {
 				h(c, snapLeafKind, int64(fn), true, []any{k})
 			}
-			c.a.LeafKind.put(int64(fn), 0, true, jitSnapAnsLeafKind{k})
+			c.a.LeafKind.put(int64(fn), 0, true, jitSnapAnsLeafKind{r0: k})
 		}
 	}
 	keep := fb.fb.r.jitTest.snapKeepsFeedback
@@ -248,14 +248,14 @@ func (s *jitSnapshot) askLeafCalls(fb *jitRegFeedback) {
 		if h := fb.fb.r.jitTest.snapAsked; h != nil {
 			h(s, snapCreatePool, int64(pc), true, []any{pool})
 		}
-		s.a.CreatePool.put(int64(pc), eff, true, jitSnapAnsCreatePool{pool})
+		s.a.CreatePool.put(int64(pc), eff, true, jitSnapAnsCreatePool{r0: pool})
 		before = s.begin(fb.fb)
 		reuse := fb.ExecReuse(pc, fn)
 		eff = s.end(fb.fb, before)
 		if h := fb.fb.r.jitTest.snapAsked; h != nil {
 			h(s, snapExecReuse, int64(pc), true, []any{reuse})
 		}
-		s.a.ExecReuse.put(int64(pc), eff, true, jitSnapAnsExecReuse{reuse})
+		s.a.ExecReuse.put(int64(pc), eff, true, jitSnapAnsExecReuse{r0: reuse})
 	}
 }
 

@@ -119,6 +119,9 @@ type jitTargetGen struct {
 
 // jitTargetGenMake is genMake's answer at register pc rpc for o.
 type jitTargetGenMake struct {
+	// Nothing compares it: comparable, the type had an equality function
+	// the compiler lays out among package vm's code.
+	_     [0]func()
 	rpc   int32
 	bound bool
 	o     *Object
@@ -160,6 +163,9 @@ type jitTargetFacts struct {
 // the link native callers call it through, nil where the gather made
 // none.
 type jitTargetReg struct {
+	// Nothing compares it: comparable, the type had an equality function
+	// the compiler lays out among package vm's code.
+	_    [0]func()
 	cl   *closure
 	rc   *regCode
 	link *jitLink
@@ -823,7 +829,7 @@ func jitTargetsDerive(s *jitSnapshot) {
 			s.heard(snapNativeCalls, at, ok, r0)
 			if ok || eff != 0 {
 				a.NativeCalls.reserve(int(s.room[snapNativeCalls]))
-				a.NativeCalls.put(at, eff, ok, jitSnapAnsNativeCalls{r0})
+				a.NativeCalls.put(at, eff, ok, jitSnapAnsNativeCalls{r0: r0})
 			}
 		}
 		if asks&(1<<snapViaLeaf) != 0 {
@@ -834,7 +840,7 @@ func jitTargetsDerive(s *jitSnapshot) {
 			s.heard(snapViaLeaf, at, r2, r0, r1, r2)
 			if r2 || eff != 0 {
 				a.ViaLeaf.reserve(int(s.room[snapViaLeaf]))
-				a.ViaLeaf.put(at, eff, r2, jitSnapAnsViaLeaf{r0, r1, r2})
+				a.ViaLeaf.put(at, eff, r2, jitSnapAnsViaLeaf{r0: r0, r1: r1, r2: r2})
 			}
 		}
 	}
@@ -849,9 +855,9 @@ func jitTargetsDerive(s *jitSnapshot) {
 		}
 		s.heard(m, pc, true, true)
 		if m == snapResumed {
-			a.Resumed.put(pc, 0, true, jitSnapAnsResumed{true})
+			a.Resumed.put(pc, 0, true, jitSnapAnsResumed{r0: true})
 		} else {
-			a.EntryGeneric.put(pc, 0, true, jitSnapAnsEntryGeneric{true})
+			a.EntryGeneric.put(pc, 0, true, jitSnapAnsEntryGeneric{r0: true})
 		}
 	}
 	for _, pc := range t.resumed {

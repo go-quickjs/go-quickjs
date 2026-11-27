@@ -296,6 +296,9 @@ func jitRegLowerWith(rc *bytecode.RegCode, fn *bytecode.Function, kind jitLowerK
 // jitLowered is a lowering's programs and their errors by kind, done the
 // kinds it made.
 type jitLowered struct {
+	// Nothing compares it: comparable, the type had an equality function
+	// the compiler lays out among package vm's code.
+	_     [0]func()
 	done  [jitLowerKinds]bool
 	progs [jitLowerKinds]*ir.Program
 	errs  [jitLowerKinds]error

@@ -63,7 +63,7 @@ func gatherTypedKind(s *jitSnapshot, fb *jitRegFeedback) {
 		r0, r1 := fb.typedKindAt(rpc)
 		eff := s.end(fb.fb, before)
 		if r1 || eff != 0 {
-			d.asked = append(d.asked, jitPropAsked[jitSnapAnsTypedKind]{rpc: int32(rpc), eff: eff, ok: r1, v: jitSnapAnsTypedKind{r0, r1}})
+			d.asked = append(d.asked, jitPropAsked[jitSnapAnsTypedKind]{rpc: int32(rpc), eff: eff, ok: r1, v: jitSnapAnsTypedKind{r0: r0, r1: r1}})
 		}
 	}
 }

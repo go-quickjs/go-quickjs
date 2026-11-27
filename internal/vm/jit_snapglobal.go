@@ -24,6 +24,9 @@ import (
 // rpc: its effect's index past 0, whether it answered, its results, and
 // whether a binding put it at a PC of the program (bound).
 type jitRpcAsked[T any] struct {
+	// Nothing compares it: comparable, the type had an equality function
+	// the compiler lays out among package vm's code.
+	_     [0]func()
 	rpc   int32
 	eff   int32
 	ok    bool
@@ -103,7 +106,7 @@ func gatherGlobal(s *jitSnapshot, fb *jitRegFeedback) {
 		r0, r1 := fb.globalAt(rpc, w)
 		eff := s.end(fb.fb, before)
 		if r1 || eff != 0 {
-			d.globals = append(d.globals, jitRpcAsked[jitSnapAnsGlobal]{rpc: int32(rpc), eff: eff, ok: r1, v: jitSnapAnsGlobal{r0, r1}})
+			d.globals = append(d.globals, jitRpcAsked[jitSnapAnsGlobal]{rpc: int32(rpc), eff: eff, ok: r1, v: jitSnapAnsGlobal{r0: r0, r1: r1}})
 		}
 	}
 	if e := fb.fb.e; e != nil {
@@ -116,7 +119,7 @@ func gatherGlobal(s *jitSnapshot, fb *jitRegFeedback) {
 			r0 := fb.regGenSteps(rpc)
 			eff := s.end(fb.fb, before)
 			if len(r0) != 0 || eff != 0 {
-				d.steps = append(d.steps, jitRpcAsked[jitSnapAnsGenSteps]{rpc: int32(rpc), eff: eff, ok: len(r0) != 0, v: jitSnapAnsGenSteps{r0}})
+				d.steps = append(d.steps, jitRpcAsked[jitSnapAnsGenSteps]{rpc: int32(rpc), eff: eff, ok: len(r0) != 0, v: jitSnapAnsGenSteps{r0: r0}})
 			}
 		}
 	}
@@ -163,6 +166,9 @@ func bindGlobal(s *jitSnapshot) {
 // jitClosureLit is Closure's literal made by register pc: its pool,
 // and its effect's index past 0.
 type jitClosureLit struct {
+	// Nothing compares it: comparable, the type had an equality function
+	// the compiler lays out among package vm's code.
+	_     [0]func()
 	rpc   int32
 	pool  *abi.ObjectPool
 	eff   int32
@@ -238,7 +244,7 @@ func deriveClosure(s *jitSnapshot) {
 		s.heard(snapClosure, int64(pc), r1, r0, r1)
 		if r1 || eff != 0 {
 			s.a.Closure.reserve(int(s.room[snapClosure]))
-			s.a.Closure.put(int64(pc), eff, r1, jitSnapAnsClosure{r0, r1})
+			s.a.Closure.put(int64(pc), eff, r1, jitSnapAnsClosure{r0: r0, r1: r1})
 		}
 	}
 }

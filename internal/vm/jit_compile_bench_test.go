@@ -19,7 +19,7 @@ func BenchmarkJITCallFeedback(b *testing.B) {
 				asked: []jitRegAsked{{calls: sites, did: askedCalls}}, askedAt: []int32{1},
 			}
 			s := &jitSnapshot{}
-			s.a.NativeCalls.put(0, 0, true, jitSnapAnsNativeCalls{sites})
+			s.a.NativeCalls.put(0, 0, true, jitSnapAnsNativeCalls{r0: sites})
 			s.root = s
 			var fb ssa.Feedback = f
 			if mode == "snapshot" {

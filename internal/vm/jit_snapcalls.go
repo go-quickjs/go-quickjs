@@ -47,6 +47,9 @@ type jitCallsData struct {
 // Math.random's numbers native code reads (mathRandom), made where a call
 // may read it.
 type jitRealmCallees struct {
+	// Nothing compares it: comparable, the type had an equality function
+	// the compiler lays out among package vm's code.
+	_                                 [0]func()
 	callFn, parseInt, bigToString     *Object
 	randomFn, powFn, atan2Fn, hypotFn *Object
 	charCodeAt, fromCharCode          Value
@@ -158,7 +161,7 @@ func jitCallsDerive(s *jitSnapshot) {
 			s.heard(snapCharCode, at, r0, r0)
 			if r0 {
 				a.CharCode.reserve(int(s.room[snapCharCode]))
-				a.CharCode.put(at, 0, true, jitSnapAnsCharCode{r0})
+				a.CharCode.put(at, 0, true, jitSnapAnsCharCode{r0: r0})
 			}
 		}
 		if asks&(1<<snapSubstring) != 0 {
@@ -166,7 +169,7 @@ func jitCallsDerive(s *jitSnapshot) {
 			s.heard(snapSubstring, at, r2, r0, r1, r2)
 			if r2 {
 				a.Substring.reserve(int(s.room[snapSubstring]))
-				a.Substring.put(at, 0, true, jitSnapAnsSubstring{r0, r1, r2})
+				a.Substring.put(at, 0, true, jitSnapAnsSubstring{r0: r0, r1: r1, r2: r2})
 			}
 		}
 		if asks&(1<<snapFromCharCode) != 0 {
@@ -174,7 +177,7 @@ func jitCallsDerive(s *jitSnapshot) {
 			s.heard(snapFromCharCode, at, r1, r0, r1)
 			if r1 {
 				a.FromCharCode.reserve(int(s.room[snapFromCharCode]))
-				a.FromCharCode.put(at, 0, true, jitSnapAnsFromCharCode{r0, r1})
+				a.FromCharCode.put(at, 0, true, jitSnapAnsFromCharCode{r0: r0, r1: r1})
 			}
 		}
 		if asks&(1<<snapIntrinsic) != 0 {
@@ -184,7 +187,7 @@ func jitCallsDerive(s *jitSnapshot) {
 			s.heard(snapIntrinsic, at, r1, r0, r1)
 			if r1 || eff != 0 {
 				a.Intrinsic.reserve(int(s.room[snapIntrinsic]))
-				a.Intrinsic.put(at, eff, r1, jitSnapAnsIntrinsic{r0, r1})
+				a.Intrinsic.put(at, eff, r1, jitSnapAnsIntrinsic{r0: r0, r1: r1})
 			}
 		}
 		if asks&(1<<snapIndexOf) != 0 {
@@ -194,7 +197,7 @@ func jitCallsDerive(s *jitSnapshot) {
 			s.heard(snapIndexOf, at, r2, r0, r1, r2)
 			if r2 || eff != 0 {
 				a.IndexOf.reserve(int(s.room[snapIndexOf]))
-				a.IndexOf.put(at, eff, r2, jitSnapAnsIndexOf{r0, r1, r2})
+				a.IndexOf.put(at, eff, r2, jitSnapAnsIndexOf{r0: r0, r1: r1, r2: r2})
 			}
 		}
 		if asks&(1<<snapParseInt) != 0 {
@@ -204,7 +207,7 @@ func jitCallsDerive(s *jitSnapshot) {
 			s.heard(snapParseInt, at, r1, r0, r1)
 			if r1 || eff != 0 {
 				a.ParseInt.reserve(int(s.room[snapParseInt]))
-				a.ParseInt.put(at, eff, r1, jitSnapAnsParseInt{r0, r1})
+				a.ParseInt.put(at, eff, r1, jitSnapAnsParseInt{r0: r0, r1: r1})
 			}
 		}
 		if asks&(1<<snapBigString) != 0 {
@@ -214,7 +217,7 @@ func jitCallsDerive(s *jitSnapshot) {
 			s.heard(snapBigString, at, r1, r0, r1)
 			if r1 || eff != 0 {
 				a.BigString.reserve(int(s.room[snapBigString]))
-				a.BigString.put(at, eff, r1, jitSnapAnsBigString{r0, r1})
+				a.BigString.put(at, eff, r1, jitSnapAnsBigString{r0: r0, r1: r1})
 			}
 		}
 	}
@@ -562,6 +565,9 @@ func (f jitCallFacts) target(rc *regCode, argc int, quirks bool) bool {
 // global object (nil where globalThis is none), and whether the runtime
 // runs with WithNodeQuirks.
 type jitCallRealm struct {
+	// Nothing compares it: comparable, the type had an equality function
+	// the compiler lays out among package vm's code.
+	_                                  [0]func()
 	callFn, applyFn, arrayCtor, global *Object
 	quirks                             bool
 	// realm is the runtime's realm, array its Array.prototype; genNextFn
@@ -616,6 +622,9 @@ func (r *Runtime) jitRegConstructOf(o *Object, argc int) jitCallConstruct {
 // register code lowered (p, rc), its function and closure, and what the
 // answer is derived from (src).
 type jitCallCtx struct {
+	// Nothing compares it: comparable, the type had an equality function
+	// the compiler lays out among package vm's code.
+	_   [0]func()
 	p   *ir.Program
 	rc  *bytecode.RegCode
 	fn  *bytecode.Function

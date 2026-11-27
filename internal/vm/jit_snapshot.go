@@ -114,6 +114,9 @@ type jitSnapEffect struct {
 // of the keep's, not the asked feedback's own), from:to of the root's
 // gained list of it.
 type jitSnapSpan struct {
+	// Nothing compares it: comparable, the type had an equality function
+	// the compiler lays out among package vm's code.
+	_        [0]func()
 	list     uint8
 	kept     bool
 	from, to int32
@@ -142,6 +145,9 @@ type jitSnapMethod uint8
 // 0 for none; and its results, v, if it answered something -- a question
 // of a PC that answered nothing is kept only for its effect.
 type jitSnapEntry[T any] struct {
+	// Nothing compares it: comparable, the type had an equality function
+	// the compiler lays out among package vm's code.
+	_        [0]func()
 	arg      int64
 	eff      int32
 	answered bool

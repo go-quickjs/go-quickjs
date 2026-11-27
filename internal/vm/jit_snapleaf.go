@@ -160,6 +160,9 @@ type jitLeafData struct {
 // jitLeafCreate is CreatePool's answer at the calls of register pc rpc of
 // Object.create, fn, its pool, and its effect's index past 0.
 type jitLeafCreate struct {
+	// Nothing compares it: comparable, the type had an equality function
+	// the compiler lays out among package vm's code.
+	_    [0]func()
 	rpc  int32
 	fn   *Object
 	pool uintptr
@@ -265,7 +268,7 @@ func deriveLeaf(s *jitSnapshot) {
 		s.heard(snapLeaf, int64(pc), r1, r0, r1)
 		if r1 || eff != 0 {
 			s.a.Leaf.reserve(int(s.room[snapLeaf]))
-			s.a.Leaf.put(int64(pc), eff, r1, jitSnapAnsLeaf{r0, r1})
+			s.a.Leaf.put(int64(pc), eff, r1, jitSnapAnsLeaf{r0: r0, r1: r1})
 		}
 		if !r1 {
 			continue
@@ -282,9 +285,9 @@ func deriveLeaf(s *jitSnapshot) {
 			}
 		}
 		s.heard(snapCreatePool, int64(pc), true, pool)
-		s.a.CreatePool.put(int64(pc), peff, true, jitSnapAnsCreatePool{pool})
+		s.a.CreatePool.put(int64(pc), peff, true, jitSnapAnsCreatePool{r0: pool})
 		reuse := jitExecReuseOf(d.reg, d.own, s.p, d.execFn, pc, r0)
 		s.heard(snapExecReuse, int64(pc), true, reuse)
-		s.a.ExecReuse.put(int64(pc), 0, true, jitSnapAnsExecReuse{reuse})
+		s.a.ExecReuse.put(int64(pc), 0, true, jitSnapAnsExecReuse{r0: reuse})
 	}
 }
