@@ -65,35 +65,37 @@ func TestBrTableAllocatesByTargets(t *testing.T) {
 	}
 }
 
-// bestTime returns the least time f takes over a few runs, each repeated
-// until it takes long enough to time.
-func bestTime(f func()) time.Duration {
-	best := time.Duration(1 << 62)
-	for range 3 {
-		reps := 0
-		start := time.Now()
-		for {
-			f()
-			reps++
-			if d := time.Since(start); d >= 20*time.Millisecond {
-				best = min(best, d/time.Duration(reps))
-				break
-			}
+// runTime returns the time f takes a run, repeated until it takes long
+// enough to time.
+func runTime(f func()) time.Duration {
+	reps := 0
+	start := time.Now()
+	for {
+		f()
+		reps++
+		if d := time.Since(start); d >= 20*time.Millisecond {
+			return d / time.Duration(reps)
 		}
 	}
-	return best
 }
 
 // checkLinear times validating build(n) and build(8n) and fails if the
 // larger takes more than four times the eightfold a linear cost would.
+// The two are timed in turn, the least time of each kept, so that what
+// else the machine runs meets both alike: timed one after the other, a
+// busy spell during the larger's runs alone had made it 40 times the
+// smaller on a shared runner, where it is 9 times on an idle one.
 func checkLinear(t *testing.T, n int, build func(n int) []byte) {
 	t.Helper()
 	l := CoreLimits()
 	small, large := build(n), build(8*n)
 	validateModule(t, small, l)
 	validateModule(t, large, l)
-	ts := bestTime(func() { validateModule(t, small, l) })
-	tl := bestTime(func() { validateModule(t, large, l) })
+	ts, tl := time.Duration(1<<62), time.Duration(1<<62)
+	for range 5 {
+		ts = min(ts, runTime(func() { validateModule(t, small, l) }))
+		tl = min(tl, runTime(func() { validateModule(t, large, l) }))
+	}
 	ratio := float64(tl) / float64(ts)
 	t.Logf("%d bytes: %v; %d bytes: %v; ratio %.1f", len(small), ts, len(large), tl, ratio)
 	if ratio > 32 {
