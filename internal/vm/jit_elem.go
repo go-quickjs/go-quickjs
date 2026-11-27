@@ -677,25 +677,38 @@ var (
 // write's site has them (siteOf, add), a define's marked so. A site that
 // gave up, or holds nothing native code is compiled for, has none.
 func (f *jitRegFeedback) KeyedStore(pc int) (ssa.KeyedStoreSite, bool) {
-	fb := f.fb
-	w, op, ok := f.at(pc)
-	if !ok || fb.cl == nil {
+	code := f.propCode()
+	return jitKeyedStoreOf(&code, pc, jitPropLive{f: f, r: f.fb.r}, f.fb)
+}
+
+// jitKeyedStoreOf is KeyedStore's answer at the program's instruction pc
+// of code, of the caches and the heap as src has them -- the live state, or
+// a snapshot's copy of it (jit_snapkeyedstore.go) -- what the code keeps
+// appended to fb's keep: one implementation of either.
+func jitKeyedStoreOf(code *jitPropCode, pc int, src jitPropSrc, fb *jitFeedback) (ssa.KeyedStoreSite, bool) {
+	w, op, ok := code.at(pc)
+	if !ok {
 		return ssa.KeyedStoreSite{}, false
 	}
 	define := w.Op() == bytecode.RDefineIndex
 	if !(w.Op() == bytecode.RSetIndex && op == ir.ArrayWrite || define && op == ir.Host) {
 		return ssa.KeyedStoreSite{}, false
 	}
-	rpc := int(f.p.Origin[pc])
-	if rpc >= len(f.rc.Aux) {
+	return jitKeyedStoreAt(code, int(code.p.Origin[pc]), define, src, fb)
+}
+
+// jitKeyedStoreAt is jitKeyedStoreOf's answer for the store at register pc
+// rpc, a define's where define says, of the register code alone.
+func jitKeyedStoreAt(code *jitPropCode, rpc int, define bool, src jitPropSrc, fb *jitFeedback) (ssa.KeyedStoreSite, bool) {
+	if !code.cl || rpc >= len(code.rc.Aux) {
 		return ssa.KeyedStoreSite{}, false
 	}
-	s := int(f.rc.Aux[rpc])
-	if s == 0 || s >= len(fb.cl.ic) {
+	s := int(code.rc.Aux[rpc])
+	if s == 0 {
 		return ssa.KeyedStoreSite{}, false
 	}
-	c := &fb.cl.ic[s]
-	if c.fills >= maxCacheFills {
+	c := src.cache(s)
+	if c == nil || c.fills >= maxCacheFills {
 		return ssa.KeyedStoreSite{}, false
 	}
 	site := ssa.KeyedStoreSite{Define: define}
@@ -714,7 +727,7 @@ func (f *jitRegFeedback) KeyedStore(pc int) (ssa.KeyedStoreSite, bool) {
 			return
 		}
 		if e.next != nil {
-			add := fb.add(e, jitPropLive{r: fb.r})
+			add := fb.add(e, src)
 			if add == nil {
 				return
 			}
@@ -734,7 +747,7 @@ func (f *jitRegFeedback) KeyedStore(pc int) (ssa.KeyedStoreSite, bool) {
 			return
 		}
 		k := sh.keys[e.idx].key
-		fb.keep().shapes = append(fb.keep().shapes, remember(sh))
+		fb.keep().shapes = append(fb.keep().shapes, src.keep(sh))
 		ks := keyOf(k)
 		if ks.Shape == 0 {
 			ks.Shape, ks.Index = uintptr(unsafe.Pointer(sh)), e.idx

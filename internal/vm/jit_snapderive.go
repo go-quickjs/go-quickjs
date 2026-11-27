@@ -71,8 +71,10 @@ type jitSnapData struct {
 	// calls' (jit_snapcalls.go).
 	native jitNativeData
 	calls  jitCallsData
-	// inst is InstanceOf's (jit_snapinstanceof.go).
-	inst jitInstanceOfData
+	// inst is InstanceOf's (jit_snapinstanceof.go), kstore KeyedStore's
+	// (jit_snapkeyedstore.go).
+	inst   jitInstanceOfData
+	kstore jitKeyedStoreData
 	// rt is the runtime the gathers ran on, the root's: the closures'
 	// copies' (closureCopy).
 	rt *Runtime

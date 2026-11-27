@@ -158,6 +158,13 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 			if s.d.native.unknownUnasked {
 				unbound[snapOperands]++
 			}
+			// The keyed stores gathered (gatherKeyedStore) at no PC: their
+			// shapes remembered where the asking had not.
+			for _, k := range s.d.kstore.sites {
+				if !k.bound {
+					unbound[snapKeyedStore]++
+				}
+			}
 			// InstanceOf asked by register pc (gatherInstanceOf) at no PC.
 			for _, a := range s.d.inst.asked {
 				if !a.bound {
@@ -238,4 +245,5 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 	t.Logf("%d functions, %d questions compared; asked by register pc at no PC: %d Accessor, %d StringProperty; made by register pc at no PC: %d NativeCalls, %d Operands",
 		functions, compared, unbound[snapAccessor], unbound[snapStringProperty], unbound[snapNativeCalls], unbound[snapOperands])
 	t.Logf("asked by register pc at no PC: %d InstanceOf", unbound[snapInstanceOf])
+	t.Logf("gathered by register pc at no PC: %d KeyedStore", unbound[snapKeyedStore])
 }
