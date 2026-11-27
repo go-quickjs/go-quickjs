@@ -71,7 +71,7 @@ func init() {
 	jitSnapDerived |= jitNativeMethods
 	jitSnapFuncGatherers = append(jitSnapFuncGatherers, jitNativeGather)
 	jitSnapBinders = append(jitSnapBinders, jitNativeBind)
-	jitSnapFinishers = append(jitSnapFinishers, jitNativeFinish)
+	jitSnapFinishers[jitFinishLearned] = append(jitSnapFinishers[jitFinishLearned], jitNativeFinish)
 	jitSnapDerivers[jitDeriveCopies] = append(jitSnapDerivers[jitDeriveCopies], jitNativeDerive)
 }
 
@@ -465,14 +465,24 @@ func (d *jitNativeData) callShape(pc int) (int, bool, bool) {
 
 // frequency is Frequency's answer.
 func (d *jitNativeData) frequency(pc int) (float64, bool) {
-	counts := d.counts
-	if len(counts) == 0 {
+	if len(d.counts) == 0 {
 		return 0, false
 	}
-	w, op, ok := jitRegAt(d.p, d.rc, pc)
+	_, op, ok := jitRegAt(d.p, d.rc, pc)
 	if !ok || op != ir.Host || !d.p.Code[pc].Window {
 		return 0, false
 	}
+	return d.frequencyAt(int(d.p.Origin[pc]))
+}
+
+// frequencyAt is Frequency's answer at a call's instruction lowered of
+// register pc rpc.
+func (d *jitNativeData) frequencyAt(rpc int) (float64, bool) {
+	counts := d.counts
+	if len(counts) == 0 || rpc < 0 || rpc >= len(d.rc.Code) {
+		return 0, false
+	}
+	w := d.rc.Code[rpc]
 	switch w.Op() {
 	case bytecode.RCallW, bytecode.RCallMW, bytecode.RCallWT, bytecode.RCallMWT:
 	default:

@@ -1391,7 +1391,7 @@ is under [The projection](#the-projection).
   code and the copies, never the program, which is bound to it after
   (`bindProgram`, `jitSnapBinders`), so that a callee's state may be
   gathered before anything lowers it. The callees a compile may inline
-  are walked before it asks anything (`jitSnapCalleeWalk`): every
+  were walked before it asked anything (a walk since replaced, below): every
   closure the function's state names as one it calls or makes, to the
   snapshot's depth, of register code short enough to inline
   (`ssa.MayInlineSize`, one size bound with the inliner's); over
@@ -1436,6 +1436,23 @@ is under [The projection](#the-projection).
   4.1 and 10.2 to 3.6 and 9.1 (three runs each). The call sites' pass
   making its lists at once and keeping its table by register in the
   runtime: 2.5 and 5.9 to 1.7 and 4.6.
+  The inline sites (`Inline`, `ForEach`, `CalledClosure`) are derived on
+  the worker now, the callees they may take decided on the goroutine by
+  `Inline`'s own decision before it lowers (`jitInlinePrefix`), asked by
+  register pc of the gathers' copies, its calls' targets kept for the
+  derivation; each callee taken a node gathered of its register code
+  alone, lowered on the worker of its hints copied, kept at the install.
+  The walk it replaced named 2.7 times the callees taken (Typescript:
+  ~5,600 walked a run, ~2,040 taken), each gathered whole, and made the
+  goroutine's part slower than the base's (prep 73 µs median against
+  61); taken by the prefix, 97% of the callees gathered are taken
+  (~2,340 and ~2,270), none missed over Octane's functions. *Measured*
+  (Ryzen 5 3600, Typescript in the background, 4 runs each alternated,
+  QPC): prep 60.3 µs median, 125 mean at the base to 60.1 and 116;
+  install 5.7 and 14.9 to 6.6 and 16.9, the callees' entries and
+  lowerings kept there; the run 1,552-1,598 ms to 1,549-1,569. The
+  root's lowering on the worker is next, with the lowering ahead
+  retired.
 - **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
   was run beside mir's scan on every compile, given the same function: an
   instruction for each value and the block's end, the frame states' uses

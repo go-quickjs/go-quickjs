@@ -864,12 +864,31 @@ func (s *jitState) regLearnedOf(key jitKey) *jitEntry {
 	// is made at the function's first sample, after its first run, and a
 	// loop driving a program's phases had none made for it, and so no code,
 	// once the first phase had filled the budget.
+	return s.regLearnedAdopt(key, &jitEntry{jitLearned: &jitLearned{reg: true}})
+}
+
+// jitLearnedScratch is an entry of what the code of the function whose key
+// is key learned, made apart from the runtime's (regLearned): a snapshot's
+// gather's, of a callee that has learned nothing yet (jit_snapwalk.go),
+// which its finish adopts as the function's (regLearnedAdopt) where the
+// compile takes the callee.
+func (s *jitState) jitLearnedScratch(key jitKey) *jitEntry {
+	return &jitEntry{jitLearned: &jitLearned{reg: true, regLink: s.regLinks[key]}}
+}
+
+// regLearnedAdopt keeps l, made apart (jitLearnedScratch) or anew, as what
+// the code of the function whose key is key, which has none, learned
+// (regLearned), as regLearnedOf makes it.
+func (s *jitState) regLearnedAdopt(key jitKey, l *jitEntry) *jitEntry {
+	if s.regLearned == nil {
+		s.regLearned = map[jitKey]*jitEntry{}
+	}
 	s.budget = s.rt.jitBudget()
 	room := s.makeRoom(jitEntryFixed)
 	// Numbered (serial), which makeRoom takes the least recently made of
 	// first among those of an epoch.
 	s.serial++
-	l := &jitEntry{jitLearned: &jitLearned{reg: true, regLink: s.regLinks[key]}, used: s.epoch(), serial: s.serial, regCounted: room}
+	l.regLink, l.used, l.serial, l.regCounted = s.regLinks[key], s.epoch(), s.serial, room
 	s.regLearned[key] = l
 	s.regAccount(l)
 	return l

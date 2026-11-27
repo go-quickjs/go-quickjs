@@ -72,13 +72,15 @@ func TestJITLowerRegAnInstructionAPC(t *testing.T) {
 	t.Logf("%d lowerings of %d functions", lowered, len(cls))
 }
 
-// TestJITSnapshotCalleeWalk holds the walk of the callees a compile may
-// inline (jitSnapCalleeWalk), made before the snapshot's questions are
-// asked, to the callees the snapshot then asks: each one whose feedback it
-// asks -- one the answers name as inlined, short enough for the inliner
-// to take -- is one the walk found, so that a snapshot copying the walk's
-// callees' state has every one the worker's inliner may take. The
-// functions are jitSnapAskedSrc's, and with QUICKJS_JIT_CORPUS, Octane's.
+// TestJITSnapshotCalleeWalk holds the callees a compile's gathers take on
+// the runtime's goroutine, by Inline's decision before it lowers
+// (jitInlinePrefix) and the loops' callbacks and the function's templates
+// (jit_snapwalk.go), to the callees the worker's derivations take: each
+// one an answer names as inlined -- Inline's, ForEach's, CalledClosure's --
+// is one the gathers took, so that no derivation misses (jitWalkData's
+// missed); and a compile whose asking met what a worker cannot decide is
+// counted by why. The functions are jitSnapAskedSrc's, and with
+// QUICKJS_JIT_CORPUS, Octane's.
 func TestJITSnapshotCalleeWalk(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -98,7 +100,11 @@ func TestJITSnapshotCalleeWalk(t *testing.T) {
 		}
 	}
 	r.jitState().unavailable = false
-	functions, asked, walked, missed := 0, 0, 0, 0
+	if b := jitSnapNodesBlocked(); b != 0 {
+		t.Fatalf("methods asked at a PC neither derived nor gathered: %#x", b)
+	}
+	functions, walked, taken, misses := 0, 0, 0, 0
+	eager := map[jitWalkEager]int{}
 	for _, cl := range cls {
 		c := r.regOf(cl)
 		if c == nil {
@@ -109,27 +115,45 @@ func TestJITSnapshotCalleeWalk(t *testing.T) {
 			continue
 		}
 		r.jitRegSeenFeedback(cl, c)
-		walk, _ := r.jitSnapCalleeWalk(&jitSnapData{rt: r}, cl)
 		snap := jitRegSnapshotOf(r.jitRegFeedbackFor(cl, p), p)
 		functions++
-		walked += len(walk)
-		for k, s := range snap.s.callees {
-			if !s.d.gathered || k.cl == nil || k.cl == cl {
-				continue
+		w := snap.s.d.walk
+		if w == nil || w.eager != jitWalkDerived {
+			if w != nil {
+				eager[w.eager]++
 			}
-			asked++
-			if walk[k.cl] == 0 {
-				missed++
-				if missed <= 20 {
-					t.Errorf("%s: callee %s, %d deep, asked but not walked%s", cl.fn.Name, k.cl.fn.Name, s.depth, jitSnapNamedBy(snap.s, k.cl))
+			continue
+		}
+		missed := func() (missed any) {
+			defer func() {
+				if v := recover(); v != nil {
+					if _, ok := v.(jitSnapMiss); !ok {
+						panic(v)
+					}
+					missed = v
 				}
+			}()
+			snap.s.derive()
+			return nil
+		}()
+		walked += len(w.order)
+		for _, n := range w.order {
+			if n.decided {
+				taken++
+			}
+		}
+		if missed != nil || w.missed {
+			misses++
+			if misses <= 20 {
+				t.Errorf("%s: a derivation took a callee the gathers did not: %v", cl.fn.Name, missed)
 			}
 		}
 	}
 	if functions == 0 {
 		t.Fatal("nothing compiled")
 	}
-	t.Logf("%d functions: %d callees asked, %d walked, %d asked not walked", functions, asked, walked, missed)
+	t.Logf("%d functions: %d callees gathered, %d taken, %d compiles missed one; asked on the goroutine: %d forwarder, %d parked, %d typed, %d sites",
+		functions, walked, taken, misses, eager[jitWalkForwarder], eager[jitWalkParked], eager[jitWalkTyped], eager[jitWalkSites])
 }
 
 // jitSnapNamedBy says which answers of the snapshots of root's compile

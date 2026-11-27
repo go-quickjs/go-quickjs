@@ -225,6 +225,24 @@ type JITGoroutineTimes struct {
 	Spot, Prepared, Installed, TakenBack, Ahead  time.Duration
 	Spots, Prepares, Installs, TakeBacks, Aheads int
 	FinishDerives                                int
+	// EagerForwarders, EagerParked, EagerTyped and EagerSites count the
+	// compiles in the background whose inline sites were asked on the
+	// runtime's goroutine, their callees lowered there, for a callee taken
+	// that hands its arguments on, one parked, the function's typed code,
+	// or its calls asked there (no learning, a site of two calls);
+	// EagerLate, the callees taken whose calls are asked there, each
+	// lowered and asked there. CalleeMisses counts the compiles whose
+	// worker took a callee to inline that the gathers had not, built on the
+	// runtime's goroutine at their install. GatheredCallees and
+	// TakenCallees count the callees the compiles' gathers took and those
+	// their workers took to inline; UntakenLearned, the callees gathered and
+	// not taken whose learning their seen feedback, taken at the gather,
+	// changed; NodesAskedAnew, the callees gathered that the asking on the
+	// runtime's goroutine asked anew where a site it asked there inlines
+	// them (an accessor's), their gathers thrown away.
+	EagerForwarders, EagerParked, EagerTyped, EagerSites, EagerLate int
+	CalleeMisses                                                    int
+	GatheredCallees, TakenCallees, UntakenLearned, NodesAskedAnew   int
 }
 
 // jitCompileClock is the runtime's JITCompileClock: the host's, or what a

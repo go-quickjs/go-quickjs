@@ -47,6 +47,13 @@ type jitSnapData struct {
 	// derivations have run; finished, the root's, one whose finishes have
 	// (finish).
 	gathered, bound, derived, finished bool
+	// node marks a callee's snapshot the root's gather made for a callee
+	// its walk found (jit_snapwalk.go), its program bound and its answers
+	// derived where a derivation first takes it to inline (calleeOf), not
+	// in derive's order; ran, a snapshot whose derivations have run;
+	// dropped, a node whose callee the asking on the runtime's goroutine
+	// asked of anew (nestReg), which nothing derives or finishes.
+	node, ran, dropped bool
 	// nodes, the root's, are the snapshots whose gathers ran, the root's
 	// first, in the order they ran: what finish goes through, in an order
 	// of the program's, not a map's.
@@ -67,6 +74,10 @@ type jitSnapData struct {
 	global jitGlobalData
 	// closure is the closures' (jit_snapglobal.go).
 	closure jitClosureData
+	// inline is the inline sites' (jit_snapwalk.go), walk, the root's,
+	// the callees its walk found, of the compile's snapshots.
+	inline jitInlineData
+	walk   *jitWalkData
 	// native is the learning's methods' (jit_snapnative.go), calls the
 	// calls' (jit_snapcalls.go).
 	native jitNativeData
@@ -253,14 +264,31 @@ const (
 // jitSnapFinishers are the families' finishes of a snapshot whose
 // derivations ran, each run once a snapshot, on the runtime's goroutine,
 // when its compile is done with: installed, thrown away, or built again
-// from the feedback asked anew (jitRegInstall). What a derivation could not
-// write of the runtime's -- what the asking appends to the lists of what a
-// function's code learned (jitLearned's nativeCalls, inlines) -- it keeps
-// in its snapshot, and its family's finish writes it, as a concurrent
-// compile writes no feedback until it is done: the asking had written it
-// as the compile was prepared, which the finish puts in the place it would
-// have had.
-var jitSnapFinishers []func(s *jitSnapshot)
+// from the feedback asked anew (jitRegInstall), by stage
+// (jitSnapFinishStage). What a derivation could not write of the runtime's
+// -- what the asking appends to the lists of what a function's code learned
+// (jitLearned's nativeCalls, inlines), the entry it makes for a callee that
+// learned nothing yet -- it keeps in its snapshot, and its family's finish
+// writes it, as a concurrent compile writes no feedback until it is done:
+// the asking had written it as the compile was prepared, which the finish
+// puts in the place it would have had.
+var jitSnapFinishers [jitFinishStages][]func(s *jitSnapshot)
+
+// jitSnapFinishStage is when a family's finish runs among the others' of a
+// compile: a stage's, for every snapshot of the compile, after every
+// earlier stage's for every one, whatever the files they are in.
+type jitSnapFinishStage uint8
+
+const (
+	// jitFinishEntries are the finishes that make what the later ones
+	// write into: the entries of what callees learned, made where a
+	// derivation took a callee that had none (jit_snapwalk.go).
+	jitFinishEntries jitSnapFinishStage = iota
+	// jitFinishLearned are those that write into what functions learned:
+	// the learning's appends (jitTargetsFinish), its lattice's marks.
+	jitFinishLearned
+	jitFinishStages
+)
 
 // jitSnapAskedAt are the families' choices of the derived methods asked
 // of the feedback at a PC all the same, on the runtime's goroutine, in the
@@ -316,10 +344,21 @@ func (s *jitSnapshot) derive() {
 	// The snapshots whose gathers ran, in the order they ran: a callee
 	// that asked nothing (nestReg) has none.
 	for _, c := range s.d.nodes {
-		c.bind()
-		c.runDerivers(&jitSnapDerivers)
-		c.a.seal()
+		if c.d.ran || c.d.node {
+			// A walked callee's, derived where a derivation first takes it
+			// (calleeOf), or none's.
+			continue
+		}
+		c.deriveOne()
 	}
+}
+
+// deriveOne runs s's families' derivations, its program bound, once.
+func (s *jitSnapshot) deriveOne() {
+	s.d.ran = true
+	s.bind()
+	s.runDerivers(&jitSnapDerivers)
+	s.a.seal()
 }
 
 // runDerivers runs derivers' derivations of s, stage by stage.
@@ -344,18 +383,20 @@ func (s *jitSnapshot) finish() {
 		return
 	}
 	s.d.finished = true
-	if len(jitSnapFinishers) == 0 {
-		return
-	}
 	if !s.d.derived {
 		s.derive()
 		if r := s.d.rt; r != nil && r.jit != nil {
 			r.jit.goroutineTimes.FinishDerives++
 		}
 	}
-	for _, c := range s.d.nodes {
-		for _, f := range jitSnapFinishers {
-			f(c)
+	for _, stage := range jitSnapFinishers {
+		for _, c := range s.d.nodes {
+			if c.d.dropped {
+				continue
+			}
+			for _, f := range stage {
+				f(c)
+			}
 		}
 	}
 }

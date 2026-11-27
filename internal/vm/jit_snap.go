@@ -42,11 +42,22 @@ func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 	s.root = s
 	s.reg = &jitRegSnapshot{s: s, regs: len(fb.rc.Code)}
 	s.askReg(fb, p)
+	// The callees its inline sites may take, asked of their gathers'
+	// copies, gathered in turn (jit_snapwalk.go).
+	s.gatherNodes(fb)
 	// The questions of other arguments, of what the answers name: the
 	// leaves' kinds, and how Go makes the pools' objects escape analysis
 	// may leave unmade.
 	fns, pools := map[uintptr]bool{}, map[uintptr]bool{}
-	all := append([]*jitSnapshot{s}, mapValues(s.callees)...)
+	// The compile's snapshots: the function's, its callees' the asking
+	// asked or the walk gathered (jitSnapData's nodes), and the callees'
+	// whose questions no site asks, in no other order than the nodes'.
+	all := s.d.nodes
+	for _, c := range s.callees {
+		if !c.d.gathered {
+			all = append(all, c)
+		}
+	}
 	for _, c := range all {
 		for i := range c.a.Leaf.e {
 			if e := &c.a.Leaf.e[i]; e.answered && e.v.r0 != 0 {
@@ -82,7 +93,7 @@ func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 		k := fb.LeafKind(fn)
 		h := fb.fb.r.jitTest.snapAsked
 		for _, c := range all {
-			if !c.d.gathered {
+			if !c.d.gathered || c.d.dropped {
 				// A callee no site inlines (nestReg), asked nothing.
 				continue
 			}
@@ -114,19 +125,7 @@ func (s *jitSnapshot) askReg(fb *jitRegFeedback, p *ir.Program) {
 	// (jit_snapderive.go): of the register code, not of p.
 	s.gather(fb)
 	s.bind()
-	for pc, op := range s.ops {
-		asks := jitSnapAsks[op] & jitRegSnapMethods &^ jitRegSnapStatePC &^ jitSnapDerived
-		for _, at := range jitSnapAskedAt {
-			asks |= at(s, pc) & jitSnapAsks[op]
-		}
-		for asks != 0 {
-			m := jitSnapMethod(bits.TrailingZeros64(asks))
-			asks &= asks - 1
-			if ask := jitRegSnapAskers[m]; ask != nil {
-				ask(s, fb, pc)
-			}
-		}
-	}
+	s.askPCs(fb, 0)
 	fb.snapshotStatePCs(s)
 	s.askLeafCalls(fb)
 }
@@ -200,12 +199,27 @@ func (s *jitSnapshot) nestReg(site ssa.InlineSite) ssa.InlineSite {
 	root := s.root
 	key := jitSnapCallee{cl: f.fb.cl, fn: f.fb.fn, root: f.fb.root}
 	if c := root.callees[key]; c != nil && c.reg != nil {
-		site.Feedback = c.reg
-		return site
+		if !c.d.node || root.d.walk.asked(c) {
+			site.Feedback = c.reg
+			return site
+		}
+		// A callee the walk gathered and no derivation has taken yet,
+		// asked here by the asking on the runtime's goroutine of a site
+		// that inlines it: asked anew of the feedback it was given, as the
+		// asking asks a callee (jit_snapwalk.go).
+		c.d.dropped = true
+		if r := root.d.rt; r != nil && r.jit != nil {
+			r.jit.goroutineTimes.NodesAskedAnew++
+		}
 	}
 	c := &jitSnapshot{root: root, depth: s.depth + 1, fb: f.fb}
 	c.reg = &jitRegSnapshot{s: c, regs: len(f.rc.Code)}
 	root.callees[key] = c
+	kind := jitLowerInline
+	if site.Arguments {
+		kind = jitLowerForward
+	}
+	root.d.walk.askedAnew(f.fb.cl, c, site.Program, kind)
 	if c.depth < jitSnapDepth && site.Program != nil && !ssa.NeverInlined(site.Program) {
 		// Not a callee no site inlines (ssa.NeverInlined), whose feedback
 		// the build never asks: every callee the root met had been asked

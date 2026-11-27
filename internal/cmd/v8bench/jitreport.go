@@ -649,6 +649,8 @@ func reportTier(r runtimeOf) {
 	fmt.Printf("  jit tier: the runtime goroutine's part: %d compiles on the spot %.1f ms (%.0f us each); in the background %d prepared %.1f ms (%.0f us each), %d installed %.1f ms (%.0f us each), %d taken back %.1f ms, %d derived there when thrown away, %d asked again for their lowering ahead %.1f ms\n",
 		gt.Spots, ms(gt.Spot), each(gt.Spot, gt.Spots), gt.Prepares, ms(gt.Prepared), each(gt.Prepared, gt.Prepares),
 		gt.Installs, ms(gt.Installed), each(gt.Installed, gt.Installs), gt.TakeBacks, ms(gt.TakenBack), gt.FinishDerives, gt.Aheads, ms(gt.Ahead))
+	fmt.Printf("  jit tier: the background's callees: %d gathered, %d taken, %d untaken whose learning the gather changed, %d asked anew on the goroutine; %d compiles missed one; inline sites asked on the goroutine: %d forwarder, %d parked, %d typed, %d sites, %d callees late\n",
+		gt.GatheredCallees, gt.TakenCallees, gt.UntakenLearned, gt.NodesAskedAnew, gt.CalleeMisses, gt.EagerForwarders, gt.EagerParked, gt.EagerTyped, gt.EagerSites, gt.EagerLate)
 	most := func(m map[string]int) (string, int) {
 		k, n := "", 0
 		for _, x := range slices.Sorted(maps.Keys(m)) {

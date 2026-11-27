@@ -93,10 +93,9 @@ type jitTargetsData struct {
 	// poolRoom).
 	constructs []jitTargetConstruct
 	rooms      []jitTargetRoom
-	// byFacts and byReg index them, made on the worker as it first
-	// derives.
+	// byFacts indexes them where they are many (factsFor), made where it
+	// is first asked; regs are found by regAt (regFor).
 	byFacts map[jitTargetKey]jitCallFacts
-	byReg   map[*closure]jitTargetReg
 	// regAt indexes regs on the gather's side, made once they are many.
 	regAt map[*closure]int
 }
@@ -194,7 +193,7 @@ func init() {
 	jitSnapBinders = append(jitSnapBinders, jitTargetsBind)
 	jitSnapFuncGatherers = append(jitSnapFuncGatherers, jitTargetsGather)
 	jitSnapDerivers[jitDeriveTargets] = append(jitSnapDerivers[jitDeriveTargets], jitTargetsDerive)
-	jitSnapFinishers = append(jitSnapFinishers, jitTargetsFinish)
+	jitSnapFinishers[jitFinishLearned] = append(jitSnapFinishers[jitFinishLearned], jitTargetsFinish)
 	jitSnapAskedAt = append(jitSnapAskedAt, jitTargetsAskedAt)
 }
 
@@ -550,7 +549,7 @@ func (t *jitTargetsData) regOf(s *jitSnapshot, r *Runtime, cl *closure) *jitTarg
 	return &t.regs[t.regAtOf(s, r, cl)]
 }
 
-// index makes t's indexes, on the worker.
+// index makes t's index of its facts (byFacts).
 func (t *jitTargetsData) index() {
 	if t.byFacts != nil {
 		return
@@ -558,10 +557,6 @@ func (t *jitTargetsData) index() {
 	t.byFacts = make(map[jitTargetKey]jitCallFacts, len(t.facts))
 	for _, f := range t.facts {
 		t.byFacts[f.k] = f.f
-	}
-	t.byReg = make(map[*closure]jitTargetReg, len(t.regs))
-	for _, x := range t.regs {
-		t.byReg[x.cl] = x
 	}
 }
 
@@ -588,9 +583,7 @@ func (c jitCallCopy) target(o *Object, cl *closure, rc *regCode) jitCallFacts {
 	if rc == nil {
 		return jitCallFacts{}
 	}
-	t := c.data()
-	t.index()
-	f, ok := t.byFacts[jitTargetKey{o, cl, rc}]
+	f, ok := c.data().factsFor(jitTargetKey{o, cl, rc})
 	if !ok {
 		panic("jit: a snapshot's derivation of a call met a target its gather did not take")
 	}
@@ -598,9 +591,7 @@ func (c jitCallCopy) target(o *Object, cl *closure, rc *regCode) jitCallFacts {
 }
 
 func (c jitCallCopy) reg(cl *closure) *regCode {
-	t := c.data()
-	t.index()
-	x, ok := t.byReg[cl]
+	x, ok := c.data().regFor(cl)
 	if !ok {
 		panic("jit: a snapshot's derivation of a call met a closure its gather did not take")
 	}
@@ -608,12 +599,48 @@ func (c jitCallCopy) reg(cl *closure) *regCode {
 }
 
 func (c jitCallCopy) link(cl *closure, rc *regCode) *jitLink {
-	t := c.data()
-	t.index()
-	if x := t.byReg[cl]; x.link != nil && x.rc == rc {
+	if x, _ := c.data().regFor(cl); x.link != nil && x.rc == rc {
 		return x.link
 	}
 	panic("jit: a snapshot's derivation of a call met a link its gather did not make")
+}
+
+// jitTargetsFew is how many facts a search finds a target's among, past
+// which they are found by a map (index): made on the runtime's goroutine,
+// where a gather's asking reads them (jit_snapwalk.go), a map of a few had
+// cost more than the search.
+const jitTargetsFew = 16
+
+// factsFor is the facts the gather took of the target k, the last taken.
+func (t *jitTargetsData) factsFor(k jitTargetKey) (jitCallFacts, bool) {
+	if t.byFacts == nil && len(t.facts) <= jitTargetsFew {
+		for i := len(t.facts) - 1; i >= 0; i-- {
+			if t.facts[i].k == k {
+				return t.facts[i].f, true
+			}
+		}
+		return jitCallFacts{}, false
+	}
+	t.index()
+	f, ok := t.byFacts[k]
+	return f, ok
+}
+
+// regFor is cl's register code and link as the gather took them: by the
+// gather's own index where it made one (regAt), else by a search.
+func (t *jitTargetsData) regFor(cl *closure) (jitTargetReg, bool) {
+	if t.regAt != nil {
+		if i, ok := t.regAt[cl]; ok {
+			return t.regs[i], true
+		}
+		return jitTargetReg{}, false
+	}
+	for _, x := range t.regs {
+		if x.cl == cl {
+			return x, true
+		}
+	}
+	return jitTargetReg{}, false
 }
 
 func (c jitCallCopy) seenCallees(rpc int, w bytecode.RInstr) []jitCallee {
@@ -782,7 +809,6 @@ func jitTargetsDerive(s *jitSnapshot) {
 	if !t.gathered {
 		return
 	}
-	t.index()
 	q := s.callCtx()
 	sink := s.sinkOf()
 	a := &s.a

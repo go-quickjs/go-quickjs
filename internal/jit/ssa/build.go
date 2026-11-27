@@ -2932,11 +2932,13 @@ func inlineFits(total, n int) bool {
 	return total+n <= maxInlineTotal || n <= maxInlineSmall && total+n <= maxInlineAbsolute
 }
 
-// MaxInline is the most instructions a callee inlined may have, and
-// MaxInlineTotal the most a function inlines in all.
+// MaxInline is the most instructions a callee inlined may have,
+// MaxInlineTotal the most a function inlines in all, and MaxInlineDepth
+// how deep in callees it inlines: no callee of a callee that deep is.
 const (
 	MaxInline      = maxInline
 	MaxInlineTotal = maxInlineTotal
+	MaxInlineDepth = maxInlineDepth
 )
 
 // maxInlineLoop is the most instructions a callee with a loop may have and

@@ -3,9 +3,6 @@
 package vm
 
 import (
-	"slices"
-	"unsafe"
-
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
@@ -114,63 +111,8 @@ func (r *Runtime) jitRegForEachSeen(f *frame, e *jitRegEntry, rpc int, callee, r
 // register call's native call is (regCallSite), or inlined in the loop
 // (callbackInline).
 func (f *jitRegFeedback) ForEach(pc int) (ssa.ForEachSite, bool) {
-	w, op, ok := f.at(pc)
-	l := f.fb.e
-	if !ok || op != ir.Host || !f.p.Code[pc].Window || w.Op() != bytecode.RCallMW || l == nil {
-		return ssa.ForEachSite{}, false
-	}
-	r := f.fb.r
-	rpc := int32(f.p.Origin[pc])
-	if jitRegSiteAtTop(l, int(rpc)) {
-		// A loop whose checks kept failing, at the top of its ladder
-		// (jitRegSiteTop): Go's call.
-		return ssa.ForEachSite{}, false
-	}
-	for _, x := range l.nativeCalls {
-		if x.pc != rpc || !x.forEach || x.cb == nil {
-			continue
-		}
-		kind := r.jitLoopKind(x.obj)
-		if kind == 0 {
-			return ssa.ForEachSite{}, false
-		}
-		var proto uintptr
-		k := f.fb.keep()
-		if kind&abi.LoopTyped != 0 {
-			// A typed array's, of the type its prototype is.
-			t := slices.Index(r.typedArrayProtos[:], x.proto)
-			if x.proto == nil || t < 0 {
-				return ssa.ForEachSite{}, false
-			}
-			kind |= t << abi.LoopTypedShift
-			proto = uintptr(unsafe.Pointer(x.proto))
-			k.holders = append(k.holders, x.proto)
-		}
-		argc := 3
-		switch kind & abi.LoopKindMask {
-		case abi.LoopReduce:
-			argc = 4
-		case abi.LoopSort:
-			// A comparator, called with two elements; native code sorts
-			// only with one it may call again at will.
-			argc = 2
-			if !jitRegSortComparator(x.cb.fn, x.cb.reg.rc) {
-				return ssa.ForEachSite{}, false
-			}
-		}
-		site, ok := f.regCallSite(pc, x.cbObj, x.cb, x.cb.reg, argc, true, nil, nil, x.byCode, false)
-		if !ok {
-			return ssa.ForEachSite{}, false
-		}
-		k.holders = append(k.holders, x.obj)
-		fe := ssa.ForEachSite{Fn: uintptr(unsafe.Pointer(x.obj)), Kind: kind, Proto: proto, Callback: site}
-		if in, ok := f.callbackInline(x, site, argc); ok {
-			fe.Inline = &in
-			fe.Made = f.madeCallback(pc, x.cb)
-		}
-		return fe, true
-	}
-	return ssa.ForEachSite{}, false
+	q := f.callCtx()
+	return jitForEachOf(&q, pc, jitInlineLive{f})
 }
 
 // jitRegSortComparator reports, of fn's register code rc, whether fn, a
@@ -262,97 +204,6 @@ func jitRegSortComparator(fn *bytecode.Function, rc *bytecode.RegCode) bool {
 		}
 	}
 	return true
-}
-
-// callbackInline is the InlineSite of x's callback, a loop's (ForEach),
-// for native code to inline in the loop, as V8 inlines a forEach's
-// callback, under the rules a register callee's inlining follows
-// (jitRegFeedback's Inline): the one closure the loop has been given,
-// which the loop checks it is given, its window the loop's call's
-// operands -- or, one made anew at each call of its maker (byCode), no
-// object, for the builder to inline where the caller makes it just before
-// the call (madeCallback, ssa's madeAt) -- not an arrow that reads its
-// this, which may come from any frame, nor a sloppy function that reads its
-// this, which the loop's call coerces -- the global object for the
-// undefined a loop without a thisArg gives it (ssa's Coerce with a
-// ThisSlot): inlined, its this was the loop's undefined, this ===
-// globalThis false. Nor one whose inlining in the loop left native code too
-// often (jitInlineLeft's cbLeft, counted on the loop's own entry), called
-// natively since: kept among the call's inlines, its leaving had made the
-// loop's call a native call of the callback, and the loop was built no
-// more.
-func (f *jitRegFeedback) callbackInline(x jitInline, site ssa.CallSite, argc int) (ssa.InlineSite, bool) {
-	cl, o := x.cb, x.cbObj
-	byCode := x.byCode || site.ByCode != 0
-	if site.ArrowThis || cl.fn == f.fb.fn || cl.fn == f.fb.keep().fn || f.fb.r.jitNoInlined(cl.fn) ||
-		cl.fn.CoerceThis && cl.fn.UsesThis && cl.fn.Kind != bytecode.KindArrow || x.cbLeft {
-		return ssa.InlineSite{}, false
-	}
-	p, err := f.fb.r.jitRegLower(cl, cl.reg.rc, jitLowerInline)
-	if err != nil {
-		return ssa.InlineSite{}, false
-	}
-	r := f.fb.r
-	r.jitRegSeenInlined(f.fb.keep(), cl)
-	k := f.fb.keep()
-	callee := &jitRegFeedback{fb: &jitFeedback{r: r, fn: cl.fn, cl: cl, e: r.jitState().regLearnedOf(r.jitRegKeyOf(cl)), root: k}, rc: cl.fn.RegCode(), p: p}
-	in := ssa.InlineSite{
-		Program: p, Feedback: callee, Callee: site.Callee, Closure: site.Closure,
-		Argc: argc, Method: true, Params: 2 + int(cl.reg.params), ThisSlot: -1, Window: true,
-		Coerce: site.Coerce, Upvalues: jitUpvalueCells(cl),
-	}
-	if byCode {
-		// No object, the closure the caller makes: its captured bindings
-		// the caller's own slots (ssa.InlineSite's Captured), the builder's.
-		in.Callee, in.Closure, in.Upvalues = 0, uintptr(unsafe.Pointer(cl)), 0
-		k.inlined = append(k.inlined, cl)
-		return in, true
-	}
-	k.holders = append(k.holders, o)
-	k.inlined = append(k.inlined, cl)
-	return in, true
-}
-
-// madeCallback is the closure the method call at the program's instruction
-// pc is given, if its code makes it just before the call -- a closure of
-// cl's function, closure_w writing the call's first argument's register,
-// one or two register instructions before it -- which native code inlining
-// the call need not make (ssa.MadeCallback): its template, which the code
-// keeps, as the inlined frame's closure an exit names, and what it
-// captures. Not an arrow that reads its maker's new.target or super
-// (jitNeedsMaker). Nothing between its making and the call closes what it
-// captures (ssa's madeAt).
-func (f *jitRegFeedback) madeCallback(pc int, cl *closure) *ssa.MadeCallback {
-	fb := f.fb
-	call := f.p.Code[pc]
-	if fb.cl == nil || !call.Window {
-		return nil
-	}
-	rpc := f.p.Origin[pc]
-	for q := pc - 1; q >= 0 && rpc-f.p.Origin[q] <= 2; q-- {
-		in := f.p.Code[q]
-		if in.Op != ir.Closure || in.Dest != call.Left.Slot+2 {
-			continue
-		}
-		k := int(in.Key)
-		if k >= len(fb.cl.consts) || k >= len(f.rc.Caps) {
-			return nil
-		}
-		c := jitTemplateCell[struct{}](fb, &fb.cl.consts[k])
-		t := c.template()
-		if t == nil || t.fn != cl.fn || jitNeedsMaker(*c) {
-			return nil
-		}
-		caps, ok := f.madeCaptures(t, k)
-		if !ok {
-			return nil
-		}
-		kp := fb.keep()
-		kp.inlined = append(kp.inlined, t)
-		kp.made = append(kp.made, t)
-		return &ssa.MadeCallback{PC: q, Template: uintptr(unsafe.Pointer(c)), Closure: uintptr(unsafe.Pointer(t)), Captures: caps}
-	}
-	return nil
 }
 
 // jitRegLoopLeft is jitRegLeft for e's code, run on f's window at wb, that

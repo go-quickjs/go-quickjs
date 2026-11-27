@@ -11,6 +11,7 @@ import (
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
 // jitSnapScribblers are the derived methods' families' scribblers: each
@@ -141,13 +142,18 @@ func TestJITSnapshotDerivesFromItsCopy(t *testing.T) {
 		r.jitRegSeenFeedback(cl, c)
 		snap := jitRegSnapshotOf(r.jitRegFeedbackFor(cl, p), p)
 		functions++
-		// The feedback's answers, asked as the snapshot gathered.
+		// The feedback's answers, asked as the snapshot gathered: of the
+		// snapshots bound to their programs, here; of the walk's nodes a
+		// derivation binds (jit_snapwalk.go), once it has, their programs
+		// lowered on the worker.
+		all := append([]*jitSnapshot{snap.s}, mapValues(snap.s.callees)...)
+		bound := map[*jitSnapshot]bool{}
+		for _, s := range all {
+			bound[s] = s.p != nil
+		}
 		live := map[question]heard{}
 		var order []question
-		for _, s := range append([]*jitSnapshot{snap.s}, mapValues(snap.s.callees)...) {
-			if s.rf == nil {
-				continue
-			}
+		askAll := func(s *jitSnapshot) {
 			ask := func(m jitSnapMethod, arg int64) {
 				method := reflect.ValueOf(s.rf).MethodByName(jitSnapNames[m])
 				var in []reflect.Value
@@ -189,9 +195,58 @@ func TestJITSnapshotDerivesFromItsCopy(t *testing.T) {
 				}
 			}
 		}
+		compare := func() {
+			for _, q := range order {
+				want := live[q]
+				method := reflect.ValueOf(q.s.reg).MethodByName(jitSnapNames[q.m])
+				var in []reflect.Value
+				if method.Type().NumIn() == 1 {
+					in = []reflect.Value{reflect.ValueOf(q.arg).Convert(method.Type().In(0))}
+				}
+				used := len(snap.s.uses)
+				got := method.Call(in)
+				var own, kept jitSnapLists
+				if len(snap.s.uses) > used {
+					u := snap.s.uses[used]
+					own, kept = snap.s.lists(u.s.effects[u.eff-1])
+				}
+				for i, g := range got {
+					gv, wv := g.Interface(), want.results[i]
+					if i == 0 && jitSnapCellResults&(1<<q.m) != 0 {
+						// A cell made anew at each question, which its effect
+						// keeps: alike by what it holds.
+						gv, wv = jitSnapCellAt(gv.(uintptr), own, kept), jitSnapCellAt(wv.(uintptr), want.own, want.kept)
+					}
+					// An inline site's: its callee's feedback by its closure,
+					// its cells by what they hold.
+					gv, wv = jitSnapInlineNormal(gv, own, kept), jitSnapInlineNormal(wv, want.own, want.kept)
+					if !reflect.DeepEqual(gv, wv) {
+						t.Errorf("%s, %d callees deep: %s(%d) result %d: derived %+v, asked %+v", cl.fn.Name, q.s.depth, jitSnapNames[q.m], q.arg, i, g.Interface(), want.results[i])
+					}
+				}
+				if !jitSnapListsEqual(own, want.own) || !jitSnapListsEqual(kept, want.kept) {
+					t.Errorf("%s, %d callees deep: %s(%d): derived effect %+v, kept %+v; asked %+v, kept %+v", cl.fn.Name, q.s.depth, jitSnapNames[q.m], q.arg, own, kept, want.own, want.kept)
+				}
+				for _, l := range []jitSnapLists{own, kept} {
+					for _, sh := range l.shapes {
+						if sh != nil && sh.unique && !sh.seen {
+							t.Errorf("%s, %d callees deep: %s(%d) keeps a unique shape no cache remembered", cl.fn.Name, q.s.depth, jitSnapNames[q.m], q.arg)
+						}
+					}
+				}
+				compared++
+			}
+			clear(live)
+			order = order[:0]
+		}
+		for _, s := range all {
+			if s.rf != nil && bound[s] {
+				askAll(s)
+			}
+		}
 		var restores []func()
 		for _, scribble := range jitSnapScribblers {
-			for _, s := range append([]*jitSnapshot{snap.s}, mapValues(snap.s.callees)...) {
+			for _, s := range all {
 				if s.rf != nil {
 					restores = append(restores, scribble(r, s))
 				}
@@ -201,43 +256,16 @@ func TestJITSnapshotDerivesFromItsCopy(t *testing.T) {
 		for i := len(restores) - 1; i >= 0; i-- {
 			restores[i]()
 		}
-		for _, q := range order {
-			want := live[q]
-			method := reflect.ValueOf(q.s.reg).MethodByName(jitSnapNames[q.m])
-			var in []reflect.Value
-			if method.Type().NumIn() == 1 {
-				in = []reflect.Value{reflect.ValueOf(q.arg).Convert(method.Type().In(0))}
+		compare()
+		for _, s := range all {
+			if s.rf != nil && !bound[s] && s.p != nil {
+				// A node a derivation took, bound on the worker: its feedback
+				// asked of the program it was bound to.
+				s.rf.p = s.p
+				askAll(s)
 			}
-			used := len(snap.s.uses)
-			got := method.Call(in)
-			var own, kept jitSnapLists
-			if len(snap.s.uses) > used {
-				u := snap.s.uses[used]
-				own, kept = snap.s.lists(u.s.effects[u.eff-1])
-			}
-			for i, g := range got {
-				gv, wv := g.Interface(), want.results[i]
-				if i == 0 && jitSnapCellResults&(1<<q.m) != 0 {
-					// A cell made anew at each question, which its effect
-					// keeps: alike by what it holds.
-					gv, wv = jitSnapCellAt(gv.(uintptr), own, kept), jitSnapCellAt(wv.(uintptr), want.own, want.kept)
-				}
-				if !reflect.DeepEqual(gv, wv) {
-					t.Errorf("%s, %d callees deep: %s(%d) result %d: derived %+v, asked %+v", cl.fn.Name, q.s.depth, jitSnapNames[q.m], q.arg, i, g.Interface(), want.results[i])
-				}
-			}
-			if !jitSnapListsEqual(own, want.own) || !jitSnapListsEqual(kept, want.kept) {
-				t.Errorf("%s, %d callees deep: %s(%d): derived effect %+v, kept %+v; asked %+v, kept %+v", cl.fn.Name, q.s.depth, jitSnapNames[q.m], q.arg, own, kept, want.own, want.kept)
-			}
-			for _, l := range []jitSnapLists{own, kept} {
-				for _, sh := range l.shapes {
-					if sh != nil && sh.unique && !sh.seen {
-						t.Errorf("%s, %d callees deep: %s(%d) keeps a unique shape no cache remembered", cl.fn.Name, q.s.depth, jitSnapNames[q.m], q.arg)
-					}
-				}
-			}
-			compared++
 		}
+		compare()
 		if t.Failed() {
 			return
 		}
@@ -354,6 +382,65 @@ func TestJITSnapshotDeriveStages(t *testing.T) {
 	if len(ran) != 2*int(jitDeriveStages) {
 		t.Fatalf("%d derivations of %d ran", len(ran), 2*int(jitDeriveStages))
 	}
+}
+
+// jitSnapInlineNormal is v, a result of a method's, with what an inline
+// site holds that a derivation makes otherwise than the feedback alike:
+// its callee's feedback by its closure (a snapshot's, the feedback's), and
+// the cells it names by what they hold, of the effects own and kept.
+func jitSnapInlineNormal(v any, own, kept jitSnapLists) any {
+	cell := func(p uintptr) any {
+		if p == 0 {
+			return nil
+		}
+		return jitSnapCellAt(p, own, kept)
+	}
+	site := func(in ssa.InlineSite) any {
+		var cl *closure
+		switch f := in.Feedback.(type) {
+		case *jitRegFeedback:
+			cl = f.fb.cl
+		case *jitRegSnapshot:
+			cl = f.s.fb.cl
+		}
+		this, fn := cell(in.ThisCell), cell(in.FunctionCell)
+		in.Feedback, in.ThisCell, in.FunctionCell = nil, 0, 0
+		return struct {
+			In        ssa.InlineSite
+			Cl        *closure
+			This, Fun any
+		}{in, cl, this, fn}
+	}
+	made := func(m *ssa.MadeCallback) any {
+		if m == nil {
+			return nil
+		}
+		c := *m
+		t := cell(c.Template)
+		c.Template = 0
+		return struct {
+			M ssa.MadeCallback
+			T any
+		}{c, t}
+	}
+	switch x := v.(type) {
+	case ssa.InlineSite:
+		return site(x)
+	case ssa.MadeCallback:
+		return made(&x)
+	case ssa.ForEachSite:
+		var in any
+		if x.Inline != nil {
+			in = site(*x.Inline)
+		}
+		m := made(x.Made)
+		x.Inline, x.Made = nil, nil
+		return struct {
+			F      ssa.ForEachSite
+			In, Ma any
+		}{x, in, m}
+	}
+	return v
 }
 
 // jitSnapCellResults are the methods whose first result is a cell made

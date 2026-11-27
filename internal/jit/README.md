@@ -907,7 +907,7 @@ order (`jitSnapAskedAt`). The goroutine's part is to copy, look up and
 make, by register pc, never reading the program the function is lowered
 to (a callee's may not be lowered yet). It copies the call caches and the
 learning's headers; the latter are taken once the PCs are asked, so that
-they hold what `Inline`'s questions on the goroutine appended, cut to
+they hold what the questions still asked on the goroutine appended, cut to
 their lengths so that an append makes a list of its own, and the learned
 calls' entries are never written in place either -- a target marked called
 by its code, an inlined call's exits counted, a step's generators grown --
@@ -943,7 +943,55 @@ puts a call's appends after what its list had when copied and before what
 exits learned meanwhile, as the asking had placed them: a call's targets
 are read in the order of its entries (`jitLearnedMerge`). The families'
 derivations run by stage (`jitSnapDeriveStage`), so that `Inline`'s and
-`NativeCalls`' appends are there for `Resumed`. A worker builds, optimizes and compiles
+`NativeCalls`' appends are there for `Resumed`; their finishes too
+(`jitSnapFinishStage`), so that a callee's entry is made before what it
+learned is written into it.
+
+The inline sites -- `Inline`, `ForEach` and `CalledClosure`
+(`jit_snapwalk.go`) -- are derived on the worker through one
+implementation with the spot's (`jitInlineSrc`: `jitInlineLive`,
+`jitInlineSnap`; `jitInlineOf`, `jitForEachOf`, `jitCalledClosureOf`), as
+Warp decides its inlining from what its serializer copied. Which callees
+they may take is decided on the goroutine by `Inline`'s own decision as far
+as it goes before it lowers (`jitInlinePrefix`: one native target, not a
+cold call of the function's own, no megamorphic getter, no parent's
+constructor, arguments only read), asked once a snapshot's gathers have run
+at each call by its register pc (`discover`; `jitCallCtx` without a
+program, its window the call's own registers), of the gathers' copies; the
+calls' targets it finds are kept, with what finding them appended to the
+keep, for the derivation, which finds them no more (`jitKeptTargets`) but
+where a call's window is another (a literal's copy). A loop's callback and
+a template of a closure the function makes are taken as they are. Each
+callee taken is a node: what an answer reads of it taken there, what its
+caches have seen taken into its learning, as an answer inlining it takes it
+(`jitRegSeenInlined`), the hints its program is lowered of copied
+(`jitRegHintsCopy`), and, of one short enough to inline, a snapshot of its
+own, gathered of its register code alone, nothing of it lowered, its calls
+asked so in turn as deep as the builder inlines (`ssa.MaxInlineDepth`; a
+snapshot that deep is asked no inline site's question). A callee that has
+learned nothing is gathered of an entry made for the snapshot
+(`jitLearnedScratch`), which the finish adopts as the function's where a
+derivation read it (`regLearnedAdopt`, `jitFinishEntries`). The worker
+lowers a callee's program of those hints, or takes the runtime's where it
+is lowered of them, and the install keeps what it lowered
+(`regKeepLoweredAt`); a node's answers are derived where a derivation
+first takes it to inline it (`calleeOf`), its program bound then, as the
+asking had asked a callee where an answer named it (`nestReg`). The
+gather's decision differs from the worker's only where it cannot know the
+order the derivations take callees in, a megamorphic getter's answer
+before or after the seen feedback, and there it takes the callee; a callee
+a derivation takes that the gather did not is a miss (`CalleeMisses`),
+which `TestJITSnapshotCalleeWalk` holds to none over Octane's functions. A
+compile whose asking meets what a worker cannot decide -- a forwarder
+inlined with its call's arguments, which reads its frame's receiver; a
+parked callee, which the asking unparks; the function's typed code, or a
+call site whose facts do not hold what its derivation reads -- asks its
+inline sites on the goroutine as before, its callees lowered there, each
+kind counted (`JITGoroutineTimes`' `Eager` counts); a callee's typed code
+or such a site has the callee lowered and asked there alone
+(`EagerLate`). So does a compile while any method the build asks at a PC
+is neither derived nor asked by a gather (`jitSnapNodesBlocked`), which a
+node, its program not lowered on the goroutine, could not answer. A worker builds, optimizes and compiles
 from the snapshot
 (`jitRegJob`), touching nothing of the runtime's; and the runtime's
 goroutine installs it at a later check -- a sample (`jitRegHot`), at a call

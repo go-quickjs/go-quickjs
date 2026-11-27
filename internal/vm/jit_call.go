@@ -313,7 +313,7 @@ func (f *jitRegFeedback) regCallTargets(t *jitRegTargets, pc int, w bytecode.RIn
 func (q *jitCallCtx) callTargets(t *jitRegTargets, pc int, w bytecode.RInstr, argc int, method bool) {
 	src := q.src
 	l := src.learned()
-	rpc := int32(q.p.Origin[pc])
+	rpc := int32(q.rpcOf(pc))
 	newW := w.Op() == bytecode.RNewW
 	calls := src.calls(int(w.C()))
 	// A site whose cache the interpreter has not filled, or not made yet
@@ -1506,6 +1506,41 @@ func (f *jitRegFeedback) regCallSite(pc int, o *Object, cl *closure, rc *regCode
 	return q.callSite(pc, o, cl, rc, argc, method, pool, parent, byCode, via)
 }
 
+// rpcOf is the register pc of q's program's instruction pc; of pc itself,
+// a register pc, where q has no program (jitCallCtx's p): a gather's
+// question of a call by its register instruction (jit_snapwalk.go).
+func (q *jitCallCtx) rpcOf(pc int) int {
+	if q.p == nil {
+		return pc
+	}
+	return int(q.p.Origin[pc])
+}
+
+// instr is the register instruction of q's program's instruction pc, or of
+// register pc pc where q has no program.
+func (q *jitCallCtx) instr(pc int) (bytecode.RInstr, bool) {
+	if q.p == nil {
+		if pc < 0 || pc >= len(q.rc.Code) {
+			return 0, false
+		}
+		return q.rc.Code[pc], true
+	}
+	w, _, ok := jitRegAt(q.p, q.rc, pc)
+	return w, ok
+}
+
+// window is the first register of the window of the call at q's program's
+// instruction pc past its function's (ssa.CallSite's Window); where q has
+// no program, of the call at register pc pc, its window as the lowering
+// makes it of a call's own registers (the call's A) -- not of a call it
+// gives a literal's copy (RMarkLitArg), whose window is its own.
+func (q *jitCallCtx) window(pc int) int {
+	if q.p == nil {
+		return int(q.rc.Code[pc].A()) + 1
+	}
+	return q.p.Code[pc].Left.Slot + 1
+}
+
 // callSite is regCallSite's, of q's source.
 func (q *jitCallCtx) callSite(pc int, o *Object, cl *closure, rc *regCode, argc int, method bool, pool *abi.ObjectPool, parent *Object, byCode, via bool) (ssa.CallSite, bool) {
 	src := q.src
@@ -1532,7 +1567,7 @@ func (q *jitCallCtx) callSite(pc int, o *Object, cl *closure, rc *regCode, argc 
 			Callee: uintptr(unsafe.Pointer(o)), Closure: uintptr(unsafe.Pointer(cl)),
 			Entry: uintptr(unsafe.Pointer(&l.entry)), Count: uintptr(unsafe.Pointer(&l.in)),
 			Argc: argc, Method: true, Params: 2 + int(rc.params), LocalCount: int(rc.numRegs), ThisSlot: -1,
-			Window: q.p.Code[pc].Left.Slot + 1, Via: uintptr(unsafe.Pointer(realm.callFn)),
+			Window: q.window(pc), Via: uintptr(unsafe.Pointer(realm.callFn)),
 			// x may be a primitive, which a sloppy G's this is coerced
 			// from by Go.
 			Coerce:    rc.coerceThis,
@@ -1544,7 +1579,7 @@ func (q *jitCallCtx) callSite(pc int, o *Object, cl *closure, rc *regCode, argc 
 		return site, true
 	}
 	forward := false
-	if w, _, ok := jitRegAt(q.p, q.rc, pc); ok && w.Op() == bytecode.RApplyArgs {
+	if w, ok := q.instr(pc); ok && w.Op() == bytecode.RApplyArgs {
 		// f.apply(x, arguments) (ssa.CallSite's Forward): f's receiver x,
 		// as a method call's; its arguments the frame's, as many as its
 		// context holds (mir's checks), none known here.
@@ -1578,7 +1613,7 @@ func (q *jitCallCtx) callSite(pc int, o *Object, cl *closure, rc *regCode, argc 
 		Callee: uintptr(unsafe.Pointer(o)), Closure: uintptr(unsafe.Pointer(cl)),
 		Entry: uintptr(unsafe.Pointer(&l.entry)), Count: uintptr(unsafe.Pointer(&l.in)),
 		Argc: argc, Method: method, Params: 2 + int(rc.params), LocalCount: int(rc.numRegs), ThisSlot: -1,
-		Window: q.p.Code[pc].Left.Slot + 1,
+		Window: q.window(pc),
 		// A callee that keeps its arguments -- reads arguments, has a rest
 		// parameter -- is given all of them and their count in its context
 		// (abi.Context's Args), which the frames Go makes of its level have

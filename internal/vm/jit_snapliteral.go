@@ -86,6 +86,13 @@ func gatherLiteral(s *jitSnapshot, fb *jitRegFeedback) {
 		before := s.begin(fb.fb)
 		r0, r1 := fb.literalSite(fb.literalOf(rpc, w))
 		eff := s.end(fb.fb, before)
+		if eff != 0 {
+			// Its pool, which the snapshot asks the root of ahead
+			// (jitSnapData's pools): bound on the worker, a callee's answer
+			// is not among those asked before it.
+			own, kept := s.root.lists(s.effects[eff-1])
+			s.root.d.pools = append(append(s.root.d.pools, own.pools...), kept.pools...)
+		}
 		if r1 || eff != 0 {
 			d.lits = append(d.lits, jitPropAsked[jitSnapAnsLiteral]{rpc: int32(rpc), eff: eff, ok: r1, v: jitSnapAnsLiteral{r0, r1}})
 		}
