@@ -782,6 +782,89 @@ func (w *jitParkWalkForTest) walk(v reflect.Value) {
 	}
 }
 
+// A parking parks what the running since the last pays for, at what each
+// entry the last parked cost (parkEach), the least recently used first:
+// after a parking of one function's code, a turn that compiles six and
+// has run six times what that one cost parks six entries at its return,
+// the six the cache last saw used before the turn, not the six the turn
+// ran; paced by the last parking's cost whatever it parked, it had parked
+// all twelve, and Octane's DeltaBlue, run once after Richards, its 17 to
+// 23 functions at its end, inside its time. Each parking costs a step
+// here, whatever it parks.
+func TestJITParkSomeOldestFirst(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const step = time.Microsecond
+	run, _ := jitParkClockForTest(t, step)
+	// Each function's code an entry of its own, none inlined in the
+	// turns' loops.
+	jitNoInlineForTest(t, "")
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	var src strings.Builder
+	for i := 0; i <= 12; i++ {
+		fmt.Fprintf(&src, "function f%d(n) { var s = %d; for (var i = 0; i < n; i++) s = (s + i * %d) | 0; return s }\n", i, i, i+1)
+	}
+	if _, err := r.Run(compileForTest(t, src.String())); err != nil {
+		t.Fatal(err)
+	}
+	s := r.jitState()
+	if s.parkings != 0 {
+		t.Fatalf("%d parkings of a cache that held no code", s.parkings)
+	}
+	hot := func(from, to int) {
+		t.Helper()
+		var b strings.Builder
+		for i := from; i <= to; i++ {
+			fmt.Fprintf(&b, "for (var k = 0; k < 300; k++) f%d(100);\n", i)
+		}
+		if _, err := r.Run(compileForTest(t, b.String())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key := func(i int) jitKey { return r.jitRegKeyOf(jitGlobalClosure(r, fmt.Sprintf("f%d", i))) }
+	// The first parking, which no parking measured before: all the cache
+	// holds, f0's code among it.
+	run(time.Second)
+	hot(0, 0)
+	if s.parkings != 1 || s.regParked[key(0)] == nil {
+		t.Fatalf("f0's turn: %d parkings, f0 parked: %v", s.parkings, s.regParked[key(0)] != nil)
+	}
+	each := s.parkEach()
+	if each <= 0 {
+		t.Fatalf("a parking of %d entries measured as costing %v", s.parkedLast, s.parkCost)
+	}
+	// f1 to f6 compiled, in a turn too short to pay for parking any, and
+	// seen used by the cache's look.
+	hot(1, 6)
+	if s.parkings != 1 {
+		t.Fatalf("%d parkings after a turn that paid for none", s.parkings)
+	}
+	s.regAge(1)
+	// What the cache holds now, f1 to f6's code and their turn's loop's.
+	var old []jitKey
+	for k := range s.regCache {
+		old = append(old, k)
+	}
+	// f7 to f12 compiled in a turn that ran what parking as many entries
+	// costs.
+	run(time.Duration(len(old)) * jitParkPays * each)
+	hot(7, 12)
+	if s.parkings != 2 || s.parkedLast != len(old) {
+		t.Fatalf("%d parkings, the last of %d entries; want a second, of %d", s.parkings, s.parkedLast, len(old))
+	}
+	for _, k := range old {
+		if s.regParked[k] == nil {
+			t.Errorf("%s's code, of the turn before, not parked", k.Value().Name)
+		}
+	}
+	for i := 7; i <= 12; i++ {
+		if s.regParked[key(i)] != nil {
+			t.Errorf("f%d's code, of the turn that paid, parked", i)
+		}
+	}
+}
+
 // A parking measures what it cost by a clock that resolves it (parkSpan):
 // a parking of f's code, some microseconds of walking it, costs more than
 // none, so that the next is due only once the program has run some

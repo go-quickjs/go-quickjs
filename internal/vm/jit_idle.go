@@ -5,6 +5,7 @@ package vm
 import (
 	"math"
 	"reflect"
+	"sort"
 	"sync"
 	"time"
 	"unsafe"
@@ -21,9 +22,10 @@ import (
 // code and what that holds, and the process's idle workspaces
 // (jit.DropIdleWorkspaces), until it ran again; the code parked a flush
 // age goes (regAgeParked); and, once the program has run long enough since
-// the last parking to pay for it (parkDue), the cache parks its code
-// (jitRegPark). The looks are the flush's own and a comparison of times,
-// so most of a host's short calls pay two clocks' reads.
+// the last parking to pay for parking some of its code (parkDue), the
+// cache parks that much of it, the least recently used first
+// (jitRegParkSome). The looks are the flush's own and a comparison of
+// times, so most of a host's short calls pay two clocks' reads.
 func jitReturned(r *Runtime) {
 	s := r.jit
 	if s == nil {
@@ -34,9 +36,11 @@ func jitReturned(r *Runtime) {
 	}
 	s.flush()
 	s.regAgeParked(s.flushNow(), r.jitStress.park)
-	if r.jitStress.park || s.parkDue() {
-		// QJS_JIT_STRESS's park: at every return.
+	if r.jitStress.park {
+		// QJS_JIT_STRESS's park: all the code, at every return.
 		s.jitRegPark()
+	} else if n := s.parkDue(); n > 0 {
+		s.jitRegParkSome(n)
 	}
 }
 
@@ -44,27 +48,55 @@ func jitReturned(r *Runtime) {
 // the code it parks, the unparkings of that code its uses take after, and
 // the compiles again of the code it lost, whose objects died while it
 // was parked -- the program must have run since the last parking before
-// it parks again (parkDue). That cost is what parking measures; what it
-// costs besides -- native callers leaving for Go to unpark a callee, the
-// pools filled anew, the learned state copied -- came to some one and a
-// half times as much again where a host's calls return every few
-// milliseconds (the fresh suite's runs again of a kept runtime's code,
-// 3 to 5% slower at 50 against parking once a flush age, 1 to 2% at
-// 200). So some 1 to 2% of the running goes to parking however often a
-// host's calls return, and the code a turn compiled is parked at the
-// first return that has paid for it, not a flush age after the last
-// parking, which a program's last turn may never reach: Octane's
-// Typescript, run after a parking, had kept its code and through it some
-// 190 MB of its heap after the run.
+// it parks again, for each entry it parks (parkDue, parkEach). That cost
+// is what parking measures; what it costs besides -- native callers
+// leaving for Go to unpark a callee, the pools filled anew, the learned
+// state copied -- came to some one and a half times as much again where a
+// host's calls return every few milliseconds (the fresh suite's runs again
+// of a kept runtime's code, 3 to 5% slower at 50 against parking once a
+// flush age, 1 to 2% at 200). So some 1 to 2% of the running goes to
+// parking however often a host's calls return, and the code a turn
+// compiled is parked at the returns that have paid for it, the least
+// recently used first, not a flush age after the last parking, which a
+// program's last turn may never reach: Octane's Typescript, run after a
+// parking, had kept its code and through it some 190 MB of its heap after
+// the run.
 const jitParkPays = 200
 
-// parkDue reports whether the program has run jitParkPays times what the
-// last parking and the unparkings since cost (parkCost, measured by
-// parkSpan) since it ended (parkRun). A turn too short to measure has run
-// nothing.
-func (s *jitState) parkDue() bool {
+// parkDue is how many entries of its code the cache may park now (none,
+// 0): as many as the program's running since the last parking ended
+// (parkRun) pays for, jitParkPays times what each of the last parking's
+// entries cost (parkEach); all it holds where no parking has measured an
+// entry yet. A turn too short to measure has run nothing, and a cache
+// that holds no code has nothing to park.
+func (s *jitState) parkDue() int {
+	n := len(s.regCache)
+	if n == 0 {
+		return 0
+	}
 	ran := s.parkClock() - s.parkRun
-	return ran > 0 && ran >= jitParkPays*s.parkCost
+	if ran <= 0 {
+		return 0
+	}
+	if each := s.parkEach(); each > 0 {
+		n = int(min(ran/(jitParkPays*each), time.Duration(n)))
+	}
+	return n
+}
+
+// parkEach is what parking an entry costs: what the last parking that
+// parked code, the unparkings since and the compiles again of the code it
+// lost cost (parkCost, measured by parkSpan), for each entry it parked
+// (parkedLast); before any, what the looks that parked nothing cost,
+// none at the first. A parking's walk, the unparkings after and the
+// compiles again are each an entry's, so that a parking is paid for by
+// what it parks: paced by the last parking's cost whatever it parked, a
+// parking of one function's code had made one of seventeen due after a
+// fiftieth of the running that paid for it -- Octane's DeltaBlue run
+// once, 8 ms, parked its code at its end, inside its time, after
+// Richards had parked one function's.
+func (s *jitState) parkEach() time.Duration {
+	return s.parkCost / time.Duration(max(s.parkedLast, 1))
 }
 
 // parkClock is parking's clock: the program's time (running); where a test
@@ -567,9 +599,18 @@ func (s *jitState) regAgeParked(tick uint64, all bool) {
 	}
 }
 
-// jitRegPark parks the code no run, native call or compile uses (see
-// Parking above), and measures what that cost (parkDue).
+// jitRegPark parks all the code no run, native call or compile uses (see
+// Parking above).
 func (s *jitState) jitRegPark() {
+	s.jitRegParkSome(len(s.regCache))
+}
+
+// jitRegParkSome parks n of the entries whose code no run, native call or
+// compile uses, the least recently used first (jitParkCands), as code
+// ages, so that a parking costs what the running since the last paid for
+// (parkDue) while the cache's code is parked a slice at a time, the code a
+// program no longer runs first; and measures what that cost (parkEach).
+func (s *jitState) jitRegParkSome(n int) {
 	if s.inFlight() || len(s.regBuilds) != 0 {
 		// A compile under way reads the feedback of the functions it
 		// inlines and calls, which a parked entry's state is not: the
@@ -587,17 +628,59 @@ func (s *jitState) jitRegPark() {
 		s.parkedOldest = tick
 	}
 	called := s.regCalledFns()
-	// Each object's weak pointer made once, for every slot that holds it.
-	weaks := map[unsafe.Pointer]weak.Pointer[byte]{}
+	var cands jitParkCands
 	for key, e := range s.regCache {
 		if e.code == nil || e.parked != nil || s.regInUseOf(e, called) || key.gone() ||
 			e == s.regGoOnFrom || e == s.regGoMark.e || e.osrJob != nil {
 			continue
 		}
-		s.regParkEntry(key, e, tick, weaks)
+		cands = append(cands, jitParkCand{key, e, s.regUsedAt(e)})
+	}
+	if len(cands) > n {
+		sort.Sort(cands)
+		cands = cands[:n]
+	}
+	// Each object's weak pointer made once, for every slot that holds it.
+	weaks := map[unsafe.Pointer]weak.Pointer[byte]{}
+	for _, c := range cands {
+		s.regParkEntry(c.key, c.e, tick, weaks)
+	}
+	if len(cands) == 0 {
+		// A look that parked nothing costs what it did besides what the
+		// last parking cost, and the running since that parking goes on
+		// paying for both.
+		s.parkCost += s.parkSpan() - from
+		return
 	}
 	s.parkCost = s.parkSpan() - from
+	s.parkedLast = len(cands)
 	s.parkRun = s.parkClock()
+}
+
+// jitParkCand is an entry a parking may park, with the epoch the cache
+// last saw it used at (regUsedAt).
+type jitParkCand struct {
+	key jitKey
+	e   *jitRegEntry
+	at  uint64
+}
+
+// jitParkCands are a parking's candidates, the least recently used first
+// once sorted.
+type jitParkCands []jitParkCand
+
+func (c jitParkCands) Len() int           { return len(c) }
+func (c jitParkCands) Less(i, j int) bool { return c[i].at < c[j].at }
+func (c jitParkCands) Swap(i, j int)      { c[i], c[j] = c[j], c[i] }
+
+// regUsedAt is the epoch the cache last saw e used at (jitRegEntry's
+// used, which its looks set, regAge), the latest of all where e was used
+// since the last look.
+func (s *jitState) regUsedAt(e *jitRegEntry) uint64 {
+	if s.regUses(e) != e.seen {
+		return math.MaxUint64
+	}
+	return e.used
 }
 
 // regParkEntry parks e, the code of the function whose key is key.

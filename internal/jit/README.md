@@ -4145,16 +4145,27 @@ finalizer runs after the collector found the object dead, on another
 goroutine, by which time a sweep may have given the object's memory to a
 new object that code comparing the old address would take for it. So code
 holds its objects strongly while it may run and weakly only while it
-cannot. As the runtime returns to its host with no frame running, once
-the program has run, since the last parking ended, 200 times what that
-parking, the unparkings since and the compiles again of the code it lost
-cost (`jitReturned`, `parkDue`, `jitParkPays`: what parking costs besides
-came to some one and a half times that, so parking's share of the running
-is some 1 to 2%; and a turn too short to measure parks nothing) -- a cost
-measured by a clock that resolves microseconds (`parkSpan`,
-internal/spanclock), since Go's on Windows moves at the timer's tick and
-read most parkings as costing nothing, which had the runtime park at
-nearly every return -- the cache parks its code no
+cannot. As the runtime returns to its host with no frame running, the
+cache parks as many entries as the program's running since the last
+parking ended pays for at 200 times what each entry of that parking --
+its walk, the unparkings since and the compiles again of the code it
+lost -- cost (`jitReturned`, `parkDue`, `parkEach`, `jitParkPays`: what
+parking costs besides came to some one and a half times that, so
+parking's share of the running is some 1 to 2%; a turn too short to
+measure parks nothing, and the first parking, which nothing measured
+before, all the code), a cost measured by a clock that resolves
+microseconds (`parkSpan`, internal/spanclock), since Go's on Windows
+moves at the timer's tick and read most parkings as costing nothing,
+which had the runtime park at nearly every return. It parks the least
+recently used first, by the epoch the cache last saw each used at
+(`regUsedAt`, `jitRegParkSome`), as code ages, so that no parking costs
+more than the running before it paid for while the cache's code is
+parked a slice at a time, the code a program has stopped running first:
+paced by the last parking's cost whatever it parked, a parking of one
+function's code had made one of seventeen due after a fiftieth of the
+running that paid for it, and Octane's DeltaBlue, run once after
+Richards, parked its 17 to 23 functions at its end, inside its time. It
+parks only code no
 run, native call or compile uses, valid or invalidated: out of the cache
 (`regParked`), its link cleared, so that native callers call Go, its entry
 marked not cached, so that its templates' calls take the path code let go

@@ -1513,10 +1513,12 @@ type jitState struct {
 	// (regAgeParked).
 	regParked    map[jitKey]*jitRegEntry
 	parkedOldest uint64
-	// parkRun is parking's clock (parkClock) as the last parking ended,
-	// and parkCost what it and the unparkings since cost (parkSpan,
-	// parkDue).
+	// parkRun is parking's clock (parkClock) as the last parking that
+	// parked code ended, parkCost what it, the unparkings since and the
+	// looks since that parked nothing cost (parkSpan), and parkedLast the
+	// entries it parked (parkDue, parkEach).
 	parkRun, parkCost time.Duration
+	parkedLast        int
 	// parkedPools are the object pools of parked code, each with what its
 	// source holds weakly (jitParked's pools).
 	parkedPools map[*abi.ObjectPool]*jitParked
