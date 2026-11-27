@@ -50,8 +50,12 @@ func TestAllocateRandom(t *testing.T) {
 // its definition: blocks each to the next, some forward or back as well,
 // and in most functions a block on each critical edge, where its moves
 // go.
-func randomFunc(rng *rand.Rand) *Func {
-	nb := 1 + rng.IntN(8)
+func randomFunc(rng *rand.Rand) *Func { return randomFuncOf(rng, 8, 12) }
+
+// randomFuncOf is randomFunc's function of up to maxBlocks blocks before
+// those of its edges, each of up to maxInsts instructions.
+func randomFuncOf(rng *rand.Rand, maxBlocks, maxInsts int) *Func {
+	nb := 1 + rng.IntN(maxBlocks)
 	succs := make([][]int, nb)
 	for i := 0; i < nb-1; i++ {
 		succs[i] = append(succs[i], i+1)
@@ -208,7 +212,7 @@ func randomFunc(rng *rand.Rand) *Func {
 				defs[i] = append(defs[i], d)
 			}
 		}
-		n := 1 + rng.IntN(12)
+		n := 1 + rng.IntN(maxInsts)
 		if i >= nb0 {
 			// A block of an edge: few instructions, or none.
 			n = rng.IntN(3)
@@ -431,6 +435,84 @@ func TestLivenessMethods(t *testing.T) {
 		}
 		if !sameResult(f, a, b) {
 			t.Fatalf("iteration %d: the two liveness methods allocate differently", iter)
+		}
+	}
+}
+
+// TestSlotScanMethods allocates random functions, small ones and ones of
+// many blocks, whose webs need many slots, and manySlotsFunc's, with the
+// slots' scan finding each web's first slot by testing each in turn, by
+// the slots' keys past slotTreeMin slots, and by the keys from the first,
+// which must give the same allocation.
+func TestSlotScanMethods(t *testing.T) {
+	rng := rand.New(rand.NewPCG(31, 37))
+	classes := [][][]int{{{3, 1, 0, 2}, {0, 1, 2}}, {{0, 1, 2, 3}, {2, 1, 0}}}
+	var al, lin, tree Allocator
+	many := 0
+	defer func() {
+		t.Logf("%d of 3000 large functions need %d slots or more", many, slotTreeMin)
+		if many < 300 {
+			t.Errorf("only %d of 3000 large functions need %d slots or more", many, slotTreeMin)
+		}
+	}()
+	for iter := range 6000 {
+		var f *Func
+		if iter%2 == 0 {
+			f = randomFunc(rng)
+		} else {
+			f = randomFuncOf(rng, 24, 40)
+		}
+		cfg := Config{Classes: classes[iter%len(classes)], NumSlots: 1 << 16}
+		switch iter / len(classes) % 4 {
+		case 1:
+			cfg.Displace = true
+		case 2:
+			cfg.StressSplit = true
+		case 3:
+			cfg.NoSplit = true
+		}
+		res, err := al.Allocate(f, &cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if iter%50 == 0 {
+			checkAllocation(t, iter, f, &cfg, res)
+		}
+		if res.NumSlots >= slotTreeMin {
+			many++
+		}
+		lcfg, tcfg := cfg, cfg
+		lcfg.slots, tcfg.slots = slotsLinear, slotsTree
+		a, err := lin.Allocate(f, &lcfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sameResult(f, res, a) {
+			t.Fatalf("iteration %d: the scans by the keys and of each slot in turn allocate differently", iter)
+		}
+		b, err := tree.Allocate(f, &tcfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sameResult(f, a, b) {
+			t.Fatalf("iteration %d: the scans by the keys from the first slot and of each in turn allocate differently", iter)
+		}
+	}
+	for _, wide := range []bool{false, true} {
+		f := manySlotsFunc(500, 500, wide)
+		cfg := Config{Classes: [][]int{{0, 1, 2, 3}}, NumSlots: 1 << 20}
+		lcfg := cfg
+		lcfg.slots = slotsLinear
+		a, err := al.Allocate(f, &cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := lin.Allocate(f, &lcfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sameResult(f, a, b) {
+			t.Fatalf("wide %v: the scans by the keys and of each slot in turn allocate differently", wide)
 		}
 	}
 }

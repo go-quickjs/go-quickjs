@@ -198,6 +198,7 @@ type Allocator struct {
 	queue    []*web
 	partQ    webQueue
 	slots    [][]rng
+	slotScan slotScan
 	across   []acrossEntry
 	parts    []*web
 	next     []int32
@@ -1052,6 +1053,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	// a call. A web with a parameter has the slot the parameter arrives in,
 	// which holds nothing else from the function's start until then.
 	slots := al.slots[:0]
+	al.slotScan.reset(cfg.slots)
 	take := func(s int32, rs []rng) {
 		for int(s) >= len(slots) {
 			slots = append(slots, nil)
@@ -1077,14 +1079,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 		rs := al.slotRanges(w)
 		// The first slot from which width are free.
-		s := int32(0)
-		for k := int32(0); k < w.width; {
-			if int(s+k) < len(slots) && overlap(slots[s+k], rs) {
-				s, k = s+k+1, 0
-				continue
-			}
-			k++
-		}
+		s := al.slotScan.first(slots, rs, w.width)
 		if int(s+w.width) > cfg.NumSlots {
 			clear(slots)
 			al.slots = slots[:0]
@@ -1093,6 +1088,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		w.slot = s
 		for k := range w.width {
 			take(s+k, rs)
+			al.slotScan.taken(slots, s+k)
 		}
 	}
 	nslots := len(slots)

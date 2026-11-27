@@ -226,6 +226,10 @@ type Config struct {
 	// dataflow has the allocation find liveness by the dataflow, for the
 	// tests that compare it with explore.
 	dataflow bool
+	// slots has the slots' scan test each slot in turn (slotsLinear) or
+	// keep the slots' keys from the first (slotsTree), for the tests that
+	// compare the two.
+	slots slotsMode
 	// mutateHoles has the allocation punch holes that leave a position
 	// where the webs meet out, for the test that the checks find it.
 	mutateHoles bool
