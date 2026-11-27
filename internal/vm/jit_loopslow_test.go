@@ -153,3 +153,64 @@ func TestJITSlowResumptionsLookSeldom(t *testing.T) {
 		t.Fatalf("%d resumptions counted %d toward a retry", n, c)
 	}
 }
+
+// Code compiled again is judged afresh at its loops too (jitRegCached): a
+// loop whose code was found slow there (loopSlow) -- its stretches each a
+// turn, left at an inlined callee's exit, the inlining given up after 16 of
+// them while the 64 stretches found the loop slow -- had Go enter the code
+// compiled without the inlining at no loop until it was retried, after
+// 1,024 looks: microbench's args_read ran 996,348 of its 1,048,576 turns
+// in the interpreter, its callee's native code called through Go at each.
+// Code compiled again only to give up the entries kept for a frame does
+// as it did, and keeps its judgement.
+func TestJITLoopJudgedAfreshCompiledAgain(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	runtime.GC()
+	defer holdCollectorNow(t)()
+	// compileAgain compiles sum anew, as a compile for what its code
+	// learned would, while its frame runs in the interpreter.
+	compileAgain := func(rt *Runtime) {
+		rt.global.setOwnRaw(rt.atoms.intern("compileAgain"), rt.NewFunction("compileAgain", 0,
+			func(rt *Runtime, _ Value, _ []Value) (Value, error) {
+				if rt.jit != nil {
+					cl := rt.global.getOwn(rt.atoms.intern("sum")).value().Object().fn().closure
+					if e := rt.jitRegCompileFor(cl, cl.reg, rt.jitRegKeyOf(cl), false); e == nil || e.code == nil {
+						return Undefined, rt.throwTypeError("sum not compiled again")
+					}
+				}
+				return Undefined, nil
+			}), propDefault)
+	}
+	r, want := jitAnswersWithForTest(t, `
+		function sum(n, again) {
+			var s = 0;
+			for (var j = 0; j < n; j++) {
+				if (j === again)
+					compileAgain();
+				s = (s + j * 3) | 0;
+			}
+			return s;
+		}`, compileAgain)
+	want(`sum(100000, -1)`, "2114948112")
+	life := jitNativeForTest(t, r, "sum")
+	// Judged slow at its start and at its loop, as its stretches judge
+	// code that does not pay for them (jitRegStretchWork).
+	life.entrySlow, life.loopSlow = true, true
+	entries := life.ssaStats.entries
+	want(`sum(100000, -1)`, "2114948112")
+	if life.ssaStats.entries != entries {
+		t.Fatalf("sum, judged slow, entered %d times", life.ssaStats.entries-entries)
+	}
+	// Compiled again half way through its loop: entered at the loop for
+	// the rest of it, in each of the two calls.
+	life.entrySlow, life.loopSlow = true, true
+	want(`sum(100000, 50000)`, "2114948112")
+	if life.ssaStats.entries == entries {
+		t.Fatal("sum, compiled again, not entered at its loop")
+	}
+	if life.loopSlow {
+		t.Fatal("sum compiled again: still judged slow at its loop")
+	}
+}

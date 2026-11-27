@@ -296,13 +296,22 @@ func (r *Runtime) jitRegCached(key jitKey, e *jitRegEntry) {
 		life.nativeOut, life.notNative, life.nativeRetry, life.entrySlow = 0, false, 0, false
 		if !life.keptGone {
 			// Judged by what it does from now on (its ssaStats begun
-			// afresh); what it did stays counted for its report. But code
-			// compiled again only to give up the entries kept for a frame
-			// (jitRegKeptGone) does as it did, and is judged by all of it.
+			// afresh), at its loops too (loopSlow); what it did stays
+			// counted for its report. But code compiled again only to give
+			// up the entries kept for a frame (jitRegKeptGone) does as it
+			// did, and is judged by all of it. Judged at its loops by the
+			// code before, a loop whose first code left at each turn in a
+			// callee it inlined -- the inlining given up for it
+			// (jitInlineLeft), at 16 such exits, while the stretches they
+			// ended found the loop slow at 64 -- ran in the interpreter
+			// for the rest of its invocation, though the code compiled
+			// without the inlining left no more: microbench's args_read,
+			// 1,048,576 turns at a call, ran 996,348 of them so.
 			st := &life.ssaStats
 			st.judged = st.stretches()
 			st.workBase, st.stretchBase = st.work, st.judged
 			st.runGoCalls, st.runWork, st.osrStretches, st.osrWork = 0, 0, 0, 0
+			life.loopSlow = false
 		}
 		// Its calls of Go as a native callee too, against its native
 		// callers' calls counted afresh (its link's in, above): counted

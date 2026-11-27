@@ -1370,10 +1370,14 @@ caller makes of it through Go counts, whether Go enters it or not
 (`jitRegKnownCallee`, from `jitRegCallSeenOf`), as do Go's entries
 of it at its start. Compiled again, it is judged afresh: entered, and
 called natively, until the new code is found not to pay in turn
-(`jitRegCached`) -- at its loops too
-where it was compiled again for a generator's step or making it learned
-(`genLearned`, from `jitRegGenLearned`), the steps that each were a call of
-Go now native; its calls of Go as a
+(`jitRegCached`) -- at its loops too (`loopSlow`): judged there by the code
+before, a loop whose first code left at an inlined callee's exit at each
+turn, the inlining given up for it after 16 such exits while 64 stretches
+found the loop slow, ran in the interpreter for the rest of its invocation.
+Code compiled again only to give up the entries kept for a frame keeps its
+judgement, but where it was compiled again for a generator's step or
+making it learned (`genLearned`, from `jitRegGenLearned`), the steps that
+each were a call of Go now native; its calls of Go as a
 native callee are counted afresh with its native callers' calls into it
 (its link's `in`) wherever those are -- compiled again, compiled again for
 leaving (`jitRegUnwound`), called natively again -- as its stats
