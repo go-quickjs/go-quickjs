@@ -4165,7 +4165,15 @@ into the structures the entry owns alone (`jitParkInto`) and no other --
 but for the package's own static objects, the caches' sentinels and
 `absentHolder` (`jitParkStatic`), which are the binary's data rather than
 the heap's, which a weak pointer cannot be made to, and never die: their
-slots keep them; its pools are emptied of the objects made for them, filled again from
+slots keep them. The walk goes by plans (`jitParkPlan`), one a type, made
+once for the process at its first parking from the types' fields, each
+the offsets of what a value of the type holds, walks into or empties, so
+that a parking reads no type's description; and a parking makes each
+object's weak pointer once, however many slots hold it -- Octane's code,
+114,000 slots, holds 4,900 objects. A walk by reflection of each value
+had cost a parking of DeltaBlue's 14 entries 170 us on a Ryzen 5 3600,
+two thirds of it reflection's and a third the weak pointers'; by the
+plans, 57. Its pools are emptied of the objects made for them, filled again from
 their sources when the code next runs out, and its function's learned
 state, which other functions' compiles read, is a copy that holds no
 object meanwhile (`regForgotten`). No compile is under way then: the

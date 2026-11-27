@@ -7,7 +7,10 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"math"
+	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -15,6 +18,8 @@ import (
 	"time"
 	"unsafe"
 	"weak"
+
+	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 )
 
 // jitParkSource is a program whose f calls g natively, f's code holding
@@ -481,6 +486,302 @@ func TestJITParkingsBounded(t *testing.T) {
 	}
 }
 
+// jitParkPlanProgram is code whose compiles meet much of what an entry
+// holds: closures called natively and inlined, literals' pools, shapes
+// and prototypes, accessors, cells of constants, typed arrays, calls of
+// built-ins and constructions.
+const jitParkPlanProgram = `
+	function Point(x, y) { this.x = x; this.y = y }
+	Point.prototype.norm = function () { return this.x * this.x + this.y * this.y };
+	Object.defineProperty(Point.prototype, 'sum', { get() { return this.x + this.y } });
+	var bytes = new Uint8Array(64);
+	function make(k) { return function (i) { return bytes[i & 63] + k + i } }
+	var g = make(3), h = make(5);
+	function lit(i) { return { a: i, b: [i, i + 1], c: 'k' + (i & 3), f: () => i } }
+	function arr(n) { var a = []; for (var i = 0; i < n; i++) a.push(new Point(i, -i)); return a }
+	function run(n) {
+		var s = 0, a = arr(8);
+		for (var i = 0; i < n; i++) {
+			var o = lit(i), p = a[i & 7];
+			s = (s + g(i) + h(i) + o.b[1] + p.norm() + p.sum + Math.max(i, 3) + o.c.length) | 0;
+			bytes[i & 63] = s & 255;
+		}
+		return s;
+	}`
+
+// A parking finds, by its plans (jitParkPlan), exactly the pointers
+// reflect's walk of what it parks finds: the slots it holds weakly and the
+// pools it empties, its pools' sources' slots among them, entry by entry,
+// over the code the program above compiles and, where
+// QUICKJS_PARK_PLAN_DIRS names directories of Octane's or the V8 suite's
+// files, every benchmark's of each run once.
+func TestJITParkPlanMatchesWalk(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	suites := []jitParkPlanSuite{{"program", []string{jitParkPlanProgram}, `run(500)`, 3}}
+	if dirs := os.Getenv("QUICKJS_PARK_PLAN_DIRS"); dirs != "" {
+		for _, dir := range filepath.SplitList(dirs) {
+			names, err := filepath.Glob(filepath.Join(dir, "*.js"))
+			if err != nil {
+				t.Fatal(err)
+			} else if len(names) == 0 {
+				t.Fatalf("%s: no .js files", dir)
+			}
+			s := jitParkPlanSuite{name: dir, run: `(() => {
+				for (const s of BenchmarkSuite.suites) for (const b of s.benchmarks) {
+					// A benchmark that needs what the host gives, as eval, is left out.
+					try { b.Setup(); b.run(); b.TearDown() } catch (e) {}
+				}
+				return 0 })()`}
+			// base.js first; run.js, the suite's own driver, not at all.
+			slices.Sort(names)
+			slices.SortStableFunc(names, func(a, b string) int {
+				return cmpBool(filepath.Base(b) == "base.js", filepath.Base(a) == "base.js")
+			})
+			for _, n := range names {
+				if filepath.Base(n) == "run.js" {
+					continue
+				}
+				b, err := os.ReadFile(n)
+				if err != nil {
+					t.Fatal(err)
+				}
+				s.src = append(s.src, string(b))
+			}
+			suites = append(suites, s)
+		}
+	}
+	for _, su := range suites {
+		// Each suite's runtime a subtest's, let go of at its end.
+		t.Run(filepath.Base(su.name), func(t *testing.T) { jitParkPlanCheck(t, su) })
+	}
+}
+
+// jitParkPlanSuite is a program TestJITParkPlanMatchesWalk parks the code
+// of: its files, and what runs it.
+type jitParkPlanSuite struct {
+	name string
+	src  []string
+	run  string
+	// runs is how many times run runs before the parking, and once
+	// after; none, once before and not after.
+	runs int
+}
+
+// jitParkPlanCheck runs su's files, then its run, and parks
+// the code compiled entry by entry, holding each parking to reflect's walk.
+func jitParkPlanCheck(t *testing.T, su jitParkPlanSuite) {
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	// Nothing parks but what the test parks.
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.parkNow = func() time.Duration { return 0 } })
+	for i, src := range su.src {
+		if _, err := r.Run(compileForTest(t, src)); err != nil {
+			if i == 0 {
+				t.Fatalf("%s: %v", su.name, err)
+			}
+			// A file that needs what the host gives, as eval.
+			t.Logf("%s: file %d: %v", su.name, i, err)
+		}
+	}
+	// A suite's code compiled once at its first call, the threshold one; a
+	// suite run again keeps what each run made, as much as the memory has.
+	for i := 0; i < max(1, su.runs); i++ {
+		if _, err := r.Run(compileForTest(t, su.run)); err != nil {
+			t.Fatalf("%s: %v", su.name, err)
+		}
+	}
+	s := r.jit
+	var keys []jitKey
+	for key, e := range s.regCache {
+		if e.code != nil && !key.gone() && !s.regInUse(e) {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		t.Fatalf("%s: nothing compiled", su.name)
+	}
+	weaks := map[unsafe.Pointer]weak.Pointer[byte]{}
+	slots := 0
+	for _, key := range keys {
+		e := s.regCache[key]
+		want := &jitParkWalkForTest{s: s, poolSlots: map[*abi.ObjectPool][]*unsafe.Pointer{}}
+		if e.keep != nil {
+			want.walk(reflect.ValueOf(e.keep).Elem())
+		}
+		want.walk(reflect.ValueOf(&e.targets).Elem())
+		if l := e.life; l != nil && l.jitLearned != nil {
+			want.walk(reflect.ValueOf(l.jitLearned).Elem())
+		}
+		s.regParkEntry(key, e, s.flushNow(), weaks)
+		p := e.parked
+		var got []*unsafe.Pointer
+		for _, sl := range p.slots {
+			got = append(got, sl.at)
+		}
+		if !slices.Equal(got, want.slots) {
+			missed := ""
+			for i, at := range want.slots {
+				if !slices.Contains(got, at) {
+					missed = want.paths[i]
+					break
+				}
+			}
+			t.Fatalf("%s: %s's code: the plans hold %d slots, reflect's walk %d, %s among them", su.name, key.Value().Name, len(got), len(want.slots), missed)
+		}
+		if !slices.Equal(p.pools, want.pools) {
+			t.Fatalf("%s: %s's code: the plans empty %d pools, reflect's walk %d", su.name, key.Value().Name, len(p.pools), len(want.pools))
+		}
+		for pool, ws := range want.poolSlots {
+			var gs []*unsafe.Pointer
+			for _, sl := range s.parkedPools[pool].slots {
+				gs = append(gs, sl.at)
+			}
+			if !slices.Equal(gs, ws) {
+				t.Fatalf("%s: %s's code: a pool's source: the plans hold %d slots, reflect's walk %d", su.name, key.Value().Name, len(gs), len(ws))
+			}
+		}
+		slots += len(got)
+	}
+	t.Logf("%s: %d entries parked, %d slots, %d objects", su.name, len(keys), slots, len(weaks))
+	// What was parked is put back as it was, and runs on.
+	if su.runs == 0 {
+		return
+	}
+	if _, err := r.Run(compileForTest(t, su.run)); err != nil {
+		t.Fatalf("%s: after the parking: %v", su.name, err)
+	}
+}
+
+// cmpBool orders false before true.
+func cmpBool(a, b bool) int {
+	switch {
+	case a == b:
+		return 0
+	case a:
+		return 1
+	}
+	return -1
+}
+
+// jitParkWalkForTest is the walk parking made by reflect before its plans,
+// which reads, and leaves, what a parking would hold: the slots, in the
+// order it meets them, the pools it would empty, and what the pools'
+// sources hold that no parking emptied yet.
+type jitParkWalkForTest struct {
+	s         *jitState
+	slots     []*unsafe.Pointer
+	pools     []*abi.ObjectPool
+	poolSlots map[*abi.ObjectPool][]*unsafe.Pointer
+	seen      map[unsafe.Pointer]bool
+	held      map[*unsafe.Pointer]bool
+	src       *[]*unsafe.Pointer
+	// path is where the walk is, paths where it found each of slots.
+	path  []string
+	paths []string
+}
+
+func (w *jitParkWalkForTest) hold(at *unsafe.Pointer) {
+	// A slot reached again, by another of the structures that share it,
+	// a parking found cleared.
+	if *at == nil || jitParkStatic(*at) || w.held[at] {
+		return
+	}
+	if w.held == nil {
+		w.held = map[*unsafe.Pointer]bool{}
+	}
+	w.held[at] = true
+	if w.src != nil {
+		*w.src = append(*w.src, at)
+		return
+	}
+	w.slots = append(w.slots, at)
+	w.paths = append(w.paths, strings.Join(w.path, "."))
+}
+
+func (w *jitParkWalkForTest) once(x unsafe.Pointer) bool {
+	if w.seen[x] {
+		return false
+	}
+	if w.seen == nil {
+		w.seen = map[unsafe.Pointer]bool{}
+	}
+	w.seen[x] = true
+	return true
+}
+
+func (w *jitParkWalkForTest) walk(v reflect.Value) {
+	t := v.Type()
+	switch v.Kind() {
+	case reflect.Pointer:
+		if v.IsNil() {
+			return
+		}
+		at := (*unsafe.Pointer)(unsafe.Pointer(v.UnsafeAddr()))
+		switch {
+		case jitParkWeak[t]:
+			w.hold(at)
+		case t == jitParkPool:
+			pool := (*abi.ObjectPool)(*at)
+			if !w.once(*at) {
+				return
+			}
+			w.pools = append(w.pools, pool)
+			if w.s.parkedPools[pool] != nil {
+				return
+			}
+			if src := (*jitPoolSource)(pool.Source); src != nil {
+				var ss []*unsafe.Pointer
+				sw := &jitParkWalkForTest{src: &ss}
+				sw.walk(reflect.ValueOf(src).Elem())
+				w.poolSlots[pool] = ss
+			}
+		case jitParkInto[t]:
+			if w.once(*at) {
+				w.walk(v.Elem())
+			}
+		}
+	case reflect.Struct:
+		if t == jitParkValue {
+			x := (*Value)(unsafe.Pointer(v.UnsafeAddr()))
+			if b := math.Float64bits(x.num); b == objectBits || b == accessorBits || b == templateBits {
+				w.hold(&x.ref)
+			}
+			return
+		}
+		if t.PkgPath() != jitParkValue.PkgPath() {
+			return
+		}
+		for i := range v.NumField() {
+			w.path = append(w.path, t.Name()+"."+t.Field(i).Name)
+			w.walk(v.Field(i))
+			w.path = w.path[:len(w.path)-1]
+		}
+	case reflect.Slice:
+		if t == jitParkCells {
+			for i := range v.Len() {
+				if c := v.Index(i); !c.IsNil() {
+					w.walk(c.Elem())
+				}
+			}
+			return
+		}
+		if !jitParkElem(t.Elem()) {
+			return
+		}
+		for i := range v.Len() {
+			w.walk(v.Index(i))
+		}
+	case reflect.Array:
+		if !jitParkElem(t.Elem()) {
+			return
+		}
+		for i := range v.Len() {
+			w.walk(v.Index(i))
+		}
+	}
+}
+
 // A parking measures what it cost by a clock that resolves it (parkSpan):
 // a parking of f's code, some microseconds of walking it, costs more than
 // none, so that the next is due only once the program has run some
@@ -589,4 +890,19 @@ func TestJITWorkspacesDroppedAtTheFlush(t *testing.T) {
 	if s.workLooks != looks+2 {
 		t.Fatalf("%d looks at the workspaces over two flush ages, want 2", s.workLooks-looks)
 	}
+}
+
+// jitParkElem reports whether elements of type t may hold what reflect's
+// walk weakens: a pointer of those types, a pool, a structure an entry
+// owns, or a struct or array of this package's.
+func jitParkElem(t reflect.Type) bool {
+	switch t.Kind() {
+	case reflect.Pointer:
+		return jitParkWeak[t] || jitParkInto[t] || t == jitParkPool
+	case reflect.Struct:
+		return t.PkgPath() == jitParkValue.PkgPath()
+	case reflect.Array, reflect.Slice:
+		return jitParkElem(t.Elem())
+	}
+	return false
 }

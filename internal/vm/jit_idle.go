@@ -5,6 +5,7 @@ package vm
 import (
 	"math"
 	"reflect"
+	"sync"
 	"time"
 	"unsafe"
 	"weak"
@@ -169,9 +170,13 @@ type jitParked struct {
 	// pool. Whichever of them is first put back puts the pool back.
 	pools []*abi.ObjectPool
 	// s is the state parking the entry; seen are the structures walked,
-	// so that each is walked once.
-	s    *jitState
-	seen map[unsafe.Pointer]bool
+	// so that each is walked once; weaks, the parking's, the weak pointer
+	// made for each object, so that each is made once a parking however
+	// many slots hold it (weak.Make finds an object's handle under a lock,
+	// by a search of its span's specials).
+	s     *jitState
+	seen  map[unsafe.Pointer]bool
+	weaks map[unsafe.Pointer]weak.Pointer[byte]
 }
 
 // jitParkSlot is a pointer slot a parked entry cleared, and a weak pointer
@@ -185,10 +190,18 @@ type jitParkSlot struct {
 // a slot holding one of the package's static objects (jitParkStatic) stays
 // as it is.
 func (p *jitParked) hold(at *unsafe.Pointer) {
-	if *at == nil || jitParkStatic(*at) {
+	x := *at
+	if x == nil || jitParkStatic(x) {
 		return
 	}
-	p.slots = append(p.slots, jitParkSlot{at: at, w: weak.Make((*byte)(*at))})
+	w, ok := p.weaks[x]
+	if !ok {
+		w = weak.Make((*byte)(x))
+		if p.weaks != nil {
+			p.weaks[x] = w
+		}
+	}
+	p.slots = append(p.slots, jitParkSlot{at: at, w: w})
 	*at = nil
 }
 
@@ -230,83 +243,177 @@ var (
 	jitParkCells = reflect.TypeFor[[]*Value]()
 )
 
-// walk holds weakly what v, addressable, holds of the program (jitParkWeak),
-// walking into the structures the entry owns.
-func (p *jitParked) walk(v reflect.Value) {
-	t := v.Type()
-	switch v.Kind() {
+// jitParkPlan is how a parking walks a value of one type: what of the
+// value's words it holds weakly (jitParkWeak), the pools it empties and
+// the structures the entry owns it walks into, each at its offset in the
+// value, made once from the type's fields (jitParkPlansMake), so that a
+// parking reads no type's description and looks up no type as it walks.
+// Each type's walk is reflect's walk of it, field by field: a pointer of
+// jitParkWeak's types held, a pool emptied, a pointer to a structure the
+// entry owns walked into once (jitParkInto); a Value of an object's tag
+// held; a struct of this package's walked field by field, another
+// package's not; a slice or an array walked element by element, and the
+// keep's cells ([]*Value) cell by cell; anything else left as it is. A
+// type that holds none of these has no plan, so that a slice of scalars'
+// structs is not walked. TestJITParkPlanMatchesWalk holds the plans to
+// reflect's walk of what the suites' code parks.
+type jitParkPlan struct {
+	ops []jitParkOp
+}
+
+// jitParkOp is a step of a plan, at off in the value: a pointer held, a
+// pool, a Value, the cells, or a structure walked into, a slice or an
+// array of elem's values of size bytes, n of the array's.
+type jitParkOp struct {
+	kind uint8
+	off  uintptr
+	elem *jitParkPlan
+	size uintptr
+	n    int
+}
+
+// The kinds of a plan's steps, those with an elem's plan from
+// jitParkIntoOp on.
+const (
+	jitParkHold = iota
+	jitParkPoolOp
+	jitParkValueOp
+	jitParkCellsOp
+	jitParkIntoOp
+	jitParkSliceOp
+	jitParkArrayOp
+)
+
+var (
+	jitParkPlansOnce sync.Once
+	// jitParkPlans are the plans of the types an entry's walk begins at:
+	// its keep, its calls' targets, its function's learned state, and a
+	// pool's source.
+	jitParkPlans struct {
+		keep, targets, learned, source *jitParkPlan
+	}
+)
+
+// jitParkPlansMake makes the plans parking walks by (jitParkPlans), once
+// for the process, at its first parking (jitParkPlansOnce).
+func jitParkPlansMake() {
+	b := jitParkBuild{}
+	p := &jitParkPlans
+	p.keep, p.targets = b.plan(reflect.TypeFor[jitFeedback]()), b.plan(reflect.TypeFor[[]jitTarget]())
+	p.learned, p.source = b.plan(reflect.TypeFor[jitLearned]()), b.plan(reflect.TypeFor[jitPoolSource]())
+}
+
+// jitParkBuild is the plans made so far, by type.
+type jitParkBuild map[reflect.Type]*jitParkPlan
+
+// plan is t's plan, nil where a value of t holds nothing a parking
+// weakens. A type's plan is listed before its fields' are made, so that a
+// structure holding a pointer to its own type takes the plan being made.
+func (b jitParkBuild) plan(t reflect.Type) *jitParkPlan {
+	if pl, ok := b[t]; ok {
+		return pl
+	}
+	pl := &jitParkPlan{}
+	b[t] = pl
+	b.ops(pl, t, 0)
+	if len(pl.ops) == 0 {
+		b[t], pl = nil, nil
+	}
+	return pl
+}
+
+// ops appends to pl the steps of a value of type t at off.
+func (b jitParkBuild) ops(pl *jitParkPlan, t reflect.Type, off uintptr) {
+	op := jitParkOp{off: off}
+	switch t.Kind() {
 	case reflect.Pointer:
-		if v.IsNil() {
-			return
-		}
-		at := (*unsafe.Pointer)(unsafe.Pointer(v.UnsafeAddr()))
 		switch {
 		case jitParkWeak[t]:
-			p.hold(at)
+			op.kind = jitParkHold
 		case t == jitParkPool:
-			p.pool((*abi.ObjectPool)(*at))
+			op.kind = jitParkPoolOp
 		case jitParkInto[t]:
-			if p.once(*at) {
-				p.walk(v.Elem())
-			}
+			op.kind, op.elem = jitParkIntoOp, b.plan(t.Elem())
+		default:
+			return
 		}
 	case reflect.Struct:
-		if t == jitParkValue {
-			// A value of an object's tag holds the object, an accessor
-			// pair or a template, each the heap's but for the statics
-			// hold leaves as they are.
-			x := (*Value)(unsafe.Pointer(v.UnsafeAddr()))
-			if b := math.Float64bits(x.num); b == objectBits || b == accessorBits || b == templateBits {
-				p.hold(&x.ref)
-			}
-			return
-		}
-		if t.PkgPath() != jitParkValue.PkgPath() {
-			return
-		}
-		for i := range v.NumField() {
-			p.walk(v.Field(i))
-		}
-	case reflect.Slice:
-		if t == jitParkCells {
-			// The cells the code reads its constants from, the JIT's own
-			// (keep's cells): what each holds.
-			for i := range v.Len() {
-				if c := v.Index(i); !c.IsNil() {
-					p.walk(c.Elem())
+		if t != jitParkValue {
+			if t.PkgPath() == jitParkValue.PkgPath() {
+				for i := range t.NumField() {
+					f := t.Field(i)
+					b.ops(pl, f.Type, off+f.Offset)
 				}
 			}
 			return
 		}
-		if !jitParkElem(t.Elem()) {
-			return
-		}
-		for i := range v.Len() {
-			p.walk(v.Index(i))
+		op.kind = jitParkValueOp
+	case reflect.Slice:
+		op.kind = jitParkCellsOp
+		if t != jitParkCells {
+			op.kind, op.elem, op.size = jitParkSliceOp, b.plan(t.Elem()), t.Elem().Size()
 		}
 	case reflect.Array:
-		if !jitParkElem(t.Elem()) {
-			return
-		}
-		for i := range v.Len() {
-			p.walk(v.Index(i))
+		op.kind, op.elem, op.size, op.n = jitParkArrayOp, b.plan(t.Elem()), t.Elem().Size(), t.Len()
+	default:
+		return
+	}
+	if op.kind < jitParkIntoOp || op.elem != nil {
+		pl.ops = append(pl.ops, op)
+	}
+}
+
+// walk holds weakly what the value at x, of pl's type, holds of the
+// program (jitParkWeak), walking into the structures the entry owns.
+func (p *jitParked) walk(pl *jitParkPlan, x unsafe.Pointer) {
+	for i := range pl.ops {
+		op := &pl.ops[i]
+		at := unsafe.Add(x, op.off)
+		switch op.kind {
+		case jitParkHold:
+			p.hold((*unsafe.Pointer)(at))
+		case jitParkPoolOp:
+			p.pool(*(**abi.ObjectPool)(at))
+		case jitParkIntoOp:
+			if y := *(*unsafe.Pointer)(at); y != nil && p.once(y) {
+				p.walk(op.elem, y)
+			}
+		case jitParkValueOp:
+			p.value((*Value)(at))
+		case jitParkCellsOp:
+			// The cells the code reads its constants from, the JIT's own
+			// (keep's cells): what each holds.
+			for _, c := range *(*[]*Value)(at) {
+				if c != nil {
+					p.value(c)
+				}
+			}
+		case jitParkSliceOp:
+			h := (*jitParkSliceHeader)(at)
+			for j := range h.len {
+				p.walk(op.elem, unsafe.Add(h.data, uintptr(j)*op.size))
+			}
+		case jitParkArrayOp:
+			for j := range op.n {
+				p.walk(op.elem, unsafe.Add(at, uintptr(j)*op.size))
+			}
 		}
 	}
 }
 
-// jitParkElem reports whether elements of type t may hold what walk
-// weakens: a pointer of those types, a pool, a structure an entry owns,
-// or a struct or array of this package's.
-func jitParkElem(t reflect.Type) bool {
-	switch t.Kind() {
-	case reflect.Pointer:
-		return jitParkWeak[t] || jitParkInto[t] || t == jitParkPool
-	case reflect.Struct:
-		return t.PkgPath() == jitParkValue.PkgPath()
-	case reflect.Array, reflect.Slice:
-		return jitParkElem(t.Elem())
+// jitParkSliceHeader is a slice's words.
+type jitParkSliceHeader struct {
+	data     unsafe.Pointer
+	len, cap int
+}
+
+// value holds weakly what x holds: a value of an object's tag holds the
+// object, an accessor pair or a template, each the heap's but for the
+// statics hold leaves as they are.
+func (p *jitParked) value(x *Value) {
+	if b := math.Float64bits(x.num); b == objectBits || b == accessorBits || b == templateBits {
+		p.hold(&x.ref)
 	}
-	return false
 }
 
 // once reports whether x is walked for the first time.
@@ -336,10 +443,11 @@ func (p *jitParked) pool(pool *abi.ObjectPool) {
 	}
 	clear(pool.Objects[:min(pool.Count, uint64(len(pool.Objects)))])
 	pool.Count, pool.Proto = 0, nil
-	rp := &jitParked{}
+	rp := &jitParked{weaks: p.weaks}
 	if src := (*jitPoolSource)(pool.Source); src != nil {
-		rp.walk(reflect.ValueOf(src).Elem())
+		rp.walk(jitParkPlans.source, unsafe.Pointer(src))
 	}
+	rp.weaks = nil
 	if s.parkedPools == nil {
 		s.parkedPools = map[*abi.ObjectPool]*jitParked{}
 	}
@@ -479,19 +587,21 @@ func (s *jitState) jitRegPark() {
 		s.parkedOldest = tick
 	}
 	called := s.regCalledFns()
+	// Each object's weak pointer made once, for every slot that holds it.
+	weaks := map[unsafe.Pointer]weak.Pointer[byte]{}
 	for key, e := range s.regCache {
 		if e.code == nil || e.parked != nil || s.regInUseOf(e, called) || key.gone() ||
 			e == s.regGoOnFrom || e == s.regGoMark.e || e.osrJob != nil {
 			continue
 		}
-		s.regParkEntry(key, e, tick)
+		s.regParkEntry(key, e, tick, weaks)
 	}
 	s.parkCost = s.parkSpan() - from
 	s.parkRun = s.parkClock()
 }
 
 // regParkEntry parks e, the code of the function whose key is key.
-func (s *jitState) regParkEntry(key jitKey, e *jitRegEntry, tick uint64) {
+func (s *jitState) regParkEntry(key jitKey, e *jitRegEntry, tick uint64, weaks map[unsafe.Pointer]weak.Pointer[byte]) {
 	if o := e.osr; o != nil {
 		// Its code for on-stack replacement goes, as with its entry
 		// (dropReg).
@@ -500,17 +610,19 @@ func (s *jitState) regParkEntry(key jitKey, e *jitRegEntry, tick uint64) {
 		o.dropped = true
 		s.regClose(o)
 	}
-	p := &jitParked{s: s, at: tick}
+	jitParkPlansOnce.Do(jitParkPlansMake)
+	plans := &jitParkPlans
+	p := &jitParked{s: s, at: tick, weaks: weaks}
 	if e.keep != nil {
-		p.walk(reflect.ValueOf(e.keep).Elem())
+		p.walk(plans.keep, unsafe.Pointer(e.keep))
 	}
-	p.walk(reflect.ValueOf(&e.targets).Elem())
+	p.walk(plans.targets, unsafe.Pointer(&e.targets))
 	if l := e.life; l != nil && l.jitLearned != nil {
 		p.learned = l.jitLearned
 		l.jitLearned = regForgotten(p.learned)
-		p.walk(reflect.ValueOf(p.learned).Elem())
+		p.walk(plans.learned, unsafe.Pointer(p.learned))
 	}
-	p.seen = nil
+	p.seen, p.weaks = nil, nil
 	e.parked = p
 	delete(s.regCache, key)
 	if s.regParked == nil {
