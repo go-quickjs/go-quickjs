@@ -235,9 +235,11 @@ func jitTargetsGather(s *jitSnapshot, fb *jitRegFeedback) {
 	r := fb.fb.r
 	rc := fb.rc
 	t.sites = s.root.d.closureCopy(d.cl).sites
+	calls := 0
 	for rpc, w := range rc.Code {
 		switch w.Op() {
 		case bytecode.RCallW, bytecode.RCallMW, bytecode.RCallWT, bytecode.RCallMWT:
+			calls++
 			if !t.siteKnownAt(rpc, w, d.copied, fb.fb.e) {
 				// A site of two calls, which the facts do not hold: asked
 				// at every PC.
@@ -247,6 +249,8 @@ func jitTargetsGather(s *jitSnapshot, fb *jitRegFeedback) {
 		}
 	}
 	t.gathered, t.live, t.realm = true, fb.fb.e, r.jitCallRealmNow()
+	t.facts = make([]jitTargetFacts, 0, calls+len(fb.fb.e.nativeCalls))
+	t.regs = make([]jitTargetReg, 0, min(calls, 8))
 	l := t.live
 	live := jitCallLive{fb}
 	pushes := false
@@ -281,7 +285,7 @@ func jitTargetsGather(s *jitSnapshot, fb *jitRegFeedback) {
 				t.gens = append(t.gens, jitTargetGen{rpc: int32(rpc), cls: cls, pool: pool})
 				for _, cl := range cls {
 					if reg := t.regOf(s, r, cl); reg.link == nil {
-						t.setLink(cl, s.gatherLink(r.jitState().regLinkOf(cl, cl.reg)))
+						reg.link = s.gatherLink(r.jitState().regLinkOf(cl, cl.reg))
 					}
 				}
 			}
@@ -313,7 +317,7 @@ func jitTargetsGather(s *jitSnapshot, fb *jitRegFeedback) {
 					t.supers = append(t.supers, jitTargetSuper{active: x.active, p: p, skip: skip, argc: argc, cl: cl})
 					if cl != nil && cl.reg != nil {
 						if reg := t.regOf(s, r, cl); reg.link == nil {
-							t.setLink(cl, s.gatherLink(r.jitState().regLinkOf(cl, cl.reg)))
+							reg.link = s.gatherLink(r.jitState().regLinkOf(cl, cl.reg))
 						}
 					}
 					break
@@ -351,7 +355,7 @@ func jitTargetsGather(s *jitSnapshot, fb *jitRegFeedback) {
 			reg := t.regOf(s, r, x.cl)
 			t.facts = append(t.facts, jitTargetFacts{jitTargetKey{x.obj, x.cl, reg.rc}, r.jitRegFactsOf(x.obj, x.cl, reg.rc)})
 			if c.ok && c.cl == x.cl && c.parent == x.parent && reg.rc != nil && reg.link == nil {
-				t.setLink(x.cl, s.gatherLink(r.jitState().regLinkOf(x.cl, reg.rc)))
+				reg.link = s.gatherLink(r.jitState().regLinkOf(x.cl, reg.rc))
 			}
 			continue
 		}
@@ -456,7 +460,7 @@ func (t *jitTargetsData) viaLeafAt(rpc int32) bool {
 // last loop); and the link of cl where native callers may call it so,
 // through Function.prototype.call too.
 func (t *jitTargetsData) target(s *jitSnapshot, r *Runtime, o *Object, cl *closure, rc *regCode, argc int) {
-	reg := t.regOf(s, r, cl)
+	reg := &t.regs[t.regAtOf(s, r, cl)]
 	t.facts = append(t.facts, jitTargetFacts{jitTargetKey{o, cl, rc}, r.jitRegFactsOf(o, cl, rc)})
 	if rc != reg.rc {
 		t.facts = append(t.facts, jitTargetFacts{jitTargetKey{o, cl, reg.rc}, r.jitRegFactsOf(o, cl, reg.rc)})
@@ -467,48 +471,40 @@ func (t *jitTargetsData) target(s *jitSnapshot, r *Runtime, o *Object, cl *closu
 	f := r.jitRegFactsOf(o, cl, reg.rc)
 	if f.callable(cl, reg.rc, argc, t.realm.quirks) || argc >= 1 && f.callable(cl, reg.rc, argc-1, t.realm.quirks) {
 		reg.link = s.gatherLink(r.jitState().regLinkOf(cl, reg.rc))
-		t.setLink(cl, reg.link)
 	}
 }
 
-// regOf is cl's register code as the gather found it, taken once.
-func (t *jitTargetsData) regOf(s *jitSnapshot, r *Runtime, cl *closure) jitTargetReg {
+// regAtOf is the index in t's regs of cl's register code as the gather
+// found it, taken once.
+func (t *jitTargetsData) regAtOf(s *jitSnapshot, r *Runtime, cl *closure) int {
 	if t.regAt != nil {
 		if i, ok := t.regAt[cl]; ok {
-			return t.regs[i]
+			return i
 		}
 	} else {
-		for _, x := range t.regs {
-			if x.cl == cl {
-				return x
+		for i := range t.regs {
+			if t.regs[i].cl == cl {
+				return i
 			}
 		}
 	}
-	x := jitTargetReg{cl: cl, rc: cl.reg}
-	t.regs = append(t.regs, x)
+	t.regs = append(t.regs, jitTargetReg{cl: cl, rc: cl.reg})
+	i := len(t.regs) - 1
 	if t.regAt == nil && len(t.regs) > 8 {
 		// Many: found by a map from here, the gather's own.
 		t.regAt = make(map[*closure]int, 2*len(t.regs))
-		for i, y := range t.regs {
-			t.regAt[y.cl] = i
+		for k := range t.regs {
+			t.regAt[t.regs[k].cl] = k
 		}
 	} else if t.regAt != nil {
-		t.regAt[cl] = len(t.regs) - 1
+		t.regAt[cl] = i
 	}
-	return x
+	return i
 }
 
-// setLink keeps l as cl's link.
-func (t *jitTargetsData) setLink(cl *closure, l *jitLink) {
-	if t.regAt != nil {
-		t.regs[t.regAt[cl]].link = l
-		return
-	}
-	for i := range t.regs {
-		if t.regs[i].cl == cl {
-			t.regs[i].link = l
-		}
-	}
+// regOf is cl's register code as the gather found it, taken once.
+func (t *jitTargetsData) regOf(s *jitSnapshot, r *Runtime, cl *closure) *jitTargetReg {
+	return &t.regs[t.regAtOf(s, r, cl)]
 }
 
 // index makes t's indexes, on the worker.
