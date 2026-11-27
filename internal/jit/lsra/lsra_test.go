@@ -4,6 +4,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"testing"
+	"time"
 )
 
 // TestAllocateRandom allocates random functions -- branches, loops, phis,
@@ -613,3 +614,99 @@ var randomClobbers = func() (m [][]uint64) {
 	}
 	return m
 }()
+
+// manySlotsFunc is a function whose webs need thousands of slots: long
+// values, made first and all read at the end, and short ones, made eight
+// at a time and read, one group after another. With four registers, the
+// long ones, of two uses over the whole function, live in slots, each its
+// own, and so do half of each group, in the first slots past the long
+// ones'. A wide one, of two slots, is every fourth where wide is set.
+func manySlotsFunc(long, short int, wide bool) *Func {
+	f := &Func{}
+	newV := func() VReg {
+		f.Class = append(f.Class, 0)
+		f.FixedSlot = append(f.FixedSlot, -1)
+		w := int8(1)
+		if wide && len(f.Class)%4 == 0 {
+			w = 2
+		}
+		f.Width = append(f.Width, w)
+		return VReg(len(f.Class) - 1)
+	}
+	var insts []Inst
+	var longs []VReg
+	for range long {
+		v := newV()
+		longs = append(longs, v)
+		insts = append(insts, mk(nil, []VReg{v}, None))
+	}
+	for range short / 8 {
+		var group [8]VReg
+		for k := range group {
+			group[k] = newV()
+			insts = append(insts, mk(nil, []VReg{group[k]}, None))
+		}
+		for k := len(group) - 1; k >= 0; k-- {
+			insts = append(insts, mk([]VReg{group[k]}, nil, None))
+		}
+	}
+	for i := len(longs) - 1; i >= 0; i-- {
+		insts = append(insts, mk([]VReg{longs[i]}, nil, None))
+	}
+	f.Blocks = []Block{{Insts: insts}}
+	return f
+}
+
+// BenchmarkManySlots times the allocation of manySlotsFunc's functions,
+// and its slots' phase alone (slots-ns/op), which gives each web needing
+// a slot the first one free.
+func BenchmarkManySlots(b *testing.B) {
+	for _, bc := range []struct {
+		name        string
+		long, short int
+		wide        bool
+	}{
+		{"1000+1000", 1000, 1000, false},
+		{"2000+2000", 2000, 2000, false},
+		{"4000+4000", 4000, 4000, false},
+		{"4000+4000wide", 4000, 4000, true},
+	} {
+		b.Run(bc.name, func(b *testing.B) {
+			f := manySlotsFunc(bc.long, bc.short, bc.wide)
+			var al Allocator
+			var mark time.Time
+			var slots time.Duration
+			cfg := &Config{Classes: [][]int{{0, 1, 2, 3}}, NumSlots: 1 << 20, Lap: func(p Phase) {
+				now := time.Now()
+				if p == PhaseSlots {
+					slots += now.Sub(mark)
+				}
+				mark = now
+			}}
+			for b.Loop() {
+				mark = time.Now()
+				if _, err := al.Allocate(f, cfg); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportMetric(float64(slots.Nanoseconds())/float64(b.N), "slots-ns/op")
+		})
+	}
+}
+
+// TestManySlots allocates manySlotsFunc's functions and checks them: each
+// long value in a slot of its own, the short ones sharing.
+func TestManySlots(t *testing.T) {
+	for _, wide := range []bool{false, true} {
+		f := manySlotsFunc(300, 300, wide)
+		cfg := &Config{Classes: [][]int{{0, 1, 2, 3}}, NumSlots: 1 << 20}
+		res, err := Allocate(f, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkAllocation(t, 0, f, cfg, res)
+		if res.NumSlots < 300 || res.NumSlots > 300*2+16 {
+			t.Errorf("wide %v: %d slots", wide, res.NumSlots)
+		}
+	}
+}
