@@ -309,7 +309,10 @@ func TestCoalesce(t *testing.T) {
 }
 
 // TestRanges checks overlap and unionInto, few ranges against many and
-// many against many, against the positions the lists cover.
+// many against many, against the positions the lists cover; and the
+// coalescing's mergeApart, and apartAt and unionFew, which test whether
+// two lists meet and merge them where they do not, against the two. Half
+// the second lists lie in the first's gaps, which some fill to the brim.
 func TestRanges(t *testing.T) {
 	rnd := rand.New(rand.NewPCG(3, 5))
 	list := func(n int) ([]rng, []bool) {
@@ -333,10 +336,57 @@ func TestRanges(t *testing.T) {
 		}
 		return rs, cover
 	}
+	// apart is a list of n ranges in the gaps of cover, some of them
+	// whole gaps.
+	apart := func(n int, cover []bool) ([]rng, []bool) {
+		c := make([]bool, len(cover))
+		for range n {
+			p := rnd.IntN(len(cover))
+			if cover[p] {
+				continue
+			}
+			lo, hi := p, p+1
+			if rnd.IntN(3) == 0 {
+				for lo > 0 && !cover[lo-1] {
+					lo--
+				}
+				for hi < len(cover) && !cover[hi] {
+					hi++
+				}
+			} else {
+				for k := rnd.IntN(6); k > 0 && hi < len(cover) && !cover[hi]; k-- {
+					hi++
+				}
+			}
+			for q := lo; q < hi; q++ {
+				c[q] = true
+			}
+		}
+		var rs []rng
+		for p := 0; p < len(c); p++ {
+			if !c[p] {
+				continue
+			}
+			from := p
+			for p < len(c) && c[p] {
+				p++
+			}
+			rs = append(rs, rng{int32(from), int32(p)})
+		}
+		return rs, c
+	}
 	var ar arena[rng]
-	for iter := range 20000 {
+	var merged []rng
+	var at []int32
+	for iter := range 40000 {
 		a, ca := list(1 + rnd.IntN(60))
 		b, cb := list(1 + rnd.IntN(6))
+		if iter%4 >= 2 {
+			b, cb = apart(1+rnd.IntN(6), ca)
+		}
+		if len(b) == 0 {
+			continue
+		}
 		if iter%2 == 1 {
 			a, b, ca, cb = b, a, cb, ca
 		}
@@ -361,6 +411,22 @@ func TestRanges(t *testing.T) {
 		}
 		if !slices.Equal(u, want) {
 			t.Fatalf("unionInto(%v, %v) = %v, want %v", a, b, u, want)
+		}
+		var ok bool
+		if merged, ok = mergeApart(merged, a, b); ok == meet || ok && !slices.Equal(merged, want) {
+			t.Fatalf("mergeApart(%v, %v) = %v, %v; want %v, %v", a, b, merged, ok, want, !meet)
+		}
+		long, short := a, b
+		if len(long) < len(short) {
+			long, short = short, long
+		}
+		if at, ok = apartAt(at, long, short); ok == meet {
+			t.Fatalf("apartAt(%v, %v) = %v, want %v", long, short, ok, !meet)
+		}
+		if ok {
+			if u := unionFew(&ar, slices.Clone(long), short, at); !slices.Equal(u, want) {
+				t.Fatalf("unionFew(%v, %v, %v) = %v, want %v", long, short, at, u, want)
+			}
 		}
 	}
 }
@@ -990,4 +1056,174 @@ func TestManySlots(t *testing.T) {
 			t.Errorf("wide %v: %d slots", wide, res.NumSlots)
 		}
 	}
+}
+
+// TestWalkMethods allocates random functions, small ones and ones of many
+// blocks, half with calls and clobbers as TestOneByOneMethods makes them
+// and a fifth defining a register twice, and manySlotsFunc's and
+// manyCallsFunc's, by the walks that do more at once -- liveness's one
+// walk that defines, marks and lists the uses its paths start from, the
+// coalescing's merge that tests as it goes and its searches that put the
+// few ranges into the many where they found them, the scan's entries that
+// say where each web on its lists may change -- and with each as it was
+// (Config.markPass, twoPass, plainLists), which must give the same
+// allocation.
+func TestWalkMethods(t *testing.T) {
+	rng := rand.New(rand.NewPCG(47, 53))
+	classes := [][][]int{{{3, 1, 0, 2}, {0, 1, 2}}, {{0, 1}, {2, 1, 0}}}
+	olds := []struct {
+		name string
+		set  func(*Config)
+	}{
+		{"markPass", func(c *Config) { c.markPass = true }},
+		{"twoPass", func(c *Config) { c.twoPass = true }},
+		{"plainLists", func(c *Config) { c.plainLists = true }},
+	}
+	var al, old Allocator
+	twice := 0
+	check := func(name string, f *Func, cfg Config) {
+		t.Helper()
+		a, errA := al.Allocate(f, &cfg)
+		for _, o := range olds {
+			ocfg := cfg
+			o.set(&ocfg)
+			b, errB := old.Allocate(f, &ocfg)
+			if (errA == nil) != (errB == nil) {
+				t.Fatalf("%s: %v by the walks, %v with %s", name, errA, errB, o.name)
+			}
+			if errA == nil && !sameResult(f, a, b) {
+				t.Fatalf("%s: the walks and %s allocate differently\n%s\n%s", name, o.name, dump(f, a), dump(f, b))
+			}
+			// The result is the Allocator's: allocated again for the
+			// next comparison.
+			a, _ = al.Allocate(f, &cfg)
+		}
+	}
+	for iter := range 8000 {
+		var f *Func
+		if iter%2 == 0 {
+			f = randomFunc(rng)
+		} else {
+			f = randomFuncOf(rng, 24, 40)
+		}
+		if iter/2%2 == 0 {
+			nk := 1 + rng.IntN(len(randomClobbers))
+			f.Clobbers = randomClobbers[:nk]
+			for i := range f.Blocks {
+				for j := range f.Blocks[i].Insts {
+					in := &f.Blocks[i].Insts[j]
+					switch {
+					case in.Call:
+					case len(in.Temps()) == 0 && rng.IntN(3) == 0:
+						in.Call, in.Clobber = true, 0
+					case in.Clobber != 0 || rng.IntN(3) == 0:
+						in.Clobber = int8(1 + rng.IntN(nk))
+					}
+				}
+			}
+		}
+		switch iter % 5 {
+		case 4:
+			// A register defined twice: an instruction's definition made
+			// another of its class's, of another block.
+			if redefine(rng, f) {
+				twice++
+			}
+		case 3:
+			// The blocks but the entry laid out in another order: uses
+			// before their definitions.
+			shuffleBlocks(rng, f)
+		}
+		cfg := Config{Classes: classes[iter%len(classes)], NumSlots: 1 << 16}
+		switch iter / 4 % 4 {
+		case 1:
+			cfg.Displace = true
+		case 2:
+			cfg.StressSplit = true
+		case 3:
+			cfg.NoSplit = true
+		}
+		check("random", f, cfg)
+	}
+	if twice < 500 {
+		t.Fatalf("only %d functions define a register twice", twice)
+	}
+	// v1 used at a loop's top and defined after, once, with no phi: live
+	// into the loop from the entry and around it.
+	loop := &Func{
+		Class:     []int8{0, 0, 0},
+		FixedSlot: []int32{-1, -1, -1},
+		Blocks: []Block{
+			{Succs: []int{1}, Insts: []Inst{mk(nil, []VReg{0}, None)}},
+			{Preds: []int{0, 1}, Succs: []int{1, 2}, Insts: []Inst{mk([]VReg{1, 0}, []VReg{2}, None), mk([]VReg{2}, []VReg{1}, None), mk([]VReg{1}, nil, None)}},
+			{Preds: []int{1}, Insts: []Inst{mk([]VReg{1}, nil, None)}},
+		},
+	}
+	for _, c := range classes {
+		check("loop", loop, Config{Classes: c, NumSlots: 16})
+	}
+	big := Config{Classes: [][]int{{0, 1, 2, 3}}, NumSlots: 1 << 20}
+	for _, wide := range []bool{false, true} {
+		check("manySlots", manySlotsFunc(300, 300, wide), big)
+	}
+	for _, c := range []struct {
+		long, calls, every int
+		blocks             bool
+	}{{200, 200, 0, false}, {200, 200, 0, true}, {6, 400, 2, false}, {6, 400, 3, true}} {
+		check("manyCalls", manyCallsFunc(c.long, c.calls, c.every, c.blocks), big)
+	}
+}
+
+// redefine makes a definition of an instruction of f that of another
+// register of its class and width, defined in another block, and reports
+// whether it found one.
+func redefine(rng *rand.Rand, f *Func) bool {
+	type at struct{ b, j, k int }
+	var defs []at
+	for i := range f.Blocks {
+		for j := range f.Blocks[i].Insts {
+			in := &f.Blocks[i].Insts[j]
+			for k := range in.Defs() {
+				defs = append(defs, at{i, j, k})
+			}
+		}
+	}
+	for range 20 {
+		if len(defs) < 2 {
+			return false
+		}
+		x, y := defs[rng.IntN(len(defs))], defs[rng.IntN(len(defs))]
+		if x.b == y.b {
+			continue
+		}
+		dx := &f.Blocks[x.b].Insts[x.j].Regs[int(f.Blocks[x.b].Insts[x.j].NUses)+x.k]
+		dy := f.Blocks[y.b].Insts[y.j].Defs()[y.k]
+		if *dx == dy || f.Class[*dx] != f.Class[dy] || widthOf(f, *dx) != widthOf(f, dy) || f.FixedSlot[*dx] >= 0 || f.FixedSlot[dy] >= 0 {
+			continue
+		}
+		*dx = dy
+		return true
+	}
+	return false
+}
+
+// shuffleBlocks lays f's blocks but the entry out in a random order.
+func shuffleBlocks(rng *rand.Rand, f *Func) {
+	nb := len(f.Blocks)
+	perm := make([]int, nb) // perm[old] is the block's new index
+	for i := range perm {
+		perm[i] = i
+	}
+	rng.Shuffle(nb-1, func(i, j int) { perm[i+1], perm[j+1] = perm[j+1], perm[i+1] })
+	blocks := make([]Block, nb)
+	for i, b := range f.Blocks {
+		for k := range b.Preds {
+			b.Preds[k] = perm[b.Preds[k]]
+		}
+		for k := range b.Succs {
+			b.Succs[k] = perm[b.Succs[k]]
+		}
+		blocks[perm[i]] = b
+	}
+	f.Blocks = blocks
 }

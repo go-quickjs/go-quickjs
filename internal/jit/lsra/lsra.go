@@ -238,6 +238,19 @@ type Config struct {
 	// its ranges and the clobbers' sums, and with a hole cut out of its
 	// ranges.
 	oneByOne bool
+	// twoPass has the coalescing test whether two webs' ranges meet and
+	// then merge them, for the tests that compare it with the walk that
+	// merges them as it tests.
+	twoPass bool
+	// markPass has liveness mark the registers used in a block other than
+	// their definitions' in a walk of the instructions of its own, and
+	// explore start its paths from a walk of them, for the tests that
+	// compare it with the one walk that defines, marks and lists the uses.
+	markPass bool
+	// plainLists has the scan read every web on its active and inactive
+	// lists at every position, for the tests that compare it with reading
+	// each only where its entry says it may have changed.
+	plainLists bool
 	// mutateHoles has the allocation punch holes that leave a position
 	// where the webs meet out, for the test that the checks find it.
 	mutateHoles bool
