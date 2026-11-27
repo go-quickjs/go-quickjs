@@ -112,8 +112,13 @@ func (g *gen) vnot(x, t amd64.XReg) {
 	g.a.Vec(amd64.Pxor, x, t)
 }
 
-// emitVConsts emits the pool of v128 constants, after the code.
+// emitVConsts emits the pool of v128 constants, after the code, each at a
+// multiple of its 16 bytes from the code's start, which is placed at one,
+// so that a load of one never spans two of the cache's lines.
 func (g *gen) emitVConsts() {
+	if len(g.vpool.keys) > 0 {
+		g.a.Align(16)
+	}
 	for i, k := range g.vpool.keys {
 		g.a.Bind(g.vpool.labels[i])
 		g.a.Quad(k[0])

@@ -457,6 +457,13 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (co
 	// Last: the code's own constants (movImm), past every instruction.
 	text := c.a.Len()
 	c.mark("constants")
+	if len(c.pool) > 0 {
+		// Each at a multiple of its eight bytes from the code's start,
+		// which is placed at one: a load of one never spans two of the
+		// cache's lines, as one past the text's end did wherever the
+		// text's length put it.
+		c.a.Align(8)
+	}
 	for _, k := range c.pool {
 		c.a.Bind(k.label)
 		c.a.Quad(k.v)

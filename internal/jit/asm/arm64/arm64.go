@@ -302,9 +302,34 @@ func (a *Asm) isTable(l Label) bool {
 func (a *Asm) Tables() {
 	for _, l := range a.tableOrder {
 		if a.labels[l] < 0 {
+			b := a.tables[l]
+			a.block()
+			a.alignTable(len(b))
 			a.Bind(l)
-			a.Data(a.tables[l])
+			a.Data(b)
+			a.unblock()
 		}
+	}
+}
+
+// nop is the instruction that does nothing.
+const nop = 0xD503201F
+
+// alignTable pads the code with NOPs to where a table of n bytes goes: a
+// multiple of 16 bytes from the code's start, which is placed at one, for
+// one of a whole number of 16-byte constants, of 8 for one of 8-byte
+// ones, so that a load of one of its constants never spans two of the
+// cache's lines.
+func (a *Asm) alignTable(n int) {
+	words := 1
+	switch {
+	case n%16 == 0:
+		words = 4
+	case n%8 == 0:
+		words = 2
+	}
+	for len(a.buf)%words != 0 {
+		a.buf = append(a.buf, nop)
 	}
 }
 
@@ -409,6 +434,7 @@ func (a *Asm) pool() {
 			a.buf = append(a.buf, 0x14000000)
 		}
 		if b, ok := a.tables[l]; ok {
+			a.alignTable(len(b))
 			a.labels[l] = len(a.buf)
 			for j := 0; j < len(b); j += 4 {
 				a.buf = append(a.buf, binary.LittleEndian.Uint32(b[j:]))

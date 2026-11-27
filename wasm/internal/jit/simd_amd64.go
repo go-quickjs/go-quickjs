@@ -70,8 +70,13 @@ func (c *compiler) loadVConst(x amd64.XReg, lo, hi uint64) {
 // emitVConsts binds after the code.
 func (c *compiler) newVConst(lo, hi uint64) amd64.Label { return c.a.NewLabel() }
 
-// emitVConsts emits the pool of v128 constants, after the code.
+// emitVConsts emits the pool of v128 constants, after the code, each at a
+// multiple of its 16 bytes from the code's start, which is placed at one,
+// so that a load of one never spans two of the cache's lines.
 func (c *compiler) emitVConsts() {
+	if len(c.vconstOrder) > 0 {
+		c.a.Align(16)
+	}
 	for _, k := range c.vconstOrder {
 		c.a.Bind(c.vconsts[k])
 		c.a.Quad(k[0])
