@@ -447,10 +447,23 @@ func (r *Runtime) jitRegClosureLiteral(e *jitEntry, cl *closure, rpc, k int) *ji
 // past them.
 func (f *jitRegFeedback) CellsPool() (uintptr, []int32, bool) {
 	fb := f.fb
-	if fb.e == nil || fb.root != nil || fb.cl == nil || !f.p.Cells {
+	var pool **abi.ObjectPool
+	if fb.e != nil && fb.root == nil && fb.cl != nil {
+		pool = &fb.e.cellsPool
+	}
+	return jitCellsPoolOf(f.p, pool, fb.keep())
+}
+
+// jitCellsPoolOf is CellsPool's answer of the program p, of the pool *pool
+// of the function's learning (nil for none: a callee's, or a feedback of
+// no closure or learning), made where it is nil, kept by k: one
+// implementation, a snapshot's derivation the same of its copy of the
+// learning's pool (jit_snapcells.go).
+func jitCellsPoolOf(p *ir.Program, pool **abi.ObjectPool, k *jitFeedback) (uintptr, []int32, bool) {
+	if pool == nil || !p.Cells {
 		return 0, nil, false
 	}
-	regs := jitRegCapturedRegs(f.p.Captured)
+	regs := jitRegCapturedRegs(p.Captured)
 	if n := len(regs); n == 0 || n > 4 {
 		return 0, nil, false
 	}
@@ -458,13 +471,12 @@ func (f *jitRegFeedback) CellsPool() (uintptr, []int32, bool) {
 	for i, reg := range regs {
 		cells[i] = int32(reg)<<1 | 1
 	}
-	e := fb.e
-	if e.cellsPool == nil {
-		e.cellsPool = &abi.ObjectPool{Size: abi.PoolSize, Cells: uint64(len(regs))}
-		jitFillCells(e.cellsPool)
+	if *pool == nil {
+		*pool = &abi.ObjectPool{Size: abi.PoolSize, Cells: uint64(len(regs))}
+		jitFillCells(*pool)
 	}
-	fb.keep().pools = append(fb.keep().pools, e.cellsPool)
-	return uintptr(unsafe.Pointer(e.cellsPool)), cells, true
+	k.pools = append(k.pools, *pool)
+	return uintptr(unsafe.Pointer(*pool)), cells, true
 }
 
 // jitRegFrameless makes register instruction op, whole, for native code

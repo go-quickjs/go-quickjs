@@ -991,7 +991,20 @@ kind counted (`JITGoroutineTimes`' `Eager` counts); a callee's typed code
 or such a site has the callee lowered and asked there alone
 (`EagerLate`). So does a compile while any method the build asks at a PC
 is neither derived nor asked by a gather (`jitSnapNodesBlocked`), which a
-node, its program not lowered on the goroutine, could not answer. A worker builds, optimizes and compiles
+node, its program not lowered on the goroutine, could not answer.
+
+A compile's own function may be gathered so too, of its register code
+alone (`jitRegSnapshotOf` of no program), for the worker to lower it and
+bind its program before it derives (`program`): no question then asks
+the program on the goroutine. Its `CellsPool` is derived of the program on
+the worker, of the learning's pool copied, a pool made there where it had
+none -- allocations of its own, nothing of the runtime's -- which the
+finish gives the learning where it still has none. Where the asking asks
+the program after all -- the function's typed code, a call site whose
+facts do not hold, a forwarder or a parked callee taken -- the snapshot is
+none, and the caller lowers the function on the goroutine and asks again
+of the program (`ProgramsAgain`); a snapshot of no program is bound
+before any finish (`finish` panics otherwise). A worker builds, optimizes and compiles
 from the snapshot
 (`jitRegJob`), touching nothing of the runtime's; and the runtime's
 goroutine installs it at a later check -- a sample (`jitRegHot`), at a call

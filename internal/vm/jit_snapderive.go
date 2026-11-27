@@ -74,6 +74,8 @@ type jitSnapData struct {
 	global jitGlobalData
 	// closure is the closures' (jit_snapglobal.go).
 	closure jitClosureData
+	// cells is CellsPool's (jit_snapcells.go).
+	cells jitCellsData
 	// inline is the inline sites' (jit_snapwalk.go), walk, the root's,
 	// the callees its walk found, of the compile's snapshots.
 	inline jitInlineData
@@ -384,6 +386,12 @@ func (s *jitSnapshot) finish() {
 	}
 	s.d.finished = true
 	if !s.d.derived {
+		if s.p == nil {
+			// Gathered of no program, which the worker lowers: bound before
+			// its finish (program), or its derivations would append nothing
+			// of what the asking appended.
+			panic("jit: a compile's snapshot gathered of no program finished unbound")
+		}
 		s.derive()
 		if r := s.d.rt; r != nil && r.jit != nil {
 			r.jit.goroutineTimes.FinishDerives++

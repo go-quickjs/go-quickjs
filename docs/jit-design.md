@@ -1451,8 +1451,11 @@ is under [The projection](#the-projection).
   QPC): prep 60.3 µs median, 125 mean at the base to 60.1 and 116;
   install 5.7 and 14.9 to 6.6 and 16.9, the callees' entries and
   lowerings kept there; the run 1,552-1,598 ms to 1,549-1,569. The
-  root's lowering on the worker is next, with the lowering ahead
-  retired.
+  compile's own function may be gathered of no program too
+  (`jitRegSnapshotOf` of none, `program` binding it on the worker,
+  `CellsPool` derived there): over Octane's functions 733 of 738 are, the
+  other 5 taking a forwarder. The root's lowering on the worker is next,
+  with the lowering ahead retired.
 - **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
   was run beside mir's scan on every compile, given the same function: an
   instruction for each value and the block's end, the frame states' uses

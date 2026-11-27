@@ -11,6 +11,7 @@ import (
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit"
+	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
@@ -220,9 +221,18 @@ func TestJITSnapshotDerivesFromItsCopy(t *testing.T) {
 					// An inline site's: its callee's feedback by its closure,
 					// its cells by what they hold.
 					gv, wv = jitSnapInlineNormal(gv, own, kept), jitSnapInlineNormal(wv, want.own, want.kept)
+					if i == 0 && q.m == snapCellsPool {
+						// A pool the derivation made where the learning had
+						// none, as the feedback asked first made the
+						// learning's: alike by what it holds.
+						gv, wv = jitSnapPoolShape(gv.(uintptr), own, kept), jitSnapPoolShape(wv.(uintptr), want.own, want.kept)
+					}
 					if !reflect.DeepEqual(gv, wv) {
 						t.Errorf("%s, %d callees deep: %s(%d) result %d: derived %+v, asked %+v", cl.fn.Name, q.s.depth, jitSnapNames[q.m], q.arg, i, g.Interface(), want.results[i])
 					}
+				}
+				if q.m == snapCellsPool {
+					own, kept, want.own, want.kept = jitSnapPoolsShaped(own), jitSnapPoolsShaped(kept), jitSnapPoolsShaped(want.own), jitSnapPoolsShaped(want.kept)
 				}
 				if !jitSnapListsEqual(own, want.own) || !jitSnapListsEqual(kept, want.kept) {
 					t.Errorf("%s, %d callees deep: %s(%d): derived effect %+v, kept %+v; asked %+v, kept %+v", cl.fn.Name, q.s.depth, jitSnapNames[q.m], q.arg, own, kept, want.own, want.kept)
@@ -441,6 +451,36 @@ func jitSnapInlineNormal(v any, own, kept jitSnapLists) any {
 		}{x, in, m}
 	}
 	return v
+}
+
+// jitSnapPoolShape is what the pool at p, one of the effects' own and kept
+// keep, holds, its size and cells, for two pools made anew alike to compare
+// equal; p itself for a pool they do not keep.
+func jitSnapPoolShape(p uintptr, own, kept jitSnapLists) any {
+	for _, l := range []jitSnapLists{own, kept} {
+		for _, pool := range l.pools {
+			if uintptr(unsafe.Pointer(pool)) == p {
+				return [2]uint64{uint64(pool.Size), pool.Cells}
+			}
+		}
+	}
+	return p
+}
+
+// jitSnapPoolsShaped is l with its pools each a pool of its shape alone
+// (jitSnapPoolShape), shared by pools alike.
+func jitSnapPoolsShaped(l jitSnapLists) jitSnapLists {
+	shaped := map[[2]uint64]*abi.ObjectPool{}
+	pools := make([]*abi.ObjectPool, len(l.pools))
+	for i, p := range l.pools {
+		k := [2]uint64{uint64(p.Size), p.Cells}
+		if shaped[k] == nil {
+			shaped[k] = &abi.ObjectPool{Size: p.Size, Cells: p.Cells}
+		}
+		pools[i] = shaped[k]
+	}
+	l.pools = pools
+	return l
 }
 
 // jitSnapCellResults are the methods whose first result is a cell made

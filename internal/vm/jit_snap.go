@@ -6,6 +6,7 @@ import (
 	"math/bits"
 	"unsafe"
 
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
@@ -37,14 +38,32 @@ func (q *jitRegSnapshot) absent(m jitSnapMethod, arg int64) {
 // jitRegSnapshotOf is fb's snapshot for p, its function's register code
 // lowered: every question asked ahead, the callees' of the inline sites
 // its answers name to jitSnapDepth, and the kinds of the leaves they name.
+// Of no program (p nil), it is gathered of the register code alone, the
+// program bound on the worker, which lowers it (program): nil where the
+// asking asks a question of the program on the runtime's goroutine all
+// the same (programFree) -- the function's typed code or calls the facts
+// do not hold, or its inline sites asked there (jitWalkEager) -- for the
+// caller to lower it there and ask again of the program.
 func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 	s := &jitSnapshot{callees: map[jitSnapCallee]*jitSnapshot{}, fb: fb.fb}
 	s.root = s
 	s.reg = &jitRegSnapshot{s: s, regs: len(fb.rc.Code)}
+	s.d.rt = fb.fb.r
+	if p == nil && !s.programFree(fb) {
+		return nil
+	}
 	s.askReg(fb, p)
 	// The callees its inline sites may take, asked of their gathers'
 	// copies, gathered in turn (jit_snapwalk.go).
 	s.gatherNodes(fb)
+	if p == nil && s.d.walk != nil && s.d.walk.eager != jitWalkDerived {
+		// Its inline sites asked on the goroutine (a forwarder's, a parked
+		// callee's), of its program.
+		if r := fb.fb.r; r.jit != nil {
+			r.jit.goroutineTimes.ProgramsAgain++
+		}
+		return nil
+	}
 	// The questions of other arguments, of what the answers name: the
 	// leaves' kinds, and how Go makes the pools' objects escape analysis
 	// may leave unmade.
@@ -114,12 +133,56 @@ func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 	return s.reg
 }
 
+// programFree reports whether s, the snapshot of fb, may be gathered of
+// its register code alone, its program bound on the worker (jitRegSnapshotOf
+// of none): no method the build asks at a PC is asked on the goroutine
+// (jitSnapNodesBlocked), the function is not typed code, and its calls'
+// targets are derived there (jitTargetsGather's eager): it has learned,
+// and each call site's facts hold what its derivation reads. Nothing is
+// asked of the feedback; the closure's caches are copied, as its gathers
+// copy them.
+func (s *jitSnapshot) programFree(fb *jitRegFeedback) bool {
+	f := fb.fb
+	rc := fb.rc
+	if jitSnapNodesBlocked() != 0 || rc.Typed || f.cl == nil || f.e == nil || f.e.jitLearned == nil {
+		return false
+	}
+	c := s.d.closureCopy(f.cl)
+	t := jitTargetsData{sites: c.sites}
+	for rpc, w := range rc.Code {
+		switch w.Op() {
+		case bytecode.RCallW, bytecode.RCallMW, bytecode.RCallWT, bytecode.RCallMWT:
+			if rpc < len(rc.Marks) && rc.Marks[rpc]&bytecode.RMarkTail != 0 {
+				continue
+			}
+			if !t.siteKnownAt(rpc, w, c.calls, f.e) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// program binds s, a compile's root gathered of no program
+// (jitRegSnapshotOf), to p, its register code lowered on the worker, and
+// derives its compile's answers: what the worker does as it has lowered
+// it, and the runtime's goroutine before a finish where no worker has
+// (finish). Of a root bound already, it derives.
+func (s *jitSnapshot) program(p *ir.Program) {
+	if s.p == nil {
+		s.bindProgram(p)
+	}
+	s.derive()
+}
+
 // askReg asks fb every question of p's: at each instruction, the methods
 // the register feedback has of its op (jitSnapAsks), Generic among them;
 // those asked by a state's PC at the learned and recursive-call PCs.
 func (s *jitSnapshot) askReg(fb *jitRegFeedback, p *ir.Program) {
 	s.rf, s.rc = fb, fb.rc
-	s.bindProgram(p)
+	if p != nil {
+		s.bindProgram(p)
+	}
 	s.askOnceReg(fb)
 	// The methods the worker derives are gathered, not asked
 	// (jit_snapderive.go): of the register code, not of p.

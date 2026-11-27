@@ -243,6 +243,9 @@ type JITGoroutineTimes struct {
 	EagerForwarders, EagerParked, EagerTyped, EagerSites, EagerLate int
 	CalleeMisses                                                    int
 	GatheredCallees, TakenCallees, UntakenLearned, NodesAskedAnew   int
+	// ProgramsAgain counts the snapshots gathered of no program that
+	// asked of it after all (jitRegSnapshotOf), asked again of it.
+	ProgramsAgain int
 }
 
 // jitCompileClock is the runtime's JITCompileClock: the host's, or what a
