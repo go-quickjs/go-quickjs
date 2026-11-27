@@ -827,8 +827,12 @@ func (al *Allocator) holeCost(a *web, full []rng, s, e int32) float64 {
 		}
 		cross(al.ends[p], al.starts[b], depthWeight(d))
 	}
-	last := al.blockOf(min(e, al.maxPos) - 1)
-	for b := al.blockOf(s); b <= last; b++ {
+	// The edges into the blocks that begin in the hole and out of those
+	// that end in it, from or to a block outside it. A move on one is made
+	// where a lives at both its ends: only a block where a lives, where
+	// its ranges meet the hole, has one to visit (with Config.blockByBlock
+	// every block the hole spans is visited).
+	visit := func(b int) {
 		if in(al.starts[b]) {
 			for _, p := range f.Blocks[b].Preds {
 				if !in(al.ends[p]) {
@@ -842,6 +846,20 @@ func (al *Allocator) holeCost(a *web, full []rng, s, e int32) float64 {
 					edge(b, sc)
 				}
 			}
+		}
+	}
+	first, last := al.blockOf(s), al.blockOf(min(e, al.maxPos)-1)
+	if al.blockByBlock {
+		for b := first; b <= last; b++ {
+			visit(b)
+		}
+		return cost
+	}
+	next := first
+	for i := endsAfter(full, 0, s); i < len(full) && full[i].from < e && next <= last; i++ {
+		for b, hi := max(al.blockOf(full[i].from), next), min(al.blockOf(full[i].to-1), last); b <= hi; b++ {
+			visit(b)
+			next = b + 1
 		}
 	}
 	return cost

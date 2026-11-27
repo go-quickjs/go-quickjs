@@ -1059,18 +1059,23 @@ func TestManySlots(t *testing.T) {
 }
 
 // TestWalkMethods allocates random functions, small ones and ones of many
-// blocks, half with calls and clobbers as TestOneByOneMethods makes them
-// and a fifth defining a register twice, and manySlotsFunc's and
-// manyCallsFunc's, by the walks that do more at once -- liveness's one
-// walk that defines, marks and lists the uses its paths start from, the
+// blocks, half with calls and clobbers as TestOneByOneMethods makes them,
+// a fifth with their blocks laid out in another order and a fifth
+// defining a register twice, a loop whose register is used before its
+// definition, and manySlotsFunc's and manyCallsFunc's, by the walks that
+// do more at once -- liveness's one walk that defines, marks and lists
+// the uses its paths start from and the instructions with hints, the
 // coalescing's merge that tests as it goes and its searches that put the
-// few ranges into the many where they found them, the scan's entries that
-// say where each web on its lists may change -- and with each as it was
-// (Config.markPass, twoPass, plainLists), which must give the same
+// few ranges into the many where they found them, the walk of the blocks
+// that weighs the phis and gives the hints, the scan's entries that say
+// where each web on its lists may change, a hole's cost from the blocks
+// where its web lives -- and with each as it was (Config.markPass,
+// twoPass, hintPass, plainLists, blockByBlock), which must give the same
 // allocation.
 func TestWalkMethods(t *testing.T) {
 	rng := rand.New(rand.NewPCG(47, 53))
-	classes := [][][]int{{{3, 1, 0, 2}, {0, 1, 2}}, {{0, 1}, {2, 1, 0}}}
+	// More registers than values live at once, too: the hints choose.
+	classes := [][][]int{{{3, 1, 0, 2}, {0, 1, 2}}, {{0, 1}, {2, 1, 0}}, {{7, 6, 5, 4, 3, 2, 1, 0}, {5, 4, 3, 2, 1, 0}}}
 	olds := []struct {
 		name string
 		set  func(*Config)
@@ -1078,15 +1083,39 @@ func TestWalkMethods(t *testing.T) {
 		{"markPass", func(c *Config) { c.markPass = true }},
 		{"twoPass", func(c *Config) { c.twoPass = true }},
 		{"plainLists", func(c *Config) { c.plainLists = true }},
+		{"hintPass", func(c *Config) { c.hintPass = true }},
+		{"blockByBlock", func(c *Config) { c.blockByBlock = true }},
 	}
 	var al, old Allocator
 	twice := 0
+	// The webs' hints as the webs' phase leaves them, by each web's first
+	// member: their order chooses among the registers free.
+	hints := func(al *Allocator, out *[]VReg) func(Phase) {
+		return func(p Phase) {
+			if p != PhaseWebs {
+				return
+			}
+			*out = (*out)[:0]
+			for _, w := range al.webs {
+				if w == nil {
+					continue
+				}
+				*out = append(*out, w.members[0], VReg(len(w.hints)))
+				for _, h := range w.hints {
+					*out = append(*out, h.members[0])
+				}
+			}
+		}
+	}
+	var hintsA, hintsB []VReg
 	check := func(name string, f *Func, cfg Config) {
 		t.Helper()
+		cfg.Lap = hints(&al, &hintsA)
 		a, errA := al.Allocate(f, &cfg)
 		for _, o := range olds {
 			ocfg := cfg
 			o.set(&ocfg)
+			ocfg.Lap = hints(&old, &hintsB)
 			b, errB := old.Allocate(f, &ocfg)
 			if (errA == nil) != (errB == nil) {
 				t.Fatalf("%s: %v by the walks, %v with %s", name, errA, errB, o.name)
@@ -1094,9 +1123,9 @@ func TestWalkMethods(t *testing.T) {
 			if errA == nil && !sameResult(f, a, b) {
 				t.Fatalf("%s: the walks and %s allocate differently\n%s\n%s", name, o.name, dump(f, a), dump(f, b))
 			}
-			// The result is the Allocator's: allocated again for the
-			// next comparison.
-			a, _ = al.Allocate(f, &cfg)
+			if !slices.Equal(hintsA, hintsB) {
+				t.Fatalf("%s: the walks and %s give the webs different hints", name, o.name)
+			}
 		}
 	}
 	for iter := range 8000 {

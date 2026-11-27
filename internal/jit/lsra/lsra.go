@@ -247,6 +247,15 @@ type Config struct {
 	// explore start its paths from a walk of them, for the tests that
 	// compare it with the one walk that defines, marks and lists the uses.
 	markPass bool
+	// hintPass has the webs' hints found by a walk of the instructions of
+	// their own, and the weights' walk of the phis apart, for the tests
+	// that compare it with the hints liveness's walk lists and one walk
+	// of the blocks for both.
+	hintPass bool
+	// blockByBlock has a hole's cost visit every block the hole spans for
+	// the edges that cross its bounds, for the tests that compare it with
+	// visiting those where its web lives.
+	blockByBlock bool
 	// plainLists has the scan read every web on its active and inactive
 	// lists at every position, for the tests that compare it with reading
 	// each only where its entry says it may have changed.

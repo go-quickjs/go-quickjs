@@ -254,6 +254,7 @@ type Allocator struct {
 	// paths are the uses liveness's paths start from, later those whose
 	// definitions the walk that finds them had not met.
 	paths, later []useAt
+	hinted       []hintAt
 	// callRun is the calls a web lives across, each with the index of its
 	// first event after it (callHolesEach).
 	callRun []int32
@@ -277,19 +278,21 @@ type Allocator struct {
 	// The function being allocated, where splitting is allowed (split),
 	// its positions' end (maxPos), and whether its events and blockOf's
 	// table are known.
-	f           *Func
-	split       bool
-	displace    bool
-	stress      bool
-	twoPass     bool
-	markPass    bool
-	plainLists  bool
-	mutateHoles bool
-	oneByOne    bool
-	maxPos      int32
-	evKnown     bool
-	blocksKnown bool
-	kindsKnown  bool
+	f            *Func
+	split        bool
+	displace     bool
+	stress       bool
+	twoPass      bool
+	markPass     bool
+	hintPass     bool
+	blockByBlock bool
+	plainLists   bool
+	mutateHoles  bool
+	oneByOne     bool
+	maxPos       int32
+	evKnown      bool
+	blocksKnown  bool
+	kindsKnown   bool
 
 	rngs  arena[rng]
 	vregs arena[VReg]
@@ -306,6 +309,13 @@ type Allocator struct {
 type keyedMove struct {
 	key [2]int32
 	mv  Move
+}
+
+// hintAt is an instruction of block b whose first definition d would like
+// h's register (Inst.Hint).
+type hintAt struct {
+	b    int32
+	d, h VReg
 }
 
 // useAt is a use of register v by instruction j of block b.
@@ -359,6 +369,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.f, al.evKnown, al.blocksKnown, al.kindsKnown = f, false, false, false
 	al.split, al.stress = !cfg.NoSplit, cfg.StressSplit && !cfg.NoSplit
 	al.displace, al.mutateHoles, al.oneByOne, al.twoPass, al.plainLists, al.markPass = cfg.Displace, cfg.mutateHoles, cfg.oneByOne, cfg.twoPass, cfg.plainLists, cfg.markPass
+	al.hintPass, al.blockByBlock = cfg.hintPass, cfg.blockByBlock
 
 	// predIdx is, for each block's successor k, the block's index among
 	// that successor's predecessors: predIdx[predOff[i]+k]. The walk that
@@ -418,6 +429,9 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	// are marked again by a walk of their own, as with Config.markPass,
 	// which the definitions' last block decides.
 	paths, later := al.paths[:0], al.later[:0]
+	// hinted are the instructions with hints (Inst.Hint), for the webs'
+	// hints, which the walk lists in order.
+	hinted := al.hinted[:0]
 	for i := range f.Blocks {
 		b := &f.Blocks[i]
 		for _, p := range b.Phis {
@@ -431,6 +445,9 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 		for j := range b.Insts {
 			in := &b.Insts[j]
+			if in.Hint != None && in.NDefs > 0 && !al.hintPass {
+				hinted = append(hinted, hintAt{int32(i), in.Regs[in.NUses], in.Hint})
+			}
 			if !al.markPass {
 				for _, u := range in.Uses() {
 					if !alloc(u) {
@@ -488,7 +505,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			}
 		}
 	}
-	al.globals, al.paths, al.later = globals, paths, later[:0]
+	al.globals, al.paths, al.later, al.hinted = globals, paths, later[:0], hinted
 	// gi is v's global number, or -1.
 	gi := func(v VReg) int { return int(global[v]) - 1 }
 	words := (len(globals) + 63) / 64
@@ -689,12 +706,16 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	clobIdx := al.clobIdx[:0]
 	if len(clobAt) > 0 {
 		clobIdx = grown(clobIdx, int(pos)+1)
-		k := int32(0)
-		for p := range clobIdx {
-			for int(k) < len(clobAt) && clobAt[k] < int32(p) {
-				k++
+		// From one clobber's position on to the next's, the number of
+		// those before.
+		p := 0
+		for k, at := range clobAt {
+			for ; p <= int(at); p++ {
+				clobIdx[p] = int32(k)
 			}
-			clobIdx[p] = k
+		}
+		for ; p < len(clobIdx); p++ {
+			clobIdx[p] = int32(len(clobAt))
 		}
 	}
 	al.clobIdx = clobIdx
@@ -892,8 +913,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	// arguments are its web's defined anywhere, wherever the web is; and a
 	// web joined with one that lives across a call is stored where its
 	// registers are defined.
-	for i := range f.Blocks {
-		b := &f.Blocks[i]
+	weighPhis := func(b *Block) {
 		for _, p := range b.Phis {
 			x := webs[p.Def]
 			if x == nil || len(x.members) == 1 {
@@ -915,15 +935,17 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 	}
 	// Hints: a two-address definition wants its operand's register, a phi
-	// its arguments' where they are not one web, and they its.
+	// its arguments' where they are not one web, and they its: a block's
+	// phis', then its instructions', which liveness's walk listed, in one
+	// walk of the blocks with the weights' (with Config.hintPass, a walk
+	// of its own, of the instructions).
 	webOf := func(v VReg) *web {
 		if v < 0 {
 			return nil
 		}
 		return webs[v]
 	}
-	for i := range f.Blocks {
-		b := &f.Blocks[i]
+	phiHints := func(b *Block) {
 		for _, p := range b.Phis {
 			for _, a := range p.Args {
 				if x, y := webOf(p.Def), webOf(a); x != nil && y != nil && x != y && x.cls == y.cls {
@@ -932,13 +954,36 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 				}
 			}
 		}
-		for j := range b.Insts {
-			in := &b.Insts[j]
-			if in.Hint == None || in.NDefs == 0 {
-				continue
+	}
+	if al.hintPass {
+		for i := range f.Blocks {
+			weighPhis(&f.Blocks[i])
+		}
+		for i := range f.Blocks {
+			b := &f.Blocks[i]
+			phiHints(b)
+			for j := range b.Insts {
+				in := &b.Insts[j]
+				if in.Hint == None || in.NDefs == 0 {
+					continue
+				}
+				if x, y := webOf(in.Regs[in.NUses]), webOf(in.Hint); x != nil && y != nil && x != y && x.cls == y.cls {
+					x.hints = appendA(&al.hints, x.hints, y)
+				}
 			}
-			if x, y := webOf(in.Regs[in.NUses]), webOf(in.Hint); x != nil && y != nil && x != y && x.cls == y.cls {
-				x.hints = appendA(&al.hints, x.hints, y)
+		}
+	} else {
+		h := 0
+		for i := range f.Blocks {
+			b := &f.Blocks[i]
+			if len(b.Phis) > 0 {
+				weighPhis(b)
+				phiHints(b)
+			}
+			for ; h < len(hinted) && hinted[h].b == int32(i); h++ {
+				if x, y := webOf(hinted[h].d), webOf(hinted[h].h); x != nil && y != nil && x != y && x.cls == y.cls {
+					x.hints = appendA(&al.hints, x.hints, y)
+				}
 			}
 		}
 	}
