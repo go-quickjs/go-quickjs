@@ -306,7 +306,8 @@ func (q *jitCallCtx) callTargets(t *jitRegTargets, pc int, w bytecode.RInstr, ar
 	rpc := int32(q.p.Origin[pc])
 	newW := w.Op() == bytecode.RNewW
 	calls := src.calls(int(w.C()))
-	// A site whose cache the interpreter has not filled, or not made yet.
+	// A site whose cache the interpreter has not filled, or not made yet
+	// (jitCallUnfilled).
 	unfilled := !newW && w.Op() != bytecode.RApplyArgs && uint(w.C()) >= uint(len(calls))
 	if !newW && w.Op() != bytecode.RApplyArgs && uint(w.C()) < uint(len(calls)) {
 		if e := &calls[w.C()]; jitRegCallKind(e) {
@@ -339,13 +340,8 @@ func (q *jitCallCtx) callTargets(t *jitRegTargets, pc int, w bytecode.RInstr, ar
 		// G.call(x, ...) the interpreter has not made yet, G the binding the
 		// method's read read -- _super.call(this, ...) of a class compiled
 		// to ES5 -- called natively through Function.prototype.call from
-		// the first compile.
-		f := q.mustLive()
-		if g, cl := f.regViaNow(int(rpc), int(w.A())); cl != nil {
-			rc := cl.reg
-			if rc == nil {
-				rc = f.fb.r.regOf(cl)
-			}
+		// the first compile (regNowTarget).
+		if g, cl, rc := src.now(int(rpc), w, true); cl != nil {
 			if n := t.n; rc != nil {
 				q.addTarget(t, pc, argc, method, g, cl, rc, nil, nil, false, true)
 				if t.n > n {
@@ -359,28 +355,15 @@ func (q *jitCallCtx) callTargets(t *jitRegTargets, pc int, w bytecode.RInstr, ar
 		// A plain call the interpreter has not made yet, of the function
 		// the binding read before it holds now -- a global's, a captured
 		// one's -- called natively, or inlined, from the first compile: the
-		// call checks its function. Learned only at calls of Go, a function
-		// compiled while its first loop ran made each call of its later
-		// loops by Go, and was compiled again for each -- RegExp's
-		// runBlock0, whose loops each call Exec.
-		f := q.mustLive()
-		if o := f.regConstructorNow(int(rpc), int(w.A())); o != nil {
-			if fd := o.fn(); fd != nil && fd.closure != nil && !fd.bound && fd.native == nil {
-				cl := fd.closure
-				rc := cl.reg
-				if rc == nil {
-					rc = f.fb.r.regOf(cl)
-				}
-				if q.rc.Typed {
-					// Typed code calls the module's functions' typed code,
-					// their twins' (asmTwin), or Go calls them.
-					cl, rc = jitTypedCallee(cl)
-				}
-				if n := t.n; rc != nil {
-					q.addTarget(t, pc, argc, method, o, cl, rc, nil, nil, false, false)
-					if t.n > n {
-						l.nativeCalls = append(l.nativeCalls, jitInline{pc: rpc, cl: cl, obj: o})
-					}
+		// call checks its function (regNowTarget). Learned only at calls of
+		// Go, a function compiled while its first loop ran made each call
+		// of its later loops by Go, and was compiled again for each --
+		// RegExp's runBlock0, whose loops each call Exec.
+		if o, cl, rc := src.now(int(rpc), w, false); cl != nil {
+			if n := t.n; rc != nil {
+				q.addTarget(t, pc, argc, method, o, cl, rc, nil, nil, false, false)
+				if t.n > n {
+					l.nativeCalls = append(l.nativeCalls, jitInline{pc: rpc, cl: cl, obj: o})
 				}
 			}
 		}
@@ -494,6 +477,12 @@ func (r *Runtime) jitRegSeenCallees(cl *closure, rc *bytecode.RegCode, rpc int, 
 	if read < 0 {
 		return nil
 	}
+	return r.jitRegSeenCalleesAt(cl, rc, read)
+}
+
+// jitRegSeenCalleesAt is jitRegSeenCallees' of read, the get_method_w
+// that put the call's method in its window.
+func (r *Runtime) jitRegSeenCalleesAt(cl *closure, rc *bytecode.RegCode, read int) []jitCallee {
 	site := int(rc.Code[read].C())
 	if site >= len(cl.ic) || site >= len(rc.SiteName) || int(rc.SiteName[site]) >= len(cl.names) {
 		return nil
@@ -1001,16 +990,92 @@ func (r *Runtime) jitRegCallTarget(l *jitEntry, w bytecode.RInstr, x jitInline) 
 // construction checks.
 func (f *jitRegFeedback) regConstructorNow(rpc, reg int) *Object {
 	for q := rpc - 1; q >= 0 && q < len(f.rc.Code); q-- {
-		if int(f.rc.Code[q].A()) != reg {
-			continue
+		if int(f.rc.Code[q].A()) == reg {
+			return f.regConstructorAt(q, reg)
 		}
-		v, ok := f.regDefined(q+1, reg)
-		if !ok || !v.IsObject() {
-			return nil
-		}
-		return v.Object()
 	}
 	return nil
+}
+
+// regNowTarget is the function a call at register pc rpc, w, that the
+// interpreter has not made yet calls as the binding read before it holds
+// it now, with its closure and register code, made where it has none
+// (regOf): a method call's G of G.call(x, ...) (regViaNow), a plain call's
+// function (regConstructorNow), of typed code its typed twin's
+// (jitTypedCallee). cl is nil for none; rc nil where it has no register
+// code.
+func (f *jitRegFeedback) regNowTarget(rpc int, w bytecode.RInstr, method bool) (*Object, *closure, *regCode) {
+	reg := int(w.A())
+	for q := rpc - 1; q >= 0 && q < len(f.rc.Code); q-- {
+		if int(f.rc.Code[q].A()) == reg {
+			return f.regNowTargetAt(q, w, method)
+		}
+	}
+	return nil, nil, nil
+}
+
+// regNowTargetAt is regNowTarget's of q, the nearest instruction before
+// the call that writes its window's first register.
+func (f *jitRegFeedback) regNowTargetAt(q int, w bytecode.RInstr, method bool) (*Object, *closure, *regCode) {
+	r := f.fb.r
+	if method {
+		g, cl := f.regViaAt(q)
+		if cl == nil {
+			return nil, nil, nil
+		}
+		rc := cl.reg
+		if rc == nil {
+			rc = r.regOf(cl)
+		}
+		return g, cl, rc
+	}
+	o := f.regConstructorAt(q, int(w.A()))
+	if o == nil {
+		return nil, nil, nil
+	}
+	fd := o.fn()
+	if fd == nil || fd.closure == nil || fd.bound || fd.native != nil {
+		return nil, nil, nil
+	}
+	cl := fd.closure
+	rc := cl.reg
+	if rc == nil {
+		rc = r.regOf(cl)
+	}
+	if f.rc.Typed {
+		// Typed code calls the module's functions' typed code, their
+		// twins' (asmTwin), or Go calls them.
+		cl, rc = jitTypedCallee(cl)
+	}
+	return o, cl, rc
+}
+
+// jitCallUnfilled reports whether the call w's site, whose call caches
+// are calls, is one the interpreter has not filled, or not made yet, as
+// callTargets finds it: a method's where method says, of argc arguments,
+// learned where the code learned anything.
+func jitCallUnfilled(calls []regCallCache, w bytecode.RInstr, method bool, argc int, learned bool) bool {
+	if w.Op() == bytecode.RNewW || w.Op() == bytecode.RApplyArgs {
+		return false
+	}
+	if uint(w.C()) >= uint(len(calls)) {
+		return true
+	}
+	e := &calls[w.C()]
+	if jitRegCallKind(e) || e.kind&regCallThrough != 0 && method && argc >= 1 && e.cl != nil && e.rc != nil && learned {
+		return false
+	}
+	return e.callee == nil
+}
+
+// regConstructorAt is regConstructorNow's of q, the nearest instruction
+// before the call that writes reg.
+func (f *jitRegFeedback) regConstructorAt(q, reg int) *Object {
+	v, ok := f.regDefined(q+1, reg)
+	if !ok || !v.IsObject() {
+		return nil
+	}
+	return v.Object()
 }
 
 // regViaNow is G and its closure where the method call at register pc rpc,
@@ -1019,44 +1084,49 @@ func (f *jitRegFeedback) regConstructorNow(rpc, reg int) *Object {
 // then as the binding read before it holds it now (regDefined), and the
 // method G has now is the realm's Function.prototype.call -- or nil.
 func (f *jitRegFeedback) regViaNow(rpc, win int) (*Object, *closure) {
-	r := f.fb.r
-	cl := f.fb.cl
-	if r.callFn == nil || cl == nil {
+	if f.fb.r.callFn == nil || f.fb.cl == nil {
 		return nil, nil
 	}
 	for q := rpc - 1; q >= 0 && q < len(f.rc.Code); q-- {
-		w := f.rc.Code[q]
-		if int(w.A()) != win {
+		if int(f.rc.Code[q].A()) == win {
+			return f.regViaAt(q)
+		}
+	}
+	return nil, nil
+}
+
+// regViaAt is regViaNow's of q, the nearest instruction before the call
+// that writes its window's register.
+func (f *jitRegFeedback) regViaAt(q int) (*Object, *closure) {
+	r := f.fb.r
+	cl := f.fb.cl
+	w := f.rc.Code[q]
+	if r.callFn == nil || cl == nil || w.Op() != bytecode.RGetMethodW {
+		return nil, nil
+	}
+	site := int(w.C())
+	if site >= len(f.rc.SiteName) || int(f.rc.SiteName[site]) >= len(cl.names) {
+		return nil, nil
+	}
+	v, ok := f.regDefined(q, int(w.B()))
+	if !ok || !v.IsObject() {
+		return nil, nil
+	}
+	g := v.Object()
+	key := cl.names[f.rc.SiteName[site]]
+	for o, depth := g, 0; o != nil && depth < 8; o, depth = o.proto(), depth+1 {
+		prop := o.getOwnVisible(key)
+		if !prop.ok() {
 			continue
 		}
-		if w.Op() != bytecode.RGetMethodW {
+		if prop.flags()&propAccessor != 0 || !prop.value().IsObject() || prop.value().Object() != r.callFn {
 			return nil, nil
 		}
-		site := int(w.C())
-		if site >= len(f.rc.SiteName) || int(f.rc.SiteName[site]) >= len(cl.names) {
+		fd := g.fn()
+		if fd == nil || fd.closure == nil || fd.bound || fd.native != nil {
 			return nil, nil
 		}
-		v, ok := f.regDefined(q, int(w.B()))
-		if !ok || !v.IsObject() {
-			return nil, nil
-		}
-		g := v.Object()
-		key := cl.names[f.rc.SiteName[site]]
-		for o, depth := g, 0; o != nil && depth < 8; o, depth = o.proto(), depth+1 {
-			prop := o.getOwnVisible(key)
-			if !prop.ok() {
-				continue
-			}
-			if prop.flags()&propAccessor != 0 || !prop.value().IsObject() || prop.value().Object() != r.callFn {
-				return nil, nil
-			}
-			fd := g.fn()
-			if fd == nil || fd.closure == nil || fd.bound || fd.native != nil {
-				return nil, nil
-			}
-			return g, fd.closure
-		}
-		return nil, nil
+		return g, fd.closure
 	}
 	return nil, nil
 }
@@ -1474,6 +1544,7 @@ func (q *jitCallCtx) callSite(pc int, o *Object, cl *closure, rc *regCode, argc 
 		forward, method, argc = true, true, 0
 	}
 	var facts jitCallFacts
+	protoIndex := -1
 	if pool == nil {
 		if facts = src.target(o, cl, rc); !facts.callable(cl, rc, argc, realm.quirks) {
 			return ssa.CallSite{}, false
@@ -1485,11 +1556,11 @@ func (q *jitCallCtx) callSite(pc int, o *Object, cl *closure, rc *regCode, argc 
 		// construction was compiled as a call of Go, which fills no pool,
 		// for good: RayTrace's IntersectionInfo's, by the hundred thousand
 		// in a run, at random runs.
-		r := q.mustLive().fb.r
-		if tc, tp, ok := r.jitRegConstructTarget(o, argc); !ok || tc != cl || tp != parent || rc != cl.reg {
+		c := src.construct(o, argc)
+		if !c.ok || c.cl != cl || c.parent != parent || rc != src.reg(cl) {
 			return ssa.CallSite{}, false
 		}
-		facts = r.jitRegFactsOf(o, cl, rc)
+		facts, protoIndex = src.target(o, cl, rc), c.protoIndex
 	}
 	arrow, this := facts.arrow, cl.fn.UsesThis
 	l := src.link(cl, rc)
@@ -1535,7 +1606,7 @@ func (q *jitCallCtx) callSite(pc int, o *Object, cl *closure, rc *regCode, argc 
 		// makes one, while the function's prototype is still the object
 		// the pool's are of (mir's constructGuards).
 		k.pools = append(k.pools, pool)
-		site.Pool, site.ProtoIndex, site.ProtoKey = uintptr(unsafe.Pointer(pool)), int(o.findOwn(atomPrototype)), uint32(atomPrototype)
+		site.Pool, site.ProtoIndex, site.ProtoKey = uintptr(unsafe.Pointer(pool)), protoIndex, uint32(atomPrototype)
 		// A derived constructor's code: the pool's object its instance, its
 		// this unbound until its super() binds it (ssa.CallSite's Derived);
 		// a class's with no constructor of its own, run with its parent's

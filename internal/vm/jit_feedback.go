@@ -1131,11 +1131,10 @@ func (q *jitCallCtx) nativeCalls(pc int) []ssa.CallSite {
 	// has nowhere else to take them from, nor a built-in's.
 	wide := n > abi.MaxGoArgs
 	if w.Op() == bytecode.RNewW {
-		f := q.mustLive()
-		if site, ok := f.regAllocSite(rpc, w, argc); ok && !wide {
+		if site, ok := q.allocSite(rpc, w, argc); ok && !wide {
 			return []ssa.CallSite{site}
 		}
-		if l := f.fb.e; !wide && l != nil && slices.Contains(l.genericCalls, int32(rpc)) {
+		if l := q.src.learned(); !wide && l != nil && slices.Contains(l.genericCalls, int32(rpc)) {
 			// A construction that met more functions than it constructs
 			// with natively (jitRegGenericNew) -- classes a loop makes
 			// anew, each with a prototype of its own -- is Go's from native
@@ -1181,7 +1180,7 @@ func (q *jitCallCtx) nativeCalls(pc int) []ssa.CallSite {
 	// A call of the realm's next on generators the code resumes natively
 	// (regGenNextSite), or a generator function's call, its generator made
 	// natively (regGenMakeSite).
-	if q.genAt(rpc) {
+	if !site.New && q.genAt(rpc) {
 		f := q.mustLive()
 		if f.regGenNextSite(rpc, &site); site.Pool == 0 {
 			f.regGenMakeSite(rpc, &site)
@@ -1258,18 +1257,17 @@ func (q *jitCallCtx) callsLive(pc int) bool { return q.callsLiveKind(pc) != jitL
 type jitLiveKind uint8
 
 const (
-	jitLiveNone     jitLiveKind = iota
-	jitLiveTyped                // typed code: its tables (regTableTargets)
-	jitLiveStep                 // a loop's step (regStepSites)
-	jitLiveWhole                // an instruction Go runs whole (regWholeSite)
-	jitLiveSuper                // super() (regSuperSites)
-	jitLiveLit                  // regexp_lit's call (regLitPool)
-	jitLiveApply                // f.apply(x, arguments)
-	jitLiveNew                  // a construction: pools (regAllocSite, jitRegSeedConstruct)
-	jitLiveUnfilled             // a site the interpreter has not filled: the binding now
-	jitLiveBuiltin              // a built-in's call (regBuiltinSite)
-	jitLiveLitMark              // a call that gives a RegExp literal back (regLitPool)
-	jitLiveGen                  // generators resumed or made (regGenNextSite, regGenMakeSite)
+	jitLiveNone    jitLiveKind = iota
+	jitLiveTyped               // typed code: its tables (regTableTargets)
+	jitLiveStep                // a loop's step (regStepSites)
+	jitLiveWhole               // an instruction Go runs whole (regWholeSite)
+	jitLiveSuper               // super() (regSuperSites)
+	jitLiveLit                 // regexp_lit's call (regLitPool)
+	jitLiveApply               // f.apply(x, arguments)
+	jitLiveNew                 // a construction: pools (regAllocSite, jitRegSeedConstruct)
+	jitLiveBuiltin             // a built-in's call (regBuiltinSite)
+	jitLiveLitMark             // a call that gives a RegExp literal back (regLitPool)
+	jitLiveGen                 // generators resumed or made (regGenNextSite, regGenMakeSite)
 	jitLiveKinds
 )
 
@@ -1303,18 +1301,20 @@ func (q *jitCallCtx) callsLiveKind(pc int) jitLiveKind {
 	case bytecode.RApplyArgs:
 		return jitLiveApply
 	case bytecode.RNewW:
-		return jitLiveNew
+		if l := q.src.learned(); l == nil || !slices.ContainsFunc(l.nativeCalls, func(x jitInline) bool { return int(x.pc) == int(q.p.Origin[pc]) && x.pool != nil }) {
+			// None learned: the construction the binding holds now is
+			// learned, its pool made (jitRegSeedConstruct).
+			return jitLiveNew
+		}
+		return jitLiveNone
 	}
 	rpc := int(q.p.Origin[pc])
 	if rpc < len(q.rc.Marks) && q.rc.Marks[rpc]&bytecode.RMarkTail != 0 {
 		return jitLiveNone
 	}
-	calls := q.src.calls(int(w.C()))
-	if uint(w.C()) >= uint(len(calls)) || calls[w.C()].callee == nil {
-		// Unfilled: the binding read before it holds the function now
-		// (regViaNow, regConstructorNow).
-		return jitLiveUnfilled
-	}
+	// A site the interpreter has not filled reads the binding before it
+	// as it is now (regNowTarget), which the gather reads ahead
+	// (jitCallSiteFacts): no more the live feedback's.
 	method := w.Op().MethodCall()
 	switch {
 	case q.builtinAt(w, method):

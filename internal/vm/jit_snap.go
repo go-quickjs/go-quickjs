@@ -4,6 +4,7 @@ package vm
 
 import (
 	"math/bits"
+	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
@@ -60,6 +61,11 @@ func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 		}
 		c.a.pools(pools)
 	}
+	for _, pool := range s.d.pools {
+		// The pools a derivation's answers may name (jitSnapData's
+		// pools), which the worker answers after this.
+		pools[uintptr(unsafe.Pointer(pool))] = true
+	}
 	for pool := range pools {
 		shape, proto, ok := fb.VirtualRoot(pool)
 		if h := fb.fb.r.jitTest.snapAsked; h != nil {
@@ -101,6 +107,9 @@ func (s *jitSnapshot) askReg(fb *jitRegFeedback, p *ir.Program) {
 	s.bind()
 	for pc, op := range s.ops {
 		asks := jitSnapAsks[op] & jitRegSnapMethods &^ jitRegSnapStatePC &^ jitSnapDerived
+		for _, at := range jitSnapAskedAt {
+			asks |= at(s, pc) & jitSnapAsks[op]
+		}
 		for asks != 0 {
 			m := jitSnapMethod(bits.TrailingZeros64(asks))
 			asks &= asks - 1

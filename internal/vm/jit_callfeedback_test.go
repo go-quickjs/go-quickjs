@@ -25,6 +25,9 @@ func TestJITCallFeedbackSnapshot(t *testing.T) {
 		sites, want []ssa.CallSite
 	}
 	var answers []answer
+	// NativeCalls' answers are derived (jit_snaptargets.go), as the worker
+	// derives them before it builds.
+	j.snap.s.derive()
 	snapshots := append([]*jitSnapshot{j.snap.s}, mapValues(j.snap.s.callees)...)
 	for _, s := range snapshots {
 		for _, e := range s.a.NativeCalls.e {

@@ -43,7 +43,8 @@ func init() {
 // an exit's append, on the runtime's goroutine, writes while a worker
 // derives. Asked of a list with room past its length, and of every
 // snapshot of a compile of jitSnapAskedSrc's functions, whose
-// derivations append to their copies (regCallTargets).
+// derivations append to their copies (regCallTargets), and one more
+// append through each copy.
 func TestJITLearnedCopyCut(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -104,6 +105,8 @@ func TestJITLearnedCopyCut(t *testing.T) {
 		}
 		snap.s.derive()
 		for _, x := range rooms {
+			// And an append through the copy, as a derivation's.
+			x.tg.learned.nativeCalls = append(x.tg.learned.nativeCalls, jitInline{pc: 1 << 30, obj: o})
 			l := x.tg.live.nativeCalls
 			if past := l[len(l):cap(l)]; !slices.Equal(past, x.past) {
 				t.Errorf("%s: a derivation wrote the live list's room past its length", name)

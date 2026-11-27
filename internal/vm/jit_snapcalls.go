@@ -480,6 +480,17 @@ type jitCallSrc interface {
 	// seenCallees is jitRegSeenCallees' answer for the method call w at
 	// register pc rpc.
 	seenCallees(rpc int, w bytecode.RInstr) []jitCallee
+	// now is regNowTarget's answer for the call w at register pc rpc,
+	// which the interpreter has not made yet: the function the binding
+	// read before it holds now, a method's where method says.
+	now(rpc int, w bytecode.RInstr, method bool) (*Object, *closure, *regCode)
+	// construct is jitRegConstructTarget's answer for a construction with
+	// o of argc arguments, with the index of o's own prototype
+	// (jitCallConstruct).
+	construct(o *Object, argc int) jitCallConstruct
+	// poolRoom is the room of the arrays pool's are made with, which
+	// a refill changes (abi.ObjectPool's Room).
+	poolRoom(pool *abi.ObjectPool) uint64
 	// realm is the realm's built-ins a call is compared with.
 	realm() jitCallRealm
 	// keep is the feedback an answer's effects -- what the code keeps
@@ -515,12 +526,31 @@ func (f jitCallFacts) target(rc *regCode, argc int, quirks bool) bool {
 }
 
 // jitCallRealm is the realm's built-ins a call's native targets are
-// compared with: its Function.prototype.call and apply, its global object
-// (nil where globalThis is none), and whether the runtime runs with
-// WithNodeQuirks.
+// compared with: its Function.prototype.call and apply, its Array, its
+// global object (nil where globalThis is none), and whether the runtime
+// runs with WithNodeQuirks.
 type jitCallRealm struct {
-	callFn, applyFn, global *Object
-	quirks                  bool
+	callFn, applyFn, arrayCtor, global *Object
+	quirks                             bool
+}
+
+// jitCallConstruct is what a construction with a function object, of a
+// number of arguments, reads of it (jitRegConstructTarget): the closure
+// whose code constructs, and the class it extends where that is its
+// parent's (parent), ok where native code constructs with it; and the
+// index of its own prototype property (protoIndex), which the
+// construction reads.
+type jitCallConstruct struct {
+	cl         *closure
+	parent     *Object
+	protoIndex int
+	ok         bool
+}
+
+// jitRegConstructOf is o's jitCallConstruct for argc arguments, now.
+func (r *Runtime) jitRegConstructOf(o *Object, argc int) jitCallConstruct {
+	cl, parent, ok := r.jitRegConstructTarget(o, argc)
+	return jitCallConstruct{cl: cl, parent: parent, protoIndex: int(o.findOwn(atomPrototype)), ok: ok}
 }
 
 // jitCallCtx is a question of a call's native targets: the function's
@@ -574,6 +604,16 @@ func (l jitCallLive) seenCallees(rpc int, w bytecode.RInstr) []jitCallee {
 	return l.f.fb.r.jitRegSeenCallees(l.f.fb.cl, l.f.rc, rpc, w)
 }
 
+func (l jitCallLive) now(rpc int, w bytecode.RInstr, method bool) (*Object, *closure, *regCode) {
+	return l.f.regNowTarget(rpc, w, method)
+}
+
+func (l jitCallLive) construct(o *Object, argc int) jitCallConstruct {
+	return l.f.fb.r.jitRegConstructOf(o, argc)
+}
+
+func (l jitCallLive) poolRoom(pool *abi.ObjectPool) uint64 { return pool.Room }
+
 func (l jitCallLive) realm() jitCallRealm { return l.f.fb.r.jitCallRealmNow() }
 
 func (l jitCallLive) keep() *jitFeedback { return l.f.fb.keep() }
@@ -582,7 +622,7 @@ func (l jitCallLive) live() *jitRegFeedback { return l.f }
 
 // jitCallRealmNow is r's built-ins a call is compared with, now.
 func (r *Runtime) jitCallRealmNow() jitCallRealm {
-	c := jitCallRealm{callFn: r.callFn, applyFn: r.applyFn, quirks: r.nodeQuirks}
+	c := jitCallRealm{callFn: r.callFn, applyFn: r.applyFn, arrayCtor: r.proto.arrayCtor, quirks: r.nodeQuirks}
 	if r.globalThis.IsObject() {
 		c.global = r.globalThis.Object()
 	}

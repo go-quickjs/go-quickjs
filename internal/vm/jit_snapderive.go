@@ -2,6 +2,8 @@
 
 package vm
 
+import "github.com/go-quickjs/go-quickjs/internal/jit/abi"
+
 // A snapshot's answers derived on the worker (jit_snapshot.go): the
 // runtime's goroutine gathers, for each snapshot -- the function's and each
 // callee's -- a copy of what a method's answers are made of that the
@@ -75,6 +77,10 @@ type jitSnapData struct {
 	// runtime's goroutine reads while the job is pending (holdsLink).
 	deriving     bool
 	derivedLinks []*jitLink
+	// pools, the root's, are the pools its gathers found that a
+	// derivation's answers may name, whose roots the snapshot asks ahead
+	// (jitRegSnapshotOf's VirtualRoot) with the answers'.
+	pools []*abi.ObjectPool
 }
 
 // jitClosureCopy is what of a closure's state a compile's gathers copy, on
@@ -89,6 +95,9 @@ type jitClosureCopy struct {
 	ic    []propCache
 	polys []jitCopiedPoly
 	calls []regCallCache
+	// sites are its call sites' facts, by site (jitCallSiteFacts): what
+	// of the heap a call's native targets read.
+	sites []jitCallSiteFact
 }
 
 // jitCopiedPoly is a cache's earlier entries copied (propPoly), with
@@ -107,6 +116,7 @@ func (d *jitSnapData) closureCopy(cl *closure) *jitClosureCopy {
 	c := &jitClosureCopy{}
 	c.ic, c.polys = jitCopyCaches(cl.ic)
 	c.calls = jitCallsCopy(d.rt, cl)
+	c.sites = jitCallSiteFacts(d.rt, cl, c.calls)
 	if d.copies == nil {
 		d.copies = map[*closure]*jitClosureCopy{}
 	}
@@ -201,6 +211,14 @@ const (
 // as the compile was prepared, which the finish puts in the place it would
 // have had.
 var jitSnapFinishers []func(s *jitSnapshot)
+
+// jitSnapAskedAt are the families' choices of the derived methods asked
+// of the feedback at a PC all the same, on the runtime's goroutine, in the
+// asking's order among the methods there (askReg): a bit by method, where
+// the family's gather found the answer reads the heap or makes what the
+// runtime keeps, and the method's question at the PC may depend on what
+// an earlier method's there appended.
+var jitSnapAskedAt []func(s *jitSnapshot, pc int) uint64
 
 // jitSnapBinders are the families' bindings of what their gathers took,
 // keyed by register pc, to the PCs of the program the function is lowered

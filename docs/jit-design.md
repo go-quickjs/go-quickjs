@@ -1323,10 +1323,16 @@ is under [The projection](#the-projection).
   about 49,000 questions over Octane's functions, 18% of the
   snapshot's time in the profile made twenty times over (projected 15
   to 30 µs of the goroutine's part). The goroutine asks it only where
-  it reads the heap or makes what the runtime keeps -- constructions,
-  `super()`, `apply`, typed code, an empty site's binding, a built-in's
-  checks -- and takes the facts of the targets the copies name and
-  their links. What the answer learns, the appends to the learned
+  it reads the heap or makes what the runtime keeps -- a construction
+  it learned no pool at, `super()`, `apply`, typed code, a built-in's
+  checks -- and takes the
+  facts of the targets the copies name and their links, and of each
+  call site, once a closure, in one pass over its code (a binding's
+  function now, a method's seen callees). Over Typescript's 600
+  compiles in the background, 45,749 of the PCs NativeCalls is asked
+  at are derived; of the 3,700 asked on the goroutine, 2,723 were
+  calls the interpreter had not made, now read in the pass, and 765
+  constructions, now derived where the code has learned their pools. What the answer learns, the appends to the learned
   calls, the finish writes once the compile is done with, as V8's
   concurrent compiles write no feedback. *Measured*: with the gate's
   `compilediff` and the goroutine's part, to come.

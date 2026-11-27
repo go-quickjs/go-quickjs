@@ -304,18 +304,26 @@ func (r *Runtime) jitRegAllocLength(f *frame, e *jitRegEntry, rpc int, w bytecod
 // Array(), or new Array(n) of a length its pool's arrays have room for; any
 // other, and any other function, Go's after an exit.
 func (f *jitRegFeedback) regAllocSite(rpc int, w bytecode.RInstr, argc int) (ssa.CallSite, bool) {
-	l, r := f.fb.e, f.fb.r
+	q := f.callCtx()
+	return q.allocSite(rpc, w, argc)
+}
+
+// allocSite is regAllocSite's, of q's source.
+func (q *jitCallCtx) allocSite(rpc int, w bytecode.RInstr, argc int) (ssa.CallSite, bool) {
+	src := q.src
+	l := src.learned()
 	if w.Op() != bytecode.RNewW || argc > 1 || l == nil {
 		return ssa.CallSite{}, false
 	}
+	arrayCtor := src.realm().arrayCtor
 	for _, x := range l.nativeCalls {
-		if int(x.pc) != rpc || x.cl != nil || x.forEach || x.pool == nil || x.obj != r.proto.arrayCtor {
+		if int(x.pc) != rpc || x.cl != nil || x.forEach || x.pool == nil || x.obj != arrayCtor {
 			continue
 		}
-		if argc == 1 && x.pool.Room == 0 {
+		if argc == 1 && src.poolRoom(x.pool) == 0 {
 			return ssa.CallSite{}, false
 		}
-		k := f.fb.keep()
+		k := src.keep()
 		k.holders, k.pools = append(k.holders, x.obj), append(k.pools, x.pool)
 		return ssa.CallSite{Callee: uintptr(unsafe.Pointer(x.obj)), ThisSlot: -1,
 			Pool: uintptr(unsafe.Pointer(x.pool)), Alloc: true, Argc: argc}, true
