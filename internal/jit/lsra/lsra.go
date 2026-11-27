@@ -256,6 +256,14 @@ type Config struct {
 	// the edges that cross its bounds, for the tests that compare it with
 	// visiting those where its web lives.
 	blockByBlock bool
+	// mergeAll has a web's events merged from its members' runs as they
+	// are, for the tests that compare it with joining first the runs that
+	// lie one after another.
+	mergeAll bool
+	// regByReg has an eviction weigh the webs in the way of each register
+	// by a walk of the scan's lists for it, for the tests that compare it
+	// with one walk for all.
+	regByReg bool
 	// plainLists has the scan read every web on its active and inactive
 	// lists at every position, for the tests that compare it with reading
 	// each only where its entry says it may have changed.

@@ -1069,9 +1069,10 @@ func TestManySlots(t *testing.T) {
 // few ranges into the many where they found them, the walk of the blocks
 // that weighs the phis and gives the hints, the scan's entries that say
 // where each web on its lists may change, a hole's cost from the blocks
-// where its web lives -- and with each as it was (Config.markPass,
-// twoPass, hintPass, plainLists, blockByBlock), which must give the same
-// allocation.
+// where its web lives, a web's events merged from its members' runs with
+// those in order one after another joined first -- and with each as it
+// was (Config.markPass, twoPass, hintPass, plainLists, blockByBlock,
+// mergeAll), which must give the same allocation.
 func TestWalkMethods(t *testing.T) {
 	rng := rand.New(rand.NewPCG(47, 53))
 	// More registers than values live at once, too: the hints choose.
@@ -1085,6 +1086,8 @@ func TestWalkMethods(t *testing.T) {
 		{"plainLists", func(c *Config) { c.plainLists = true }},
 		{"hintPass", func(c *Config) { c.hintPass = true }},
 		{"blockByBlock", func(c *Config) { c.blockByBlock = true }},
+		{"mergeAll", func(c *Config) { c.mergeAll = true }},
+		{"regByReg", func(c *Config) { c.regByReg = true }},
 	}
 	var al, old Allocator
 	twice := 0
@@ -1255,4 +1258,39 @@ func shuffleBlocks(rng *rand.Rand, f *Func) {
 		blocks[perm[i]] = b
 	}
 	f.Blocks = blocks
+}
+
+// TestJoinRuns sorts random runs, each in order, some empty, some lying
+// one after another, by joinRuns and mergeRuns, which must give what a
+// sort does.
+func TestJoinRuns(t *testing.T) {
+	rnd := rand.New(rand.NewPCG(59, 61))
+	var al Allocator
+	for range 20000 {
+		var ev, runs []int32
+		at := int32(rnd.IntN(10))
+		for range 1 + rnd.IntN(12) {
+			if rnd.IntN(3) != 0 {
+				// The next run from where this one ends, or anywhere.
+				at = int32(rnd.IntN(60))
+			}
+			for k := rnd.IntN(5); k > 0; k-- {
+				at += int32(rnd.IntN(3))
+				ev = append(ev, at)
+			}
+			runs = append(runs, int32(len(ev)))
+		}
+		want := slices.Sorted(slices.Values(ev))
+		joined := joinRuns(ev, slices.Clone(runs))
+		lo := int32(0)
+		for _, hi := range joined {
+			if !slices.IsSorted(ev[lo:hi]) {
+				t.Fatalf("joinRuns(%v, %v) = %v: run %v not in order", ev, runs, joined, ev[lo:hi])
+			}
+			lo = hi
+		}
+		if got := al.mergeRuns(slices.Clone(ev), joined); !slices.Equal(got, want) {
+			t.Fatalf("mergeRuns(%v, joinRuns %v) = %v, want %v", ev, joined, got, want)
+		}
+	}
 }

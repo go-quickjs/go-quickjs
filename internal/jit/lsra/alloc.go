@@ -285,6 +285,8 @@ type Allocator struct {
 	twoPass      bool
 	markPass     bool
 	hintPass     bool
+	regByReg     bool
+	mergeAll     bool
 	blockByBlock bool
 	plainLists   bool
 	mutateHoles  bool
@@ -369,7 +371,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.f, al.evKnown, al.blocksKnown, al.kindsKnown = f, false, false, false
 	al.split, al.stress = !cfg.NoSplit, cfg.StressSplit && !cfg.NoSplit
 	al.displace, al.mutateHoles, al.oneByOne, al.twoPass, al.plainLists, al.markPass = cfg.Displace, cfg.mutateHoles, cfg.oneByOne, cfg.twoPass, cfg.plainLists, cfg.markPass
-	al.hintPass, al.blockByBlock = cfg.hintPass, cfg.blockByBlock
+	al.hintPass, al.blockByBlock, al.mergeAll, al.regByReg = cfg.hintPass, cfg.blockByBlock, cfg.mergeAll, cfg.regByReg
 
 	// predIdx is, for each block's successor k, the block's index among
 	// that successor's predecessors: predIdx[predOff[i]+k]. The walk that
@@ -1014,6 +1016,8 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	// instead, its registers scanned again each on its own, each hinted to
 	// the others' registers: they may find registers in its holes.
 	al.moved = false
+	// costs is an eviction's weight of each register (below).
+	var costs [64]float64
 	for cls, regs := range cfg.Classes {
 		active, inactive := al.active[:0], al.inactive[:0]
 		// The webs to scan: the class's, in order of their starts, and
@@ -1156,19 +1160,39 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 				if al.split {
 					bestCost = math.Inf(1)
 				}
+				// Each register's cost, the densest of its webs in cur's way:
+				// a walk of the lists for them all (with Config.regByReg, a
+				// walk of them for each register).
+				if !al.regByReg {
+					for _, r := range regs {
+						costs[r] = 0
+					}
+					for _, e := range active {
+						if cur.avoid&(1<<e.reg) == 0 {
+							costs[e.reg] = max(costs[e.reg], al.density(e.w))
+						}
+					}
+					for _, e := range inactive {
+						if cur.avoid&(1<<e.reg) == 0 && (e.at < end || al.plainLists) && overlap(e.w.ranges[e.w.cur:], cur.ranges) {
+							costs[e.reg] = max(costs[e.reg], al.density(e.w))
+						}
+					}
+				}
 				for _, r := range regs {
 					if cur.avoid&(1<<r) != 0 {
 						continue
 					}
-					cost := 0.0
-					for _, e := range active {
-						if int(e.reg) == r {
-							cost = max(cost, al.density(e.w))
+					cost := costs[r]
+					if al.regByReg {
+						for _, e := range active {
+							if int(e.reg) == r {
+								cost = max(cost, al.density(e.w))
+							}
 						}
-					}
-					for _, e := range inactive {
-						if int(e.reg) == r && (e.at < end || al.plainLists) && overlap(e.w.ranges[e.w.cur:], cur.ranges) {
-							cost = max(cost, al.density(e.w))
+						for _, e := range inactive {
+							if int(e.reg) == r && (e.at < end || al.plainLists) && overlap(e.w.ranges[e.w.cur:], cur.ranges) {
+								cost = max(cost, al.density(e.w))
+							}
 						}
 					}
 					if cost < bestCost {

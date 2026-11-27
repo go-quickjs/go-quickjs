@@ -257,7 +257,13 @@ func (al *Allocator) webEvents(w *web) {
 		}
 		if sorted {
 			// Each member's are in order, found by the pass in order of
-			// position: merged, two runs at a time.
+			// position: merged, two runs at a time, a run that ends by
+			// the next one's first joined with it first (with
+			// Config.mergeAll, every run merged as it is). A web's
+			// members never meet: many lie one after another so.
+			if !al.mergeAll {
+				runs = joinRuns(ev, runs)
+			}
 			ev = al.mergeRuns(ev, runs)
 		} else {
 			slices.Sort(ev)
@@ -274,6 +280,24 @@ func (al *Allocator) webEvents(w *web) {
 		evW = append(evW, evW[len(evW)-1]+x)
 	}
 	sp.evW = evW
+}
+
+// joinRuns drops from runs, the ends of ev's sorted runs, those where
+// the run ends by the next one's first, and returns it: the runs joined
+// so are sorted.
+func joinRuns(ev []int32, runs []int32) []int32 {
+	out := runs[:0]
+	lo := int32(0)
+	for k, hi := range runs {
+		if k+1 < len(runs) && (hi == lo || hi == runs[k+1] || ev[hi-1] <= ev[hi]) {
+			// The run to hi, empty or ending by the next's first, or the
+			// next empty: one with the next.
+			continue
+		}
+		out = append(out, hi)
+		lo = hi
+	}
+	return out
 }
 
 // mergeRuns sorts ev, which is runs in order, each ending where runs
