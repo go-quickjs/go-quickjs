@@ -1408,7 +1408,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	// a call. A web with a parameter has the slot the parameter arrives in,
 	// which holds nothing else from the function's start until then.
 	slots := al.slots[:0]
-	al.slotScan.reset(cfg.slots)
+	al.slotScan.reset(cfg.slots, cfg.slotHeap, pos)
 	take := func(s int32, rs []rng) {
 		for int(s) >= len(slots) {
 			slots = append(slots, nil)

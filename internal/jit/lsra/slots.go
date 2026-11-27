@@ -1,6 +1,9 @@
 package lsra
 
-import "math"
+import (
+	"math"
+	"math/bits"
+)
 
 // The slots' scan gives each web that needs a slot, in the order of the
 // webs' starts, the lowest slot from which as many as it is wide hold
@@ -19,6 +22,14 @@ import "math"
 // only slots that would fail are passed over. A web whose needs begin
 // past the position moves it; one whose ranges lie wholly before it, or
 // that has none over it, is tested slot by slot.
+//
+// Where the position passes the end of the range that gives a slot its
+// key, the key moves to the slot's next range: the ends are kept by
+// position, a list of them at each position and a bit for each position
+// that has any, which the position's moves sweep. Every end kept lies past
+// the position where it is kept, and each slot's key, once the position
+// has passed what it may, is that of its first range that ends past the
+// position, whatever the order its ends are met in.
 
 // slotTreeMin is the number of slots past which the slots' scan keeps
 // their keys in a tree: below it, a test of each in turn costs less.
@@ -52,18 +63,34 @@ type slotScan struct {
 	key  []int32
 	cur  []int32
 	keys []int32
-	// ends are the ends of the slots' ranges that give their keys, each
-	// with its slot, the first first: where the position passes one, the
-	// slot's key moves to its next range. A slot's earlier ones may be
-	// left in it, and are passed over.
-	ends []slotEnd
+	// The ends of the slots' ranges that give their keys, each with its
+	// slot: where the position passes one, the slot's key moves to its
+	// next range. A slot's earlier ones may be left, and are passed over.
+	// By position, at[x] is plus one the index in byPos of the last kept
+	// at x, each's next the one kept before it there, and full has a bit
+	// for each position that has any; swept is the position up to which
+	// they have been met, and npos the positions' number. With
+	// Config.slotHeap, they are a heap instead, ends, the first first
+	// (heap).
+	npos  int32
+	at    []int32
+	byPos []slotAt
+	full  []uint64
+	swept int32
+	heap  bool
+	ends  []slotEnd
 }
 
 type slotEnd struct{ to, s int32 }
 
-// reset readies the scan for an allocation's slots.
-func (sc *slotScan) reset(mode slotsMode) {
-	sc.on, sc.p, sc.ends = false, -1, sc.ends[:0]
+// slotAt is an end kept at its position: its slot, and plus one the index
+// of the one kept before it there, or 0.
+type slotAt struct{ s, next int32 }
+
+// reset readies the scan for an allocation's slots, whose ranges end by
+// maxPos; heap is Config.slotHeap.
+func (sc *slotScan) reset(mode slotsMode, heap bool, maxPos int32) {
+	sc.on, sc.p, sc.ends, sc.heap, sc.npos = false, -1, sc.ends[:0], heap, maxPos+1
 	switch mode {
 	case slotsLinear:
 		sc.min = math.MaxInt
@@ -175,6 +202,13 @@ func (sc *slotScan) setKey(slots [][]rng, s int32) {
 func (sc *slotScan) start(slots [][]rng) {
 	sc.on = true
 	sc.n = 0
+	if !sc.heap {
+		sc.at = grown(sc.at, int(sc.npos))
+		clear(sc.at)
+		sc.full = grown(sc.full, int(sc.npos+63)/64)
+		clear(sc.full)
+		sc.byPos, sc.swept = sc.byPos[:0], sc.p
+	}
 	sc.grow(2*len(slots) + 1)
 	for s := range slots {
 		sc.cur[s] = int32(endsAfter(slots[s], 0, sc.p))
@@ -205,20 +239,54 @@ func (sc *slotScan) grow(need int) {
 // ranges giving them end at or before it to their next ranges.
 func (sc *slotScan) advance(slots [][]rng, p int32) {
 	sc.p = p
-	for len(sc.ends) > 0 && sc.ends[0].to <= p {
-		e := sc.pop()
-		c := sc.cur[e.s]
-		rs := slots[e.s]
-		if int(c) >= len(rs) || rs[c].to > p {
-			// A range it no longer has, or not past yet.
+	if !sc.on {
+		return
+	}
+	if sc.heap {
+		for len(sc.ends) > 0 && sc.ends[0].to <= p {
+			sc.passed(slots, sc.pop().s, p)
+		}
+		return
+	}
+	// The positions with ends, from the one after the last swept to p: the
+	// ends a slot's move keeps lie past p.
+	full, at := sc.full, sc.at
+	for x := sc.swept + 1; x <= p; {
+		word := full[x>>6] >> (x & 63)
+		if word == 0 {
+			x = (x | 63) + 1
 			continue
 		}
-		for int(c) < len(rs) && rs[c].to <= p {
-			c++
+		x += int32(bits.TrailingZeros64(word))
+		if x > p {
+			break
 		}
-		sc.cur[e.s] = c
-		sc.setKey(slots, e.s)
+		for k := at[x]; k != 0; {
+			e := sc.byPos[k-1]
+			k = e.next
+			sc.passed(slots, e.s, p)
+		}
+		at[x] = 0
+		full[x>>6] &^= 1 << (x & 63)
+		x++
 	}
+	sc.swept = p
+}
+
+// passed moves slot s's key past p, where the range that gives it ends by
+// p.
+func (sc *slotScan) passed(slots [][]rng, s, p int32) {
+	c := sc.cur[s]
+	rs := slots[s]
+	if int(c) >= len(rs) || rs[c].to > p {
+		// A range it no longer has, or not past yet.
+		return
+	}
+	for int(c) < len(rs) && rs[c].to <= p {
+		c++
+	}
+	sc.cur[s] = c
+	sc.setKey(slots, s)
 }
 
 // find is the first slot at or past lo whose key is at least x: there is
@@ -241,8 +309,15 @@ func (sc *slotScan) find(lo int, x int32) int {
 	return i - sc.n
 }
 
-// push and pop keep ends a heap, the first end first.
+// push keeps end e: at its position, or with Config.slotHeap in the heap,
+// which pop takes the first end of.
 func (sc *slotScan) push(e slotEnd) {
+	if !sc.heap {
+		sc.byPos = append(sc.byPos, slotAt{e.s, sc.at[e.to]})
+		sc.at[e.to] = int32(len(sc.byPos))
+		sc.full[e.to>>6] |= 1 << (e.to & 63)
+		return
+	}
 	h := append(sc.ends, e)
 	i := len(h) - 1
 	for i > 0 {

@@ -291,6 +291,10 @@ type Config struct {
 	// the webs, which compares two by going to each, for the tests that
 	// compare it with the heap of their starts and members (partHeap).
 	webHeap bool
+	// slotHeap has the slots' scan keep the ends of the ranges that give the
+	// slots their keys in a heap, for the tests that compare it with
+	// keeping them by position.
+	slotHeap bool
 	// plainLists has the scan read every web on its active and inactive
 	// lists at every position, for the tests that compare it with reading
 	// each only where its entry says it may have changed.

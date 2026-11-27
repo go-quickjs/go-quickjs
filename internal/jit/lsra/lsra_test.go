@@ -515,7 +515,7 @@ func TestLivenessMethods(t *testing.T) {
 func TestSlotScanMethods(t *testing.T) {
 	rng := rand.New(rand.NewPCG(31, 37))
 	classes := [][][]int{{{3, 1, 0, 2}, {0, 1, 2}}, {{0, 1, 2, 3}, {2, 1, 0}}}
-	var al, lin, tree Allocator
+	var al, lin, tree, heap Allocator
 	many := 0
 	defer func() {
 		t.Logf("%d of 3000 large functions need %d slots or more", many, slotTreeMin)
@@ -564,6 +564,15 @@ func TestSlotScanMethods(t *testing.T) {
 		}
 		if !sameResult(f, a, b) {
 			t.Fatalf("iteration %d: the scans by the keys from the first slot and of each in turn allocate differently", iter)
+		}
+		// The ends that move the keys in a heap (Config.slotHeap).
+		tcfg.slotHeap = true
+		h, err := heap.Allocate(f, &tcfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sameResult(f, b, h) {
+			t.Fatalf("iteration %d: the scans by the keys with their ends by position and in a heap allocate differently", iter)
 		}
 	}
 	for _, wide := range []bool{false, true} {
@@ -1208,6 +1217,7 @@ func TestWalkMethods(t *testing.T) {
 		{"sortList", func(c *Config) { c.sortList = true }},
 		{"alwaysTest", func(c *Config) { c.alwaysTest = true }},
 		{"webHeap", func(c *Config) { c.webHeap = true }},
+		{"slotHeap", func(c *Config) { c.slotHeap = true }},
 	}
 	var al, old Allocator
 	twice := 0
