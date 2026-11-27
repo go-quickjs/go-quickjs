@@ -491,6 +491,7 @@ var jitSnapOps = [...][]ir.Op{
 	snapStringProperty: {ir.ReferenceRead},
 	snapGenSteps:       {ir.IterStep},
 	snapKeyedRead:      {ir.ArrayRead},
+	snapArgumentsRead:  {ir.ArrayRead, ir.ArrayLength},
 	snapBigIntFailed:   {ir.Binary},
 	snapSubstring:      {ir.Host},
 	snapKeyedWrite:     {ir.ArrayWrite},

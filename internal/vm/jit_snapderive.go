@@ -88,6 +88,8 @@ type jitSnapData struct {
 	// (jit_snapkeyedstore.go).
 	inst   jitInstanceOfData
 	kstore jitKeyedStoreData
+	// args is ArgumentsRead's (jit_snapargs.go).
+	args jitArgumentsData
 	// made is FrameMade's (jit_snapframemade.go).
 	made jitFrameMadeData
 	// typed is TypedKind's (jit_snaptyped.go), lits Literal's and

@@ -3,11 +3,13 @@
 package vm
 
 import (
+	"slices"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
@@ -372,4 +374,142 @@ func (r *Runtime) jitRegForwardMade(ctx *abi.Context, idx int, run jitRegRun, rp
 	}
 	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 	return true
+}
+
+// Reads of arguments objects as values -- a callee's returned, one kept in
+// a local -- learned as V8's keyed loads and loads of length learn their
+// receivers' kinds: an element read whose receiver has been an unmapped
+// arguments object's, by an index it has an element at
+// (jitRegArgsElemSeen), and a length read whose receiver has been an
+// arguments object of the realm's layout (jitRegArgsLengthSeen), are
+// marked jitArgsRead in their function's typedReads, which no other read's
+// PC is, so that TypedRead and TypedBigRead take it for none, and what
+// keeps and carries typedReads keeps and carries it too. Native code reads
+// such an element by its cell, as an Array's, and such a length, its own
+// data property, from the object's table (ssa.ArgumentsFeedback); a read
+// that fails where it is marked is learned as any other receiver's -- the
+// element Go's (keyedReads), the length generic. Each had been a call of
+// Go, which cost native code more than the interpreter's read:
+// microbench's arguments_object ran slower with the JIT than without.
+const jitArgsRead = 1 << 28
+
+// jitArgsElemReadable reports whether o[k] is an unmapped arguments
+// object's element, k an index it has a dense element at: what native code
+// reads of one (ssa.ArrayOfArguments).
+func jitArgsElemReadable(o, k Value) bool {
+	if !o.IsObject() || !k.IsNumber() {
+		return false
+	}
+	obj := o.Object()
+	if obj.class != ClassArguments || obj.flags&(objMappedArguments|objHasExt) != objHasExt {
+		return false
+	}
+	i := uint32(k.num)
+	return float64(i) == k.num && uint(i) < uint(len(obj.elemsOf())) && !isHole(obj.elemsOf()[i])
+}
+
+// jitRegArgsElemSeen learns the element read at register pc rpc, of
+// receiver o at key k, in l, as one of an arguments object's
+// (jitArgsRead), where it is one native code reads and the read is not
+// marked so already. It reports whether it learned it.
+func jitRegArgsElemSeen(l *jitEntry, rpc int, o, k Value) bool {
+	pc := int32(rpc) | jitArgsRead
+	if !jitArgsElemReadable(o, k) || slices.Contains(l.typedReads, pc) {
+		return false
+	}
+	l.typedReads = append(l.typedReads, pc)
+	return true
+}
+
+// jitRegArgsLengthSeen learns, at a deoptimization of register code at
+// register pc rpc of c, whose frame's window at wb holds the state at the
+// instruction's start, a get_length whose receiver was an arguments object
+// of a shape the realm's arguments objects have (jitArgumentsLengths) --
+// as one of an arguments object's (jitArgsRead), not generic -- where it
+// is not marked so already. It reports whether it learned it.
+func (r *Runtime) jitRegArgsLengthSeen(l *jitEntry, c *regCode, wb, rpc int) bool {
+	if rpc < 0 || rpc >= len(c.rc.Code) {
+		return false
+	}
+	w := c.rc.Code[rpc]
+	if w.Op() != bytecode.RGetLength || wb+int(w.B()) >= len(r.stack) {
+		return false
+	}
+	o := r.stack[wb+int(w.B())]
+	pc := int32(rpc) | jitArgsRead
+	if !o.IsObject() || o.Object().class != ClassArguments || slices.Contains(l.typedReads, pc) {
+		return false
+	}
+	shape := o.Object().shape
+	known := false
+	for _, t := range r.argsLayouts {
+		known = known || t != nil && t.shape == shape && jitArgsLengthAt(shape) >= 0
+	}
+	if !known {
+		return false
+	}
+	l.typedReads = append(l.typedReads, pc)
+	return true
+}
+
+// jitArgsLengthAt is where an arguments object of shape s has its length,
+// a data property, in its table: -1 where s is an object's own (unique),
+// which it changes in place, or has its length elsewhere, or as an
+// accessor. An arguments object's shape is loose, no cache's to remember,
+// but the realm's layout of them (argsLayout) is a template its objects
+// share, which none changes in place: an object whose keys or their
+// attributes change is given a copy of its own first (appendProp,
+// layoutChanged), so that an object of the template's shape has its keys.
+func jitArgsLengthAt(s *shape) int32 {
+	if s == nil || s.unique || s.n == 0 {
+		return -1
+	}
+	if k := s.keys[0]; k.key != atomLength || k.flags&(propAccessor|propDeleted|propPrivate) != 0 {
+		return -1
+	}
+	return 0
+}
+
+// ArgumentsRead is ssa.ArgumentsFeedback's (argumentsAt), at the
+// program's instruction pc.
+func (f *jitRegFeedback) ArgumentsRead(pc int) (ssa.ArgumentsSite, bool) {
+	if pc < 0 || pc >= len(f.p.Code) || pc >= len(f.p.Origin) {
+		return ssa.ArgumentsSite{}, false
+	}
+	op := f.p.Code[pc].Op
+	if op != ir.ArrayRead && op != ir.ArrayLength {
+		return ssa.ArgumentsSite{}, false
+	}
+	rpc := int(f.p.Origin[pc])
+	if rpc >= len(f.rc.Code) || (op == ir.ArrayLength) != (f.rc.Code[rpc].Op() == bytecode.RGetLength) {
+		return ssa.ArgumentsSite{}, false
+	}
+	return f.argumentsAt(rpc)
+}
+
+// argumentsAt is ArgumentsRead's answer of the register code: whether the
+// element read or the get_length at register pc rpc is marked as an
+// arguments object's (jitArgsRead), and, a length's, the shapes of the
+// realm's arguments objects, unmapped and mapped, that have it where the
+// first has (jitArgsLengthAt), kept with the code.
+func (f *jitRegFeedback) argumentsAt(rpc int) (ssa.ArgumentsSite, bool) {
+	if l := f.fb.e; l == nil || !slices.Contains(l.typedReads, int32(rpc)|jitArgsRead) {
+		return ssa.ArgumentsSite{}, false
+	}
+	if f.rc.Code[rpc].Op() != bytecode.RGetLength {
+		return ssa.ArgumentsSite{}, true
+	}
+	var site ssa.ArgumentsSite
+	k := f.fb.keep()
+	for i, t := range f.fb.r.argsLayouts {
+		if t == nil || jitArgsLengthAt(t.shape) < 0 {
+			continue
+		}
+		// Kept for as long as the code is, which compares its address;
+		// not remembered, as a cache's shape is: a template is never
+		// changed in place.
+		k.shapes = append(k.shapes, t.shape)
+		site.Shapes[i] = uintptr(unsafe.Pointer(t.shape))
+	}
+	return site, site.Shapes != [2]uintptr{}
 }

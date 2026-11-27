@@ -1603,6 +1603,12 @@ type Encoding struct {
 	// it. TypedEpoch is 0 for an encoding with no typed arrays.
 	ClassTypedArray                                uint8
 	TypedKind, TypedElems, TypedLength, TypedEpoch int32
+	// An arguments object is an object of class ClassArguments, its
+	// elements an array's, at ObjectElems; FlagMapped is the flags byte's
+	// bit for a mapped one, whose elements alias its function's
+	// parameters, which native code does not read. 0 for an encoding
+	// with no arguments objects.
+	ClassArguments, FlagMapped uint8
 	// A function object made from script is one whose data's type word is
 	// FuncData: the pointer at FuncClosure, in the data, is its closure,
 	// whose function's address is at ClosureFn, its captured bindings'

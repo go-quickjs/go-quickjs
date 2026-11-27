@@ -2060,6 +2060,20 @@ func (c *a64Compiler) arrayOf(v *ssa.Value, guard a64Guard) {
 	}
 	c.a.LoadU8(a64B, a64C, c.enc.ObjectClass)
 	c.a.CmpImm(a64B, int64(c.enc.ClassArray), false)
+	if v.Index == ssa.ArrayOfArguments && c.enc.ClassArguments != 0 {
+		// Or an unmapped arguments object, as amd64's.
+		ok := c.a.NewLabel()
+		c.a.BCond(arm64.EQ, ok)
+		c.a.CmpImm(a64B, int64(c.enc.ClassArguments), false)
+		guard.jump(arm64.NE)
+		c.a.LoadU8(a64B, a64C, c.enc.ObjectFlags)
+		c.movImm(a64D, uint64(c.enc.FlagMapped))
+		c.a.Tst(a64B, a64D, false)
+		guard.jump(arm64.NE)
+		c.a.Bind(ok)
+		c.setG(v, a64C)
+		return
+	}
 	guard.jump(arm64.NE)
 	c.setG(v, a64C)
 }
@@ -9382,7 +9396,7 @@ func (c *a64Compiler) length(v *ssa.Value, guard a64Guard) {
 		c.a.B(c.stubLabel(v.State, exitKind(v.Aux)))
 		return
 	}
-	array, have := c.a.NewLabel(), c.a.NewLabel()
+	array, have, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(a64B, c.enc.String)
 	c.a.Cmp(c.gpr(a, a64A), a64B, true)
 	c.a.BCond(arm64.NE, array)
@@ -9399,7 +9413,17 @@ func (c *a64Compiler) length(v *ssa.Value, guard a64Guard) {
 		// A typed array's, as amd64's.
 		c.a.Bind(typed)
 		c.a.CmpImm(a64B, int64(c.enc.ClassTypedArray), false)
-		guard.jump(arm64.NE)
+		if v.IC != nil && len(v.IC.Cases) != 0 && c.enc.ClassArguments != 0 {
+			// Or an arguments object's, as amd64's.
+			args := c.a.NewLabel()
+			c.a.BCond(arm64.NE, args)
+			c.cold = append(c.cold, func() {
+				c.a.Bind(args)
+				c.argumentsLength(v, done, guard)
+			})
+		} else {
+			guard.jump(arm64.NE)
+		}
 		if c.enc.TypedEpoch == 0 {
 			guard.jump(arm64.EQ)
 			return
@@ -9434,7 +9458,35 @@ func (c *a64Compiler) length(v *ssa.Value, guard a64Guard) {
 	c.a.MovRR(a64C, a64B)
 	c.a.Bind(have)
 	c.a.Scvtf(a64F0, a64C, true)
+	c.a.Bind(done)
 	c.setF(v, a64F0)
+}
+
+// argumentsLength reads the length of the arguments object in C, its class
+// in B, into F0, then on to done, as amd64's. It uses A, B and D.
+func (c *a64Compiler) argumentsLength(v *ssa.Value, done arm64.Label, guard a64Guard) {
+	c.a.CmpImm(a64B, int64(c.enc.ClassArguments), false)
+	guard.jump(arm64.NE)
+	c.a.Load(a64A, a64C, c.enc.ObjectShape)
+	cases := v.IC.Cases
+	for i, cs := range cases {
+		next := c.a.NewLabel()
+		c.movImm(a64D, uint64(cs.Shape))
+		c.a.Cmp(a64A, a64D, true)
+		if i == len(cases)-1 {
+			guard.jump(arm64.NE)
+		} else {
+			c.a.BCond(arm64.NE, next)
+		}
+		c.a.Load(a64B, a64C, c.enc.ObjectProps)
+		c.a.Load(a64B, a64B, int32(cs.Index)*c.enc.ValueSize+c.enc.NumOffset)
+		c.movImm(a64D, abi.NumberLimit)
+		c.a.Cmp(a64B, a64D, true)
+		guard.jump(arm64.HS)
+		c.a.FMovToF(a64F0, a64B)
+		c.a.B(done)
+		c.a.Bind(next)
+	}
 }
 
 // stringCode is charCodeAt called on a string, as amd64's is.

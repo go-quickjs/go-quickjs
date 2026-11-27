@@ -254,8 +254,9 @@ whose operands are its register instruction's own, the only instruction
 of its origin (`ir.Instruction`'s `WholeOperands`): a literal's field
 whose definition the feedback does not plan, a destructuring's step or
 rest, a private member's read or write its site's cache holds no own field
-of, a `get_length` whose guard has failed -- an arguments object's, a
-getter's -- read by a call of Go on its frame (`ssa.GoHost`). A private
+of, a `get_length` whose guard has failed -- a getter's, an arguments
+object's of a shape the realm's arguments objects do not have -- read by a
+call of Go on its frame (`ssa.GoHost`). A private
 member's read or write (`get_private`, `set_private`) is a property's read
 or write of the key its register holds (`ir.Instruction`'s `Private`), made
 natively for the shapes its site's cache holds of the key. A call,
@@ -3228,6 +3229,15 @@ arguments objects' properties -- the arguments written into it and their
 count its length; a count past the pool's room has Go fill it with objects
 of room for it and the take made again, as `new Array(n)`'s is, and the
 elements' pointer words go through `storeRef` while the collector marks.
+An arguments object read as a value -- a callee's returned, one kept in
+a local -- has its reads learned as V8's keyed loads and loads of length
+learn their receivers (`jitArgsRead`, `ssa.ArgumentsFeedback`): an element
+read that met an unmapped one reads it by its cell, as an Array's
+(`ssa.ArrayOfArguments`), and a `get_length` that met one of the shapes
+the realm's arguments objects have reads its own length from its table
+there, a number (`mir`'s `argumentsLength`); a mapped object's elements,
+which alias its parameters, and what the shapes do not describe -- a
+length deleted or made an accessor -- Go reads.
 A mapped arguments object, whose callee native code does not have, more
 arguments than an arguments object's allocation holds, and the frame Go
 entered the code with have Go make them from the arguments

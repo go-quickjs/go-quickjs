@@ -993,6 +993,11 @@ func (r *Runtime) jitRegDeoptSeen(f *frame, c *regCode, e *jitRegEntry, wb, rpc 
 		r.jitDeoptSeenOp(l, rpc, op, e.serial)
 		return
 	}
+	if r.jitRegArgsLengthSeen(l, c, wb, rpc) {
+		// An arguments object's length, read natively from here, not
+		// generic (jitArgsRead).
+		return
+	}
 	if !slices.Contains(l.failed, int32(rpc)) {
 		l.failed = append(l.failed, int32(rpc))
 	}

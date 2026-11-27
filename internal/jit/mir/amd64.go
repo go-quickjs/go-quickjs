@@ -8433,6 +8433,18 @@ func (c *compiler) arrayOf(v *ssa.Value, guard guardTo) {
 	}
 	c.a.LoadU8(scratchB, scratchC, c.enc.ObjectClass)
 	c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassArray), false)
+	if v.Index == ssa.ArrayOfArguments && c.enc.ClassArguments != 0 {
+		// Or an unmapped arguments object, whose elements are an array's.
+		ok := c.a.NewLabel()
+		c.a.Jcc(amd64.CondE, ok)
+		c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassArguments), false)
+		guard.jump(amd64.CondNE)
+		c.a.TestMem8(scratchC, c.enc.ObjectFlags, c.enc.FlagMapped)
+		guard.jump(amd64.CondNE)
+		c.a.Bind(ok)
+		c.setG(v, scratchC)
+		return
+	}
 	guard.jump(amd64.CondNE)
 	c.setG(v, scratchC)
 }
@@ -10668,7 +10680,7 @@ func (c *compiler) length(v *ssa.Value, guard guardTo) {
 		c.a.Jmp(c.stubLabel(v.State, exitKind(v.Aux)))
 		return
 	}
-	array, have := c.a.NewLabel(), c.a.NewLabel()
+	array, have, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
 	c.cmpWord(c.gpr(a, scratchA), c.enc.String)
 	c.a.Jcc(amd64.CondNE, array)
 	c.knownReference(v, a, guard)
@@ -10685,7 +10697,19 @@ func (c *compiler) length(v *ssa.Value, guard guardTo) {
 		// buffer, as an element read finds it (typedElement).
 		c.a.Bind(typed)
 		c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassTypedArray), false)
-		guard.jump(amd64.CondNE)
+		if v.IC != nil && len(v.IC.Cases) != 0 && c.enc.ClassArguments != 0 {
+			// Or an arguments object's, where the site has met one
+			// (ssa.ArgumentsFeedback): its own data property in the shapes
+			// of its cases, a number.
+			args := c.a.NewLabel()
+			c.a.Jcc(amd64.CondNE, args)
+			c.cold = append(c.cold, func() {
+				c.a.Bind(args)
+				c.argumentsLength(v, done, guard)
+			})
+		} else {
+			guard.jump(amd64.CondNE)
+		}
 		if c.enc.TypedEpoch == 0 {
 			guard.jump(amd64.CondE)
 			return
@@ -10719,7 +10743,35 @@ func (c *compiler) length(v *ssa.Value, guard guardTo) {
 	c.a.MovRR(scratchC, scratchB)
 	c.a.Bind(have)
 	c.a.Cvtsi2sd(xScratch0, scratchC, true)
+	c.a.Bind(done)
 	c.setX(v, xScratch0)
+}
+
+// argumentsLength reads the length of the arguments object in scratchC,
+// its class in scratchB (length): the number its shape, one of v's cases',
+// has at the case's Index, in xScratch0, then on to done; any other
+// object, or a length no number, is the guard's failure.
+func (c *compiler) argumentsLength(v *ssa.Value, done amd64.Label, guard guardTo) {
+	c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassArguments), false)
+	guard.jump(amd64.CondNE)
+	c.a.Load(scratchA, scratchC, c.enc.ObjectShape)
+	cases := v.IC.Cases
+	for i, cs := range cases {
+		next := c.a.NewLabel()
+		c.cmpWord(scratchA, uint64(cs.Shape))
+		if i == len(cases)-1 {
+			guard.jump(amd64.CondNE)
+		} else {
+			c.a.Jcc(amd64.CondNE, next)
+		}
+		c.a.Load(scratchB, scratchC, c.enc.ObjectProps)
+		c.a.Load(scratchB, scratchB, int32(cs.Index)*c.enc.ValueSize+c.enc.NumOffset)
+		c.cmpWord(scratchB, abi.NumberLimit)
+		guard.jump(amd64.CondAE)
+		c.a.MovQToX(xScratch0, scratchB)
+		c.a.Jmp(done)
+		c.a.Bind(next)
+	}
 }
 
 // stringCode is charCodeAt called on a string: the callee must be the

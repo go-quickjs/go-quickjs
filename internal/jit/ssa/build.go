@@ -1650,6 +1650,34 @@ type ElementFeedback interface {
 	TypedRead(pc int) bool
 }
 
+// ArgumentsFeedback is Feedback that knows the element reads, read as they
+// are, whose receivers have been unmapped arguments objects, and the
+// lengths read of arguments objects (ir.ArrayLength), as V8's keyed loads
+// and its loads of length follow what their feedback met: native code
+// reads such an element by its cell, as an Array's (ArrayOfArguments), and
+// such a length, an own data property, at Index of the shapes Shapes names
+// -- the realm's arguments objects', unmapped and mapped, 0 where it has
+// none -- leaving to Go for any other.
+type ArgumentsFeedback interface {
+	ArgumentsRead(pc int) (ArgumentsSite, bool)
+}
+
+// ArgumentsSite is an ArgumentsFeedback's answer for a length's read: the
+// shapes of arguments objects whose own length is their property at Index.
+type ArgumentsSite struct {
+	Shapes [2]uintptr
+	Index  int32
+}
+
+// argumentsRead is ArgumentsFeedback's answer at pc.
+func (b *builder) argumentsRead(pc int) (ArgumentsSite, bool) {
+	f, ok := b.fb.(ArgumentsFeedback)
+	if !ok {
+		return ArgumentsSite{}, false
+	}
+	return f.ArgumentsRead(pc)
+}
+
 // BigElementFeedback is Feedback that knows the element reads, read as
 // they are, that have met BigInt64Arrays, or BigUint64Arrays (unsigned),
 // whose elements native code reads as BigInts (OpBigElemRead), boxed
@@ -8801,6 +8829,19 @@ func (b *builder) instruction(blk *Block, pc int) {
 			b.goIndex(blk, in, operand, gd)
 			break
 		}
+		if _, ok := b.argumentsRead(pc); ok && in.Reference && in.Op == ir.ArrayRead {
+			// An unmapped arguments object's element, by its cell, as an
+			// Array's (ArrayOfArguments); Go reads any other's. Each had
+			// been a call of Go (KeyedRead's).
+			array := gd.guard(OpArrayOf, Ptr, ir.HostExit, operand(in.Left))
+			array.Index = ArrayOfArguments
+			key, _ := keyOf(ir.HostExit)
+			cell := gd.guard(OpElemCell, Source, ir.HostExit, array, key)
+			v := f.newValue(blk, OpLoadCell, Tagged, cell)
+			v.Shadow = cell
+			b.assign(in.Dest, blk, v)
+			break
+		}
 		if in.Reference {
 			// Whatever the element holds, by its cell; Go reads the rest,
 			// and makes an update's of its key. An update's key, a[i++],
@@ -8864,7 +8905,17 @@ func (b *builder) instruction(blk *Block, pc int) {
 				break
 			}
 		}
-		b.assign(in.Dest, blk, boxF(gd.guard(OpLength, Float64, kind, operand(in.Left))))
+		n := gd.guard(OpLength, Float64, kind, operand(in.Left))
+		if site, ok := b.argumentsRead(pc); ok && kind == ir.GuardExit {
+			// An arguments object's too, its own property in the shapes the
+			// site met (ArgumentsFeedback): each had been a call of Go.
+			for _, s := range site.Shapes {
+				if s != 0 {
+					b.f.cache(n).Cases = append(b.f.cache(n).Cases, PropertyCase{Shape: s, Index: site.Index})
+				}
+			}
+		}
+		b.assign(in.Dest, blk, boxF(n))
 	case ir.ArrayKey:
 		gd.guard(OpArrayOf, Ptr, ir.GuardExit, operand(in.Left))
 		gd.guard(OpElemKey, None, ir.GuardExit, number(in.Right, ir.GuardExit))

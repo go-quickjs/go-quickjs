@@ -1762,7 +1762,21 @@ is under [The projection](#the-projection).
   `args_read` 466 to 133, `closure_make` 64.4 to 26.5,
   `closure_many_locals` 71.0 to 32.8, `rest_param` 176 to 93.9,
   `closure_kept_cells` 479 to 260, `arguments_object` 373 to 260;
-  generators, methods and calls level or faster. The price, the store of
+  generators, methods and calls level or faster. Those two were not
+  what a single run of each gives: `args_read`'s 133 was of a round
+  after the first, whose loop's first code left at its inlined callee's
+  object literal at every turn, was found slow at its loop, and ran
+  996,348 of its 1,048,576 turns in the interpreter, 532 ns in the full
+  micro run against the interpreter's 196; and `arguments_object`'s
+  length and element reads of the object were calls of Go, slower than
+  the interpreter's 211. An inlined callee's literal now defines its
+  fields natively, code compiled again is judged afresh at its loops,
+  and an arguments object's length and an unmapped one's elements are
+  read natively where a site has met them: at four placements on the
+  Ryzen 5 3600, `args_read` 549 to 125 ns and `arguments_object` 273 to
+  114, both faster than the interpreter; the V8 suite, AWFY's CD,
+  Richards, DeltaBlue and Json level, Octane's Typescript -1.2%,
+  RayTrace -3.1%, Box2D -1.5%, Gameboy and PdfJS level. The price, the store of
   the code's id at each native call's entry: `call_mutual` +2.1% and
   `tail_mutual` +1.7%, each slower at 2 of 4 placements, none 3% slower at
   all four.

@@ -9,7 +9,8 @@ import "github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 
 // The methods, numbered.
 const (
-	snapBigInt jitSnapMethod = iota
+	snapArgumentsRead jitSnapMethod = iota
+	snapBigInt
 	snapBigIntWide
 	snapBigIntFailed
 	snapInlineExit
@@ -74,10 +75,10 @@ const (
 )
 
 // jitSnapAtPC says which methods' argument is a PC.
-var jitSnapAtPC = [...]bool{true, true, true, true, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, true, true, true, true, true, true, true, true, false, false, false, true, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, false, false, false, false, true, false}
+var jitSnapAtPC = [...]bool{true, true, true, true, true, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, true, true, true, true, true, true, true, true, false, false, false, true, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, false, false, false, false, true, false}
 
 // jitSnapNames are the methods' names, by jitSnapMethod.
-var jitSnapNames = [...]string{"BigInt", "BigIntWide", "BigIntFailed", "InlineExit", "KeepLimit", "CreatePool", "StringRead", "TypedRead", "TypedBigRead", "KeyedRead", "KeyedWrite", "UpvalueTyped", "KeyedStore", "Property", "StringProperty", "Accessor", "Global", "CallShape", "CalledClosure", "StringCell", "StringContent", "BigIntCell", "Generic", "Resumed", "EntryGeneric", "Inline", "GoCalls", "NativeCalls", "BigIntSole", "Leaf", "ViaLeaf", "CharCode", "Substring", "FromCharCode", "Intrinsic", "Literal", "Define", "LeafKind", "ArrayProtos", "GenNext", "GenSteps", "HasCache", "KeyAtoms", "MapNexts", "TypeofCells", "WalkedCloseCell", "TypedKind", "FrameMade", "Frequency", "Operands", "ForEach", "InstanceOf", "IndexOf", "ParseInt", "BigString", "Closure", "CellsPool", "PureBody", "ExecReuse", "Heap", "RawMath", "VirtualRoot"}
+var jitSnapNames = [...]string{"ArgumentsRead", "BigInt", "BigIntWide", "BigIntFailed", "InlineExit", "KeepLimit", "CreatePool", "StringRead", "TypedRead", "TypedBigRead", "KeyedRead", "KeyedWrite", "UpvalueTyped", "KeyedStore", "Property", "StringProperty", "Accessor", "Global", "CallShape", "CalledClosure", "StringCell", "StringContent", "BigIntCell", "Generic", "Resumed", "EntryGeneric", "Inline", "GoCalls", "NativeCalls", "BigIntSole", "Leaf", "ViaLeaf", "CharCode", "Substring", "FromCharCode", "Intrinsic", "Literal", "Define", "LeafKind", "ArrayProtos", "GenNext", "GenSteps", "HasCache", "KeyAtoms", "MapNexts", "TypeofCells", "WalkedCloseCell", "TypedKind", "FrameMade", "Frequency", "Operands", "ForEach", "InstanceOf", "IndexOf", "ParseInt", "BigString", "Closure", "CellsPool", "PureBody", "ExecReuse", "Heap", "RawMath", "VirtualRoot"}
 
 // jitRegSnapStatePC are the methods the build asks by a state's PC, which
 // in a register program is a register pc, not an instruction's (Resumed and
@@ -88,6 +89,12 @@ const jitRegSnapStatePC uint64 = 0 | 1<<snapResumed | 1<<snapEntryGeneric
 // than one result, not all bytes, has a blank field first, since,
 // comparable, the padding after its bool had given it an equality
 // function the compiler lays out among package vm's code.
+type jitSnapAnsArgumentsRead struct {
+	_  [0]func()
+	r0 ssa.ArgumentsSite
+	r1 bool
+}
+
 type jitSnapAnsBigInt struct {
 	r0 bool
 }
@@ -420,6 +427,7 @@ type jitSnapAnsVirtualRoot struct {
 // jitSnapAnswers are a snapshot's answers, a table of each method's by
 // their argument.
 type jitSnapAnswers struct {
+	ArgumentsRead   jitSnapTable[jitSnapAnsArgumentsRead]
 	BigInt          jitSnapTable[jitSnapAnsBigInt]
 	BigIntWide      jitSnapTable[jitSnapAnsBigIntWide]
 	BigIntFailed    jitSnapTable[jitSnapAnsBigIntFailed]
@@ -486,6 +494,7 @@ type jitSnapAnswers struct {
 
 // seal sorts the tables put out of their arguments' order.
 func (a *jitSnapAnswers) seal() {
+	a.ArgumentsRead.seal()
 	a.BigInt.seal()
 	a.BigIntWide.seal()
 	a.BigIntFailed.seal()
@@ -553,6 +562,7 @@ func (a *jitSnapAnswers) seal() {
 // answered counts the questions answered.
 func (a *jitSnapAnswers) answered() int {
 	return 0 +
+		a.ArgumentsRead.answered() +
 		a.BigInt.answered() +
 		a.BigIntWide.answered() +
 		a.BigIntFailed.answered() +
@@ -658,6 +668,21 @@ func (a *jitSnapAnswers) pools(pools *[]uintptr) {
 
 // The register snapshot's answers: jitRegFeedback's methods, numbered as
 // jitFeedback's of the same names.
+
+func (q *jitRegSnapshot) ArgumentsRead(pc int) (r0 ssa.ArgumentsSite, r1 bool) {
+	q.s.ready()
+	e := q.s.a.ArgumentsRead.find(int64(pc))
+	if e != nil && e.eff != 0 {
+		q.s.used(e.eff)
+	}
+	if e == nil || !e.answered {
+		q.s.absent(snapArgumentsRead, int64(pc))
+		return
+	}
+	r0 = e.v.r0
+	r1 = e.v.r1
+	return r0, r1
+}
 
 func (q *jitRegSnapshot) BigInt(pc int) (r0 bool) {
 	q.s.ready()
@@ -1700,6 +1725,20 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 // The askers of the register feedback's methods of a PC, as
 // jitSnapAskers's, the callees of the inline sites it names asked in turn
 // (nestReg).
+func jitRegSnapAskArgumentsRead(s *jitSnapshot, fb *jitRegFeedback, pc int) {
+	before := s.begin(fb.fb)
+	r0, r1 := fb.ArgumentsRead(pc)
+	eff := s.end(fb.fb, before)
+	ok := r1
+	if h := fb.fb.r.jitTest.snapAsked; h != nil {
+		h(s, snapArgumentsRead, int64(pc), ok, []any{r0, r1})
+	}
+	if ok || eff != 0 {
+		s.a.ArgumentsRead.reserve(int(s.room[snapArgumentsRead]))
+		s.a.ArgumentsRead.put(int64(pc), eff, ok, jitSnapAnsArgumentsRead{r0: r0, r1: r1})
+	}
+}
+
 func jitRegSnapAskBigInt(s *jitSnapshot, fb *jitRegFeedback, pc int) {
 	before := s.begin(fb.fb)
 	r0 := fb.BigInt(pc)
@@ -2347,6 +2386,7 @@ var jitRegSnapAskers [len(jitSnapNames)]func(s *jitSnapshot, fb *jitRegFeedback,
 // jitRegSnapMethods are the methods the register feedback has, a bit
 // for each.
 const jitRegSnapMethods uint64 = 0 |
+	1<<snapArgumentsRead |
 	1<<snapBigInt |
 	1<<snapBigIntWide |
 	1<<snapBigIntFailed |
@@ -2413,6 +2453,7 @@ const jitRegSnapMethods uint64 = 0 |
 // The register askers are set at init, as jitSnapAskers are.
 func init() {
 	jitRegSnapAskers = [len(jitSnapNames)]func(s *jitSnapshot, fb *jitRegFeedback, pc int){
+		snapArgumentsRead:  jitRegSnapAskArgumentsRead,
 		snapBigInt:         jitRegSnapAskBigInt,
 		snapBigIntWide:     jitRegSnapAskBigIntWide,
 		snapBigIntFailed:   jitRegSnapAskBigIntFailed,

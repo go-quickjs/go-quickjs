@@ -793,6 +793,13 @@ const ToInt32Exact = 1
 // never one and an OpObjectOf that exits.
 const ObjectOfTry = 1
 
+// ArrayOfArguments, an OpArrayOf's Index, has it take an unmapped arguments
+// object too, whose elements are an array's, for an element read by its
+// cell (OpElemCell) at a site that has met one (ArgumentsFeedback): no
+// write takes such an OpArrayOf, and it is never one with an OpArrayOf of
+// an Array alone (repeated compares their Index).
+const ArrayOfArguments = 1
+
 // isGuard reports whether an op exits when its operand is not what it needs.
 func (o Op) isGuard() bool {
 	switch o {

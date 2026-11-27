@@ -452,6 +452,12 @@ func (r *Runtime) jitRegIndexSeen(l *jitEntry, rpc int, o, k Value, reference bo
 	if slices.Contains(l.typedReads, pc) || jitBigReadAt(l.typedReads, rpc) != 0 || slices.Contains(l.stringReads, pc) || slices.Contains(l.keyedReads, pc) {
 		return false
 	}
+	if jitRegArgsElemSeen(l, rpc, o, k) {
+		// An unmapped arguments object's element, read natively from here
+		// (jitArgsRead); one that leaves where it is so marked is learned
+		// below, as any other receiver's.
+		return true
+	}
 	if !reference {
 		keyed := o.IsObject() && (k.IsString() || k.IsNumber() && jitKeyedClass(o.Object()))
 		chars := o.IsString() && k.IsNumber()
