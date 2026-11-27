@@ -968,7 +968,7 @@ func (q jitInlineSnap) global() Value { return q.w().global }
 // kept is the call's targets at c's program's instruction pc kept by the
 // gather (jitKeptTargets), what finding them appended put back in c's
 // source's keep.
-func (q jitInlineSnap) kept(c *jitCallCtx, pc int) (int, ssa.CallSite, *Object, *closure, bool) {
+func (q jitInlineSnap) kept(c jitCallCtx, pc int) (int, ssa.CallSite, *Object, *closure, bool) {
 	if q.gather {
 		return 0, ssa.CallSite{}, nil, nil, false
 	}
@@ -988,7 +988,7 @@ func (q jitInlineSnap) kept(c *jitCallCtx, pc int) (int, ssa.CallSite, *Object, 
 // found keeps, at the gather, the targets found of the call at register
 // pc pc, what finding them appended to c's source's keep past before taken
 // back.
-func (q jitInlineSnap) found(c *jitCallCtx, pc int, before jitSnapLens, n int, site ssa.CallSite, o *Object, cl *closure) {
+func (q jitInlineSnap) found(c jitCallCtx, pc int, before jitSnapLens, n int, site ssa.CallSite, o *Object, cl *closure) {
 	if !q.gather {
 		return
 	}

@@ -76,8 +76,11 @@ type jitInlineSrc interface {
 	// register pc, which its derivation takes (jit_snapwalk.go). found
 	// keeps those found, what finding them appended to q's source's keep
 	// past before taken back.
-	kept(q *jitCallCtx, pc int) (n int, site ssa.CallSite, o *Object, cl *closure, ok bool)
-	found(q *jitCallCtx, pc int, before jitSnapLens, n int, site ssa.CallSite, o *Object, cl *closure)
+	//
+	// Each takes q by value: given its address, an interface's method
+	// would put q on the heap at every ask, the rejected ones' too.
+	kept(q jitCallCtx, pc int) (n int, site ssa.CallSite, o *Object, cl *closure, ok bool)
+	found(q jitCallCtx, pc int, before jitSnapLens, n int, site ssa.CallSite, o *Object, cl *closure)
 }
 
 // jitInlineLive is the live state of f's function (jitInlineSrc).
@@ -139,11 +142,11 @@ func (l jitInlineLive) cbLeft(_ int, x *jitInline) bool { return x.cbLeft }
 
 func (l jitInlineLive) global() Value { return l.f.fb.r.globalThis }
 
-func (l jitInlineLive) kept(*jitCallCtx, int) (int, ssa.CallSite, *Object, *closure, bool) {
+func (l jitInlineLive) kept(jitCallCtx, int) (int, ssa.CallSite, *Object, *closure, bool) {
 	return 0, ssa.CallSite{}, nil, nil, false
 }
 
-func (l jitInlineLive) found(*jitCallCtx, int, jitSnapLens, int, ssa.CallSite, *Object, *closure) {}
+func (l jitInlineLive) found(jitCallCtx, int, jitSnapLens, int, ssa.CallSite, *Object, *closure) {}
 
 // jitInlinePre is what Inline's answer at a call decides of its callee
 // before it lowers it (jitInlinePrefix): the call's register pc, argument
@@ -214,13 +217,13 @@ func jitInlinePrefix(q *jitCallCtx, pc int, src jitInlineSrc) (pre jitInlinePre,
 		return pre, false
 	}
 	argc := int(w.X())
-	n, site, o, cl, kept := src.kept(q, pc)
+	n, site, o, cl, kept := src.kept(*q, pc)
 	if !kept {
 		var t jitRegTargets
 		before := jitSnapLensOf(q.src.keep())
 		q.callTargets(&t, pc, w, argc, method)
 		n, site, o, cl = t.n, t.sites[0], t.objs[0], t.cls[0]
-		src.found(q, pc, before, n, site, o, cl)
+		src.found(*q, pc, before, n, site, o, cl)
 	}
 	if n != 1 || site.ByCode != 0 || site.ArrowThis || site.Via != 0 {
 		// One through Function.prototype.call, G.call(x, ...), is called
