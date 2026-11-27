@@ -360,6 +360,56 @@ func TestRanges(t *testing.T) {
 	}
 }
 
+// TestRangesThroughBlocks has a value live through a chain of blocks,
+// which has one range, from its definition to its use; and a value a
+// branch's two arms are laid out after, live into the second arm and not
+// the first, which has two, one ending where its block does and one
+// beginning where the second arm does.
+func TestRangesThroughBlocks(t *testing.T) {
+	const nb = 12
+	chain := &Func{Class: []int8{0, 0}, FixedSlot: []int32{-1, -1}, Blocks: make([]Block, nb)}
+	for i := range chain.Blocks {
+		b := &chain.Blocks[i]
+		if i > 0 {
+			b.Preds = []int{i - 1}
+		}
+		if i < nb-1 {
+			b.Succs = []int{i + 1}
+		}
+		b.Insts = []Inst{mk(nil, nil, None)}
+	}
+	chain.Blocks[0].Insts = []Inst{mk(nil, []VReg{0}, None), mk(nil, []VReg{1}, None)}
+	chain.Blocks[nb/2].Insts = []Inst{mk([]VReg{1}, nil, None)}
+	chain.Blocks[nb-1].Insts = []Inst{mk([]VReg{0}, nil, None)}
+	// v0 made, then the arms, each to the join; the second arm reads it.
+	arms := &Func{Class: []int8{0}, FixedSlot: []int32{-1}, Blocks: []Block{
+		{Succs: []int{1, 2}, Insts: []Inst{mk(nil, []VReg{0}, None), mk(nil, nil, None)}},
+		{Preds: []int{0}, Succs: []int{3}, Insts: []Inst{mk(nil, nil, None)}},
+		{Preds: []int{0}, Succs: []int{3}, Insts: []Inst{mk([]VReg{0}, nil, None)}},
+		{Preds: []int{1, 2}, Insts: []Inst{mk(nil, nil, None)}},
+	}}
+	var al Allocator
+	cfg := &Config{Classes: [][]int{{0, 1, 2}}, NumSlots: 8}
+	for _, tc := range []struct {
+		f    *Func
+		v    VReg
+		want func(starts, ends []int32) []rng
+	}{
+		{chain, 0, func(s, e []int32) []rng { return []rng{{s[0] + 3, s[nb-1] + 3}} }},
+		{chain, 1, func(s, e []int32) []rng { return []rng{{s[0] + 5, s[nb/2] + 3}} }},
+		{arms, 0, func(s, e []int32) []rng { return []rng{{s[0] + 3, e[0] + 1}, {s[2], s[2] + 3}} }},
+	} {
+		res, err := al.Allocate(tc.f, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkAllocation(t, 0, tc.f, cfg, res)
+		if got, want := al.ranges[tc.v], tc.want(al.starts, al.ends); !slices.Equal(got, want) {
+			t.Errorf("v%d's ranges %v, want %v", tc.v, got, want)
+		}
+	}
+}
+
 // TestLivenessMethods allocates random functions with liveness found by
 // the paths from the uses (explore) and by the dataflow, which must give
 // the same allocation.

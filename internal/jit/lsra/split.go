@@ -32,8 +32,29 @@ func (w *web) spillWhole() {
 	}
 }
 
-// blockOf is the block position x is in, once events has made its table.
+// blockOf is the block position x is in, once blockTable has made its
+// table: the position between a block and the next is the first's.
 func (al *Allocator) blockOf(x int32) int { return int(al.posBlock[x>>1]) }
+
+// blockTable makes blockOf's table and the blocks' weights, the first time
+// an allocation needs them.
+func (al *Allocator) blockTable() {
+	if al.blocksKnown {
+		return
+	}
+	al.blocksKnown = true
+	f := al.f
+	pb := grown(al.posBlock, int(al.maxPos/2)+1)
+	bw := grown(al.blockW, len(f.Blocks))
+	for i := range f.Blocks {
+		for x := al.starts[i] >> 1; x <= al.ends[i]>>1; x++ {
+			pb[x] = int32(i)
+		}
+		bw[i] = depthWeight(f.Blocks[i].Depth)
+	}
+	pb[len(pb)-1] = int32(len(f.Blocks) - 1)
+	al.posBlock, al.blockW = pb, bw
+}
 
 // The bounds within a block are its start and the even positions from its
 // start plus two to its end less two, its instructions' starts.
@@ -107,26 +128,15 @@ func firstEvent(evs []int32, x int32) int {
 	return lo
 }
 
-// events finds each register's uses and definitions by position, and the
-// block of each position (blockOf), the first time an allocation needs
-// them.
+// events finds each register's uses and definitions by position, the
+// first time an allocation needs them.
 func (al *Allocator) events() {
 	if al.evKnown {
 		return
 	}
 	al.evKnown = true
-	f := al.f
-	n := len(f.Class)
-	pb := grown(al.posBlock, int(al.maxPos/2)+1)
-	bw := grown(al.blockW, len(f.Blocks))
-	for i := range f.Blocks {
-		for x := al.starts[i] >> 1; x <= al.ends[i]>>1; x++ {
-			pb[x] = int32(i)
-		}
-		bw[i] = depthWeight(f.Blocks[i].Depth)
-	}
-	pb[len(pb)-1] = int32(len(f.Blocks) - 1)
-	al.posBlock, al.blockW = pb, bw
+	al.blockTable()
+	n := len(al.f.Class)
 	// The events in the order the pass finds them, then by register, in
 	// that order: a counting sort.
 	pairs := al.eventPass(al.evPairs[:0])
@@ -444,7 +454,11 @@ func (al *Allocator) plan(a, cur *web) hole {
 		}
 	}
 	if al.mutateHoles && c1-c0 > 2 {
-		// The hole leaves the span's last position out.
+		// The hole leaves the span's last position out: one where
+		// something is, not the position between two blocks.
+		if b := al.blockOf(c1 - 1); c1-1 == al.ends[b]+1 {
+			c1--
+		}
 		e = c1 - 1
 	}
 	// Spilled whole, a's uses outside its holes go to its slot too, and
@@ -733,9 +747,9 @@ func (al *Allocator) splitMoves(res *Result, list []*web, ranges [][]rng) {
 		keyed[i].key = [2]int32{int32(b), (x - al.starts[b] - 2) / 2}
 	}
 	res.gap.fill(keyed, nb)
-	// Where each is as its blocks begin, from its ranges -- one a block --
-	// that begin where a block does, and its moves on the edges, from
-	// those that end past a block's end.
+	// Where each is as its blocks begin, from the blocks whose starts its
+	// ranges cover, and its moves on the edges, from the blocks whose ends
+	// they do: a range may run through blocks one after another.
 	keyed, entries := keyed[:0], al.entries[:0]
 	for _, w := range list {
 		holes := w.holesOf()
@@ -745,26 +759,27 @@ func (al *Allocator) splitMoves(res *Result, list []*web, ranges [][]rng) {
 		for _, m := range w.members {
 			rs := ranges[m]
 			for _, r := range rs {
-				b := al.blockOf(r.from)
-				if r.from == al.starts[b] {
-					entries = append(entries, keyedMove{[2]int32{int32(b)}, Move{V: m, Reg: w.where(r.from)}})
-				}
-				if r.to != al.ends[b]+1 {
-					continue
-				}
-				in0 := inHoles(holes, al.ends[b])
-				for k, sc := range f.Blocks[b].Succs {
-					x := al.starts[sc]
-					if in0 == inHoles(holes, x) || !liveAt(rs, x) || slices.ContainsFunc(f.Blocks[sc].Phis, func(p Phi) bool { return p.Def == m }) {
+				for b, last := al.blockOf(r.from), al.blockOf(r.to-1); b <= last; b++ {
+					if x := al.starts[b]; x >= r.from {
+						entries = append(entries, keyedMove{[2]int32{int32(b)}, Move{V: m, Reg: w.where(x)}})
+					}
+					if r.to <= al.ends[b] {
 						continue
 					}
-					switch {
-					case !in0:
-						if !w.calls {
-							keyed = append(keyed, keyedMove{[2]int32{int32(b), int32(k)}, Move{V: m, Reg: -1, Copy: true}})
+					in0 := inHoles(holes, al.ends[b])
+					for k, sc := range f.Blocks[b].Succs {
+						x := al.starts[sc]
+						if in0 == inHoles(holes, x) || !liveAt(rs, x) || slices.ContainsFunc(f.Blocks[sc].Phis, func(p Phi) bool { return p.Def == m }) {
+							continue
 						}
-					default:
-						keyed = append(keyed, keyedMove{[2]int32{int32(b), int32(k)}, Move{V: m, Reg: int16(w.reg), Copy: true}})
+						switch {
+						case !in0:
+							if !w.calls {
+								keyed = append(keyed, keyedMove{[2]int32{int32(b), int32(k)}, Move{V: m, Reg: -1, Copy: true}})
+							}
+						default:
+							keyed = append(keyed, keyedMove{[2]int32{int32(b), int32(k)}, Move{V: m, Reg: int16(w.reg), Copy: true}})
+						}
 					}
 				}
 			}

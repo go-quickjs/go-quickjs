@@ -238,7 +238,8 @@ type Allocator struct {
 	moved bool
 
 	// The function being allocated, where splitting is allowed (split),
-	// its positions' end (maxPos), and whether its events are known.
+	// its positions' end (maxPos), and whether its events and blockOf's
+	// table are known.
 	f           *Func
 	split       bool
 	displace    bool
@@ -246,6 +247,7 @@ type Allocator struct {
 	mutateHoles bool
 	maxPos      int32
 	evKnown     bool
+	blocksKnown bool
 
 	rngs  arena[rng]
 	vregs arena[VReg]
@@ -305,7 +307,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.spPool.reset()
 	// Splitting needs a place for each edge's moves (Result.Edge): a
 	// function with a critical edge is allocated without.
-	al.f, al.evKnown = f, false
+	al.f, al.evKnown, al.blocksKnown = f, false, false
 	al.split, al.stress = !cfg.NoSplit, cfg.StressSplit && !cfg.NoSplit
 	al.displace, al.mutateHoles = cfg.Displace, cfg.mutateHoles
 	for i := range f.Blocks {
@@ -419,10 +421,15 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	// The ranges, over positions: a block's phis are defined at its start;
 	// instruction j reads at start+2+2j and writes one after; the block
 	// ends at start+2+2*len(Insts), where its successors' phis read their
-	// arguments. Each register's ranges are made backwards through each
-	// block: what is live out, from the block's start to its end, cut at
-	// its definition; what is used and not live after, from the start to
-	// the use, cut likewise.
+	// arguments, and the next begins two after. Each register's ranges are
+	// made backwards through each block: what is live out, from the
+	// block's start to its end, cut at its definition; what is used and
+	// not live after, from the start to the use, cut likewise. A register
+	// live out of a block and into the next has one range over both,
+	// which covers the position between them, where nothing is placed --
+	// no use, definition, clobber, move or bound -- so that one live
+	// through blocks one after another has one range there, not one a
+	// block, for the walks of its lists that follow.
 	ranges := grown(al.ranges, n)
 	clear(ranges)
 	al.ranges = ranges
@@ -471,7 +478,13 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			for word != 0 {
 				v := globals[wi*64+bits.TrailingZeros64(word)]
 				word &= word - 1
-				ranges[v] = appendA(rngs, ranges[v], rng{start, end + 1})
+				if rs := ranges[v]; len(rs) > 0 && rs[len(rs)-1].from == end+2 {
+					// Live into the next block too: its range, the last
+					// found, runs from here.
+					rs[len(rs)-1].from = start
+				} else {
+					ranges[v] = appendA(rngs, rs, rng{start, end + 1})
+				}
 				open[v] = int32(len(ranges[v]))
 				opened = append(opened, v)
 			}
@@ -536,8 +549,8 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		if len(r) < 2 {
 			continue
 		}
-		// Found backwards, a range a block, a register's ranges are in
-		// the reverse of their order.
+		// Found backwards, a register's ranges are in the reverse of their
+		// order.
 		slices.Reverse(r)
 		out := r[:1]
 		for _, x := range r[1:] {
@@ -920,7 +933,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 				// wherever no temporary is in the way, each of them
 				// giving it up over a hole where that costs less than
 				// spilling it whole, and spilled whole otherwise.
-				best, bestCost := -1, cur.density()
+				best, bestCost := -1, al.density(cur)
 				if al.split {
 					bestCost = math.Inf(1)
 				}
@@ -931,12 +944,12 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 					cost := 0.0
 					for _, a := range active {
 						if a.reg == r {
-							cost = max(cost, a.density())
+							cost = max(cost, al.density(a))
 						}
 					}
 					for _, a := range inactive {
 						if a.reg == r && overlap(a.ranges[a.cur:], cur.ranges) {
-							cost = max(cost, a.density())
+							cost = max(cost, al.density(a))
 						}
 					}
 					if cost < bestCost {
@@ -978,7 +991,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 					if total >= cur.weight {
 						// The rule without splitting.
 						clear(holes)
-						if !(bestCost < cur.density()) {
+						if !(bestCost < al.density(cur)) {
 							clear(victims)
 							al.victims, al.holes = victims[:0], holes[:0]
 							if !apart(cur) {
@@ -1401,12 +1414,15 @@ func (q *webQueue) Pop() any {
 
 // density is w's weight over the positions it covers -- what of it is
 // in its register, outside its holes: a long web of few uses gains less
-// from a register than a short one of as many.
-func (w *web) density() float64 {
+// from a register than a short one of as many. The positions between
+// blocks a range covers (Allocate's ranges) are not counted: below a
+// position x lie blockOf(x) of them.
+func (al *Allocator) density(w *web) float64 {
 	if w.dense == 0 {
+		al.blockTable()
 		n := int32(0)
 		for _, r := range w.ranges {
-			n += r.to - r.from
+			n += r.to - r.from - int32(al.blockOf(r.to)-al.blockOf(r.from))
 		}
 		holeW := 0.0
 		if w.sp != nil {
