@@ -289,7 +289,7 @@ type Config struct {
 	alwaysTest bool
 	// webHeap has the scan keep the parts of webs taken apart in a heap of
 	// the webs, which compares two by going to each, for the tests that
-	// compare it with the heap of their starts and members (partHeap).
+	// compare it with keeping them by their starts (partQueue).
 	webHeap bool
 	// partHints has each part of a web taken apart hinted to the web's hints
 	// and all its parts in one list, walked whole, for the tests that

@@ -238,7 +238,7 @@ type Allocator struct {
 	back     []scanEntry
 	queue    []*web
 	partQ    webQueue
-	partH    partHeap
+	partBy   partQueue
 	slots    [][]rng
 	slotScan slotScan
 	across   []acrossEntry
@@ -1145,7 +1145,8 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		// The webs to scan: the class's, in order of their starts, and
 		// the parts of webs taken apart, which start at or after the web
 		// they were part of, in a heap. Each is next where it is the less.
-		queue, parts, partH := al.queue[:0], al.partQ[:0], al.partH[:0]
+		queue, parts, partBy := al.queue[:0], al.partQ[:0], &al.partBy
+		partBy.reset(pos)
 		for _, w := range list {
 			if int(w.cls) == cls {
 				queue = append(queue, w)
@@ -1179,18 +1180,18 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 				if al.webHeap {
 					heap.Push(&parts, p)
 				} else {
-					partH.push(p)
+					partBy.push(p)
 				}
 			}
 			clear(ps)
 			al.parts = ps[:0]
 			return true
 		}
-		for qi < len(queue) || len(parts) > 0 || len(partH) > 0 {
+		for qi < len(queue) || len(parts) > 0 || partBy.n > 0 {
 			var cur *web
 			switch {
-			case len(partH) > 0 && (qi == len(queue) || partH.first(queue[qi])):
-				cur = partH.pop()
+			case partBy.n > 0 && (qi == len(queue) || partBy.before(queue[qi])):
+				cur = partBy.pop()
 			case len(parts) > 0 && (qi == len(queue) || byStart(parts[0], queue[qi]) < 0):
 				cur = heap.Pop(&parts).(*web)
 			default:
@@ -1431,7 +1432,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		clear(active)
 		clear(inactive)
 		clear(queue)
-		al.active, al.inactive, al.queue, al.partQ, al.partH = active[:0], inactive[:0], queue[:0], parts[:0], partH[:0]
+		al.active, al.inactive, al.queue, al.partQ = active[:0], inactive[:0], queue[:0], parts[:0]
 	}
 	lap(PhaseScan)
 
@@ -2212,76 +2213,91 @@ func weightClass(d int) int { return min(max(d, 0), numWeightClasses-1) }
 // classWeight is the depthWeight of weight class c: 8 to its power.
 func classWeight(c int8) float64 { return float64(uint64(1) << (3 * uint(c))) }
 
-// partHeap is the parts of webs taken apart that the scan has yet to
-// reach, a heap of them by their starts and then their members, the first
-// first, each with the two: the heap compares them without going to the
-// webs, which do not change while they wait. A part is one register, its
-// member its own, so that no two compare the same and any heap gives them
-// in one order.
-type partHeap []partEntry
-
-type partEntry struct {
-	start int32
-	m     VReg
-	w     *web
+// partQueue is the parts of webs taken apart that the scan has yet to
+// reach, by their starts and then their members, the first first: at each
+// position a list of those that start there, in order of their members,
+// and a bit for each position that has any. A part starts at or after the
+// web it was part of, which the scan has reached, and the scan's position
+// only grows: the first part is found from the least position one was put
+// at since the last was taken (lo), a word of bits at a time. A part is one
+// register, its member its own, so that no two are in the same place.
+//
+// Between two scans every position's list is empty -- the scan takes every
+// part it puts -- and so is at, from one allocation to the next.
+type partQueue struct {
+	at    []int32
+	full  []uint64
+	nodes []partNode
+	lo    int32
+	n     int
 }
 
-func (e *partEntry) less(f *partEntry) bool {
-	return e.start < f.start || e.start == f.start && e.m < f.m
+// partNode is a part waiting in the queue: its web and member, and plus
+// one the index of the next at its position, or 0.
+type partNode struct {
+	w    *web
+	m    VReg
+	next int32
 }
 
-// first reports whether the heap's first part is scanned before w.
-func (h partHeap) first(w *web) bool {
-	s := w.start()
-	return h[0].start < s || h[0].start == s && h[0].m < w.members[0]
+// reset readies the queue for a scan of positions below npos.
+func (q *partQueue) reset(npos int32) {
+	q.at = grown(q.at, int(npos))
+	q.full = grown(q.full, int(npos+63)/64)
+	q.nodes, q.lo, q.n = q.nodes[:0], npos, 0
 }
 
-func (h *partHeap) push(w *web) {
-	e := partEntry{w.start(), w.members[0], w}
-	q := append(*h, e)
-	i := len(q) - 1
-	for i > 0 {
-		p := (i - 1) / 2
-		if !e.less(&q[p]) {
-			break
-		}
-		q[i] = q[p]
-		i = p
+// push puts part w in its place.
+func (q *partQueue) push(w *web) {
+	s, m := w.start(), w.members[0]
+	q.nodes = append(q.nodes, partNode{w, m, 0})
+	k := int32(len(q.nodes))
+	// After those of lesser members.
+	link := &q.at[s]
+	for *link != 0 && q.nodes[*link-1].m < m {
+		link = &q.nodes[*link-1].next
 	}
-	q[i] = e
-	*h = q
+	q.nodes[k-1].next, *link = *link, k
+	q.full[s>>6] |= 1 << (s & 63)
+	q.lo = min(q.lo, s)
+	q.n++
 }
 
-func (h *partHeap) pop() *web {
-	q := *h
-	top := q[0].w
-	last := q[len(q)-1]
-	q[len(q)-1] = partEntry{}
-	q = q[:len(q)-1]
-	i := 0
+// first is the first part's position and node, of a queue that has one.
+func (q *partQueue) first() (int32, *partNode) {
+	x := q.lo
 	for {
-		c := 2*i + 1
-		if c >= len(q) {
+		word := q.full[x>>6] >> (x & 63)
+		if word != 0 {
+			x += int32(bits.TrailingZeros64(word))
 			break
 		}
-		if c+1 < len(q) && q[c+1].less(&q[c]) {
-			c++
-		}
-		if !q[c].less(&last) {
-			break
-		}
-		q[i] = q[c]
-		i = c
+		x = (x | 63) + 1
 	}
-	if len(q) > 0 {
-		q[i] = last
-	}
-	*h = q
-	return top
+	q.lo = x
+	return x, &q.nodes[q.at[x]-1]
 }
 
-// webQueue is webs by their starts, the first first: the parts' heap with
-// Config.webHeap.
+// before reports whether the first part is scanned before w.
+func (q *partQueue) before(w *web) bool {
+	x, e := q.first()
+	s := w.start()
+	return x < s || x == s && e.m < w.members[0]
+}
+
+// pop takes the first part.
+func (q *partQueue) pop() *web {
+	x, e := q.first()
+	q.at[x] = e.next
+	if e.next == 0 {
+		q.full[x>>6] &^= 1 << (x & 63)
+	}
+	q.n--
+	return e.w
+}
+
+// webQueue is webs by their starts, the first first: the parts' queue, a
+// heap, with Config.webHeap.
 type webQueue []*web
 
 func (q webQueue) Len() int { return len(q) }
