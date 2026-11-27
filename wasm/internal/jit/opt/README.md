@@ -1758,10 +1758,11 @@ dispatch loops against the interpreter; `TestMarks` the profile's marks.
 
 ## Measurements
 
-`internal/cmd/wasmbench` at 3e0c4fec, median of 5 fresh processes, each
-one run after one warm-up run, ms (Ryzen 9 9950X3D2, Windows, 32 threads;
+`internal/cmd/wasmbench` at c1db02ba5 with lsra's fourth round
+(8303e3b0a..fddb10987), median of 5 fresh processes, each
+one run after one warm-up run, ms (Ryzen 9 9950X3D2, Windows, CPUs 0-15;
 `jit-tiered`, wasmbench's default `jit` engine, is the baseline with the
-tier at `DefaultOptThreshold` in the background, `jit-opt` every
+tier at `DefaultOptBackgroundThreshold` in the background, `jit-opt` every
 function the tier accepts optimized at its first compile; the first run, in
 parentheses, pays the compiles). docs/wasm.md's Benchmarks has the same
 run beside wazero and Node, and the runs at GOMAXPROCS=1, where the
@@ -1769,46 +1770,49 @@ tier-ups are compiled on the spot.
 
 | workload | interp | jit-base | jit-tiered | jit-opt |
 |---|---:|---:|---:|---:|
-| micro/fib | 114 | 9.95 | 3.17 | 3.45 |
+| micro/fib | 111 | 10.0 | 3.21 | 3.49 |
 | micro/loop | 67.2 | 14.2 | 14.1 | 14.1 |
-| micro/i64 | 97.7 | 19.7 | 12.6 | 12.5 |
-| micro/mandelbrot | 93.2 | 11.3 | 10.6 | 10.6 |
-| micro/nbody | 64.3 | 6.39 | 3.37 | 3.40 |
-| micro/bytes | 77.5 | 8.76 | 5.43 | 5.73 |
-| micro/bulk | 101 | 16.9 | 11.2 | 10.9 |
-| micro/indirect | 196 | 20.4 | 15.9 | 15.8 |
-| micro/brtable | 113 | 42.8 | 42.6 | 42.1 |
-| micro/globals | 77.0 | 26.5 | 11.0 | 10.9 |
-| micro/gc | 217 | 80.1 | 90.9 | 89.7 |
-| micro/arrays | 60.2 | 25.9 | 31.4 | 31.0 |
-| micro/simd | 18.6 | 2.92 | 2.92 | 2.91 |
-| programs/sha256 | 780 | 63.9 (79.4) | 38.1 (55.5) | 37.4 (121) |
-| programs/sort | 679 | 127 (143) | 86.0 (109) | 85.2 (185) |
-| programs/json | 461 | 34.6 (58.6) | 25.3 (58.2) | 18.4 (167) |
-| programs/regexp | 303 | 33.9 (52.5) | 21.1 (41.3) | 19.7 (126) |
-| programs/gzip | 191 | 23.8 (46.0) | 17.5 (45.5) | 16.3 (149) |
-| programs/interp | 164 | 22.4 (35.9) | 8.32 (34.7) | 8.67 (87.7) |
+| micro/i64 | 97.4 | 19.8 | 12.9 | 12.7 |
+| micro/mandelbrot | 94.0 | 11.3 | 10.2 | 10.0 |
+| micro/nbody | 72.8 | 6.33 | 3.38 | 3.38 |
+| micro/bytes | 76.3 | 8.96 | 5.65 | 5.71 |
+| micro/bulk | 101 | 16.9 | 11.0 | 10.9 |
+| micro/indirect | 174 | 20.6 | 15.9 | 16.3 |
+| micro/brtable | 112 | 42.4 | 42.5 | 42.3 |
+| micro/globals | 77.7 | 26.9 | 10.9 | 11.0 |
+| micro/gc | 214 | 83.3 | 89.2 | 88.0 |
+| micro/arrays | 60.2 | 24.7 | 32.9 | 30.8 |
+| micro/literals | 115 | 53.7 | 55.0 | 56.3 |
+| micro/casts | 47.3 | 13.2 | 20.3 | 20.7 |
+| micro/simd | 18.5 | 2.98 | 2.92 | 2.92 |
+| programs/sha256 | 759 | 64.5 (79.6) | 38.3 (54.9) | 36.6 (113) |
+| programs/sort | 686 | 126 (146) | 84.6 (109) | 84.0 (177) |
+| programs/json | 466 | 35.2 (59.2) | 20.3 (51.7) | 17.6 (154) |
+| programs/regexp | 306 | 33.6 (52.9) | 20.9 (42.3) | 19.4 (118) |
+| programs/gzip | 190 | 23.8 (46.7) | 17.4 (44.5) | 16.4 (140) |
+| programs/interp | 165 | 22.1 (36.7) | 7.78 (36.1) | 8.11 (81.0) |
 
 The Go programs' steady state, once every function that will be compiled
 is (`-warmup 15 -reps 10`, median of 3 processes, ms):
 
 | program | jit-base | jit-tiered | jit-opt |
 |---|---:|---:|---:|
-| sha256 | 64.4 | 37.0 | 37.1 |
-| sort | 126 | 85.7 | 85.1 |
-| json | 34.3 | 19.2 | 17.9 |
-| regexp | 33.7 | 19.9 | 19.5 |
-| gzip | 23.5 | 16.4 | 16.0 |
-| interp | 21.9 | 8.49 | 8.30 |
+| sha256 | 64.9 | 37.3 | 36.9 |
+| sort | 127 | 84.5 | 84.1 |
+| json | 34.8 | 18.5 | 17.6 |
+| regexp | 34.5 | 19.6 | 19.3 |
+| gzip | 24.6 | 17.3 | 16.3 |
+| interp | 22.5 | 8.36 | 8.43 |
 
-The tier takes 32 to 62% off the baseline's steady state. The baseline's
+The tier takes 34 to 62% off the baseline's steady state. The baseline's
 own column is half or less of what it was in this README's earlier table
 for sha256, regexp and gzip (144, 70.8 and 53.0 ms), the baseline having
 since come to make calls through tables and references and the bulk
 memory instructions natively (1db2aac1, 5c074edf), as the tier did
-first. json's second run, 25.3 ms tiered, is not
+first. json's second run, 20.3 ms tiered, is not
 yet its steady state: tier-ups are still being compiled in the background
-then.
+then. `casts` (tests, casts and branches on casts at depths 0 to 40) is the
+one workload the tier makes slower than the baseline.
 
 What the Go programs gained, in the order it came (steady state,
 optimized, ms): the calls through tables and memory.copy natively (gzip
