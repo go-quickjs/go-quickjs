@@ -103,6 +103,7 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 	compared, functions := 0, 0
 	unbound := map[jitSnapMethod]int{}
 	typedMissed, litMissed := 0, 0
+	var eagerWhy [3]int
 	for _, cl := range cls {
 		c := r.regOf(cl)
 		if c == nil {
@@ -194,6 +195,7 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 					unbound[snapInstanceOf]++
 				}
 			}
+			eagerWhy[s.d.calls.tg.eagerWhy]++
 			// What the calls' gather made by register pc (jitTargetsBind)
 			// where no PC asks NativeCalls: a pool made early.
 			tg := &s.d.calls.tg
@@ -265,8 +267,9 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 	}
 	t.Logf("leaves: CreatePool's pools made by register pc at no PC a Leaf answers: %d", unbound[snapCreatePool])
 	t.Logf("globals: asked by register pc at no PC: %d Global, %d GenSteps; closures' literals made by register pc unused: %d", unbound[snapGlobal], unbound[snapGenSteps], unbound[snapClosure])
-	t.Logf("%d functions, %d questions compared; asked by register pc at no PC: %d Accessor, %d StringProperty; made by register pc at no PC: %d NativeCalls, %d Operands",
-		functions, compared, unbound[snapAccessor], unbound[snapStringProperty], unbound[snapNativeCalls], unbound[snapOperands])
+	t.Logf("%d functions, %d questions compared; asked by register pc at no PC: %d Accessor, %d StringProperty; made by register pc at no PC: %d NativeCalls, %d Operands; NativeCalls asked at the PCs of %d snapshots of their code, %d of a site of two calls, of %d",
+		functions, compared, unbound[snapAccessor], unbound[snapStringProperty], unbound[snapNativeCalls], unbound[snapOperands],
+		eagerWhy[jitEagerCode], eagerWhy[jitEagerSites], eagerWhy[0]+eagerWhy[jitEagerCode]+eagerWhy[jitEagerSites])
 	t.Logf("asked by register pc at no PC: %d InstanceOf", unbound[snapInstanceOf])
 	t.Logf("gathered by register pc at no PC: %d KeyedStore", unbound[snapKeyedStore])
 	t.Logf("TypedKind: cells made by register pc at no PC %d, PCs asked at no register pc %d", unbound[snapTypedKind], typedMissed)

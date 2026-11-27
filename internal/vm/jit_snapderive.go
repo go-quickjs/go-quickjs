@@ -121,6 +121,9 @@ type jitClosureCopy struct {
 	// sites are its call sites' facts, by site (jitCallSiteFacts): what
 	// of the heap a call's native targets read.
 	sites []jitCallSiteFact
+	// rpcs are the register pcs of its calls and of the instructions
+	// whose NativeCalls read the heap (jitCallSiteFacts), in their order.
+	rpcs []int32
 }
 
 // jitCopiedPoly is a cache's earlier entries copied (propPoly), with
@@ -153,7 +156,7 @@ func (d *jitSnapData) closureCopy(cl *closure) *jitClosureCopy {
 	c := &jitClosureCopy{}
 	c.ic, c.polys = jitCopyCaches(cl.ic)
 	c.calls = jitCallsCopy(d.rt, cl)
-	c.sites = jitCallSiteFacts(d.rt, cl, c.calls)
+	c.sites, c.rpcs = jitCallSiteFacts(d.rt, cl, c.calls)
 	switch {
 	case d.copies != nil:
 		d.copies[cl] = c

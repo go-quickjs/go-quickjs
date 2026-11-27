@@ -42,6 +42,9 @@ type jitTargetsData struct {
 	// (jitTargetsAskedAt). Without gathered Resumed and EntryGeneric are
 	// asked as before (snapshotStatePCs).
 	gathered, eager bool
+	// eagerWhy is why a snapshot is eager: its code (typed, no closure,
+	// nothing learned) or a site of two calls (jitEagerSites).
+	eagerWhy uint8
 	// live is the function's learning, learned the copy of its lists'
 	// headers the derivation reads and appends to, past nNative and
 	// nInline of nativeCalls and inlines: the appends the finish writes.
@@ -82,6 +85,7 @@ type jitTargetsData struct {
 	facts []jitTargetFacts
 	regs  []jitTargetReg
 	sites []jitCallSiteFact
+	rpcs  []int32
 	realm jitCallRealm
 	// constructs and rooms are the constructions' facts, by function
 	// object and argument count, and their pools' rooms, of the learned
@@ -229,36 +233,33 @@ func jitTargetsGather(s *jitSnapshot, fb *jitRegFeedback) {
 	if d.cl == nil || fb.rc.Typed || fb.fb.e == nil || fb.fb.e.jitLearned == nil {
 		// Asked at every PC, where the asking asks them (jitTargetsAskedAt),
 		// Resumed and EntryGeneric as before.
-		t.eager = true
+		t.eager, t.eagerWhy = true, jitEagerCode
 		return
 	}
 	r := fb.fb.r
 	rc := fb.rc
-	t.sites = s.root.d.closureCopy(d.cl).sites
-	calls := 0
-	for rpc, w := range rc.Code {
-		switch w.Op() {
-		case bytecode.RCallW, bytecode.RCallMW, bytecode.RCallWT, bytecode.RCallMWT:
-			calls++
-			if !t.siteKnownAt(rpc, w, d.copied, fb.fb.e) {
-				// A site of two calls, which the facts do not hold: asked
-				// at every PC.
-				t.eager = true
-				return
-			}
-		}
-	}
+	cc := s.root.d.closureCopy(d.cl)
+	t.sites, t.rpcs = cc.sites, cc.rpcs
 	t.gathered, t.live, t.realm = true, fb.fb.e, r.jitCallRealmNow()
-	t.facts = make([]jitTargetFacts, 0, calls+len(fb.fb.e.nativeCalls))
-	t.regs = make([]jitTargetReg, 0, min(calls, 8))
+	t.facts = make([]jitTargetFacts, 0, len(t.sites)+len(fb.fb.e.nativeCalls))
+	t.regs = make([]jitTargetReg, 0, min(len(t.sites), 8))
 	l := t.live
 	live := jitCallLive{fb}
 	pushes := false
-	for rpc, w := range rc.Code {
+	for _, at := range t.rpcs {
+		rpc := int(at)
+		w := rc.Code[rpc]
 		op := w.Op()
 		argc := int(w.X())
 		switch op {
 		case bytecode.RCallW, bytecode.RCallMW, bytecode.RCallWT, bytecode.RCallMWT:
+			if !t.siteKnownAt(rpc, w, d.copied, l) {
+				// A site of two calls, which the facts do not hold: asked
+				// at every PC (jitTargetsAskedAt), as the asking asks it,
+				// what this gather made found made.
+				*t = jitTargetsData{eager: true, eagerWhy: jitEagerSites}
+				return
+			}
 			method := op.MethodCall()
 			if site := int(w.C()); site < len(d.copied) {
 				if e := &d.copied[site]; e.callee != nil && e.cl != nil {
@@ -373,6 +374,13 @@ func jitTargetsGather(s *jitSnapshot, fb *jitRegFeedback) {
 	}
 }
 
+// Why a snapshot's NativeCalls are asked at its PCs (jitTargetsData's
+// eagerWhy).
+const (
+	jitEagerCode = 1 + iota
+	jitEagerSites
+)
+
 // jitLearnedAt reports whether list has an entry of the call at register
 // pc rpc, of a pool where pool says.
 func jitLearnedAt(list []jitInline, rpc int, pool bool) bool {
@@ -461,14 +469,15 @@ func (t *jitTargetsData) viaLeafAt(rpc int32) bool {
 // through Function.prototype.call too.
 func (t *jitTargetsData) target(s *jitSnapshot, r *Runtime, o *Object, cl *closure, rc *regCode, argc int) {
 	reg := &t.regs[t.regAtOf(s, r, cl)]
-	t.facts = append(t.facts, jitTargetFacts{jitTargetKey{o, cl, rc}, r.jitRegFactsOf(o, cl, rc)})
+	f := r.jitRegFactsOf(o, cl, rc)
+	t.facts = append(t.facts, jitTargetFacts{jitTargetKey{o, cl, rc}, f})
 	if rc != reg.rc {
-		t.facts = append(t.facts, jitTargetFacts{jitTargetKey{o, cl, reg.rc}, r.jitRegFactsOf(o, cl, reg.rc)})
+		f = r.jitRegFactsOf(o, cl, reg.rc)
+		t.facts = append(t.facts, jitTargetFacts{jitTargetKey{o, cl, reg.rc}, f})
 	}
 	if reg.link != nil || reg.rc == nil {
 		return
 	}
-	f := r.jitRegFactsOf(o, cl, reg.rc)
 	if f.callable(cl, reg.rc, argc, t.realm.quirks) || argc >= 1 && f.callable(cl, reg.rc, argc-1, t.realm.quirks) {
 		reg.link = s.gatherLink(r.jitState().regLinkOf(cl, reg.rc))
 	}
@@ -957,20 +966,19 @@ type jitCallSiteFact struct {
 // call's seen callees: one pass forward over the register code, the
 // register each instruction last wrote (its A) and its last get_method_w
 // kept by register, where the asking scans back from each call.
-func jitCallSiteFacts(r *Runtime, cl *closure, calls []regCallCache) []jitCallSiteFact {
+func jitCallSiteFacts(r *Runtime, cl *closure, calls []regCallCache) (out []jitCallSiteFact, rpcs []int32) {
 	rc := cl.fn.RegCode()
 	if rc == nil || rc.Typed {
-		return nil
+		return nil, nil
 	}
 	// Read, not made (regLearnedOf would make it): a closure the walk
 	// copies that no feedback has asked of has learned nothing.
 	l := r.jitState().regLearned[r.jitRegKeyOf(cl)]
 	fb := &jitRegFeedback{fb: &jitFeedback{r: r, fn: cl.fn, cl: cl, e: l}, rc: rc}
-	var out []jitCallSiteFact
 	// By register, past 1: the last instruction whose A it is, and the
 	// last get_method_w that wrote it.
-	last := make([]int32, 0, 64)
-	method := make([]int32, 0, 64)
+	regs := make([]int32, 2*(rc.NumRegs+1))
+	last, method := regs[:rc.NumRegs+1:rc.NumRegs+1], regs[rc.NumRegs+1:]
 	at := func(list *[]int32, reg int) int {
 		if reg < len(*list) {
 			return int((*list)[reg]) - 1
@@ -985,7 +993,10 @@ func jitCallSiteFacts(r *Runtime, cl *closure, calls []regCallCache) []jitCallSi
 	}
 	for rpc, w := range rc.Code {
 		switch op := w.Op(); op {
+		case bytecode.RLit, bytecode.RCopyDataProps, bytecode.RSuperCall:
+			rpcs = append(rpcs, int32(rpc))
 		case bytecode.RCallW, bytecode.RCallMW, bytecode.RCallWT, bytecode.RCallMWT, bytecode.RNewW:
+			rpcs = append(rpcs, int32(rpc))
 			site := int(w.C())
 			for len(out) <= site {
 				out = append(out, jitCallSiteFact{rpc: -1})
@@ -1007,17 +1018,14 @@ func jitCallSiteFacts(r *Runtime, cl *closure, calls []regCallCache) []jitCallSi
 			if !jitCallUnfilled(calls, w, isMethod, int(w.X()), l != nil) || l == nil {
 				break
 			}
-			has := func(list []jitInline) bool {
-				return slices.ContainsFunc(list, func(y jitInline) bool { return int(y.pc) == rpc })
-			}
 			switch {
 			case op == bytecode.RNewW:
-			case isMethod && int(w.X()) >= 1 && !has(l.nativeCalls):
+			case isMethod && int(w.X()) >= 1 && !jitLearnedAt(l.nativeCalls, rpc, false):
 				x.asked = true
 				if q := at(&last, int(w.A())); q >= 0 {
 					x.now, x.cl, x.rc = fb.regNowTargetAt(q, w, true)
 				}
-			case !isMethod && !has(l.nativeCalls) && !has(l.inlines):
+			case !isMethod && !jitLearnedAt(l.nativeCalls, rpc, false) && !jitLearnedAt(l.inlines, rpc, false):
 				x.asked = true
 				if q := at(&last, int(w.A())); q >= 0 {
 					x.now, x.cl, x.rc = fb.regNowTargetAt(q, w, false)
@@ -1029,5 +1037,5 @@ func jitCallSiteFacts(r *Runtime, cl *closure, calls []regCallCache) []jitCallSi
 			set(&method, int(w.A()), rpc)
 		}
 	}
-	return out
+	return out, rpcs
 }
