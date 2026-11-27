@@ -35,6 +35,9 @@ function* g1() { yield 1; yield 2 }
 function* g2() { yield 3 }
 function h(n) { let s = 0; for (let i = 0; i < n; i++) for (const v of (i % 2 ? g1() : g2())) s += v; return s }
 for (let k = 0; k < 40; k++) h(200)
+function sa(n, v) { let s = 0; for (let i = 0; i < n; i++) s = s + v; return s }
+for (let k = 0; k < 40; k++) sa(200, 1)
+for (let k = 0; k < 40; k++) sa(200, "x")
 `
 
 // jitLearnedLists are the lists of a function's learning a snapshot of its
@@ -49,6 +52,11 @@ func jitLearnedLists(e *jitEntry) map[string]any {
 		m["notInline"], m["genericCalls"] = l.notInline, l.genericCalls
 		m["nativeCalls"], m["inlines"], m["viaLeaves"] = l.nativeCalls, l.inlines, l.viaLeaves
 		m["genSteps"], m["stepResults"], m["genMakes"] = l.genSteps, l.stepResults, l.genMakes
+		// The lowering's hints, whose headers a snapshot's hints copy
+		// shares (jitRegHintsCopy).
+		h := &l.regHints
+		m["regHints.StringAdds"], m["regHints.ElementReads"] = h.StringAdds, h.ElementReads
+		m["regHints.StringReads"], m["regHints.WholeOps"] = h.StringReads, h.WholeOps
 	}
 	return m
 }
@@ -190,7 +198,7 @@ func TestJITLearnedListsPersist(t *testing.T) {
 	if installs == 0 {
 		t.Error("no install after a list of hosts taken: the test does not reach ssaHostsLeft's writes")
 	}
-	for _, name := range []string{"ssaHostsLeft", "regCallsMade"} {
+	for _, name := range []string{"ssaHostsLeft", "regCallsMade", "regHints.StringAdds"} {
 		if moved[name] == 0 {
 			t.Errorf("no %s taken was moved past: the test does not reach its writes", name)
 		}

@@ -873,7 +873,14 @@ func (s *jitState) regLearnedOf(key jitKey) *jitEntry {
 // which its finish adopts as the function's (regLearnedAdopt) where the
 // compile takes the callee.
 func (s *jitState) jitLearnedScratch(key jitKey) *jitEntry {
-	return &jitEntry{jitLearned: &jitLearned{reg: true, regLink: s.regLinks[key]}}
+	// One allocation for both.
+	x := &struct {
+		e jitEntry
+		l jitLearned
+	}{}
+	x.l.reg, x.l.regLink = true, s.regLinks[key]
+	x.e.jitLearned = &x.l
+	return &x.e
 }
 
 // regLearnedAdopt keeps l, made apart (jitLearnedScratch) or anew, as what

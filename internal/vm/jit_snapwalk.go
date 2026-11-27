@@ -156,7 +156,10 @@ type jitLoopFact struct {
 // answer reads, as the gather found it.
 type jitWalkData struct {
 	eager jitWalkEager
-	nodes map[*closure]*jitWalkNode
+	// nodes are found by a search while they are few, by byCl past
+	// jitWalkFew.
+	nodes []*jitWalkNode
+	byCl  map[*closure]*jitWalkNode
 	order []*jitWalkNode
 	// counts are jitCountedCallee's answers of the closures the gather's
 	// asking asked them of (jitRegCallColdOf).
@@ -191,7 +194,7 @@ type jitWalkNode struct {
 	// answers; mega and seenMega
 	// jitMegaGetter's before and after its seen feedback was taken
 	// (jitRegSeenInlined, megaOf), seen once an answer inlining it took it.
-	readsArgs, forwards bool
+	readsArgs, forwards, argsDone bool
 	// notForwarded are the questions of its inlining with a call's
 	// arguments that the gather answered no to (forwardsInline).
 	notForwarded             []jitForwardAsk
@@ -215,9 +218,40 @@ type jitWalkNode struct {
 	taken, decided, touched bool
 }
 
+// jitWalkFew is how many nodes a compile's are found among by a search,
+// past which they are found by a map (jitWalkData's byCl).
+const jitWalkFew = 16
+
+// lookup is cl's node, nil for none.
+func (w *jitWalkData) lookup(cl *closure) *jitWalkNode {
+	if w.byCl != nil {
+		return w.byCl[cl]
+	}
+	for _, n := range w.nodes {
+		if n.cl == cl {
+			return n
+		}
+	}
+	return nil
+}
+
+// add keeps n among w's nodes.
+func (w *jitWalkData) add(n *jitWalkNode) {
+	w.nodes = append(w.nodes, n)
+	switch {
+	case w.byCl != nil:
+		w.byCl[n.cl] = n
+	case len(w.nodes) > jitWalkFew:
+		w.byCl = make(map[*closure]*jitWalkNode, 2*len(w.nodes))
+		for _, x := range w.nodes {
+			w.byCl[x.cl] = x
+		}
+	}
+}
+
 // node is cl's node, or a miss.
 func (w *jitWalkData) node(cl *closure, depth int) *jitWalkNode {
-	if n := w.nodes[cl]; n != nil {
+	if n := w.lookup(cl); n != nil {
 		n.touched = true
 		return n
 	}
@@ -246,7 +280,7 @@ func (w *jitWalkData) askedAnew(cl *closure, c *jitSnapshot, p *ir.Program, kind
 	if w == nil {
 		return
 	}
-	n := w.nodes[cl]
+	n := w.lookup(cl)
 	if n == nil {
 		return
 	}
@@ -261,9 +295,10 @@ func (w *jitWalkData) askedAnew(cl *closure, c *jitSnapshot, p *ir.Program, kind
 }
 
 // fact is cl's node, made at its first ask, of what an answer reads of it
-// besides its megamorphic getters (megaOf), of r, the compile's s's.
+// besides its megamorphic getters (megaOf) and its arguments (argsOf), of
+// r, the compile's s's.
 func (w *jitWalkData) fact(r *Runtime, s *jitSnapshot, cl *closure) *jitWalkNode {
-	if n := w.nodes[cl]; n != nil {
+	if n := w.lookup(cl); n != nil {
 		return n
 	}
 	js := r.jitState()
@@ -272,14 +307,21 @@ func (w *jitWalkData) fact(r *Runtime, s *jitSnapshot, cl *closure) *jitWalkNode
 	if n.e == nil {
 		n.e, n.scratch = js.jitLearnedScratch(n.key), true
 	}
-	if cl.closureCode != nil {
-		n.readsArgs, n.forwards = jitRegReadsArguments(cl), jitRegForwards(cl)
-	}
-	if w.nodes == nil {
-		w.nodes = map[*closure]*jitWalkNode{}
-	}
-	w.nodes[cl] = n
+	w.add(n)
 	return n
+}
+
+// argsOf takes, once, whether n's function reads its arguments alone and
+// whether it hands them on (jitRegReadsArguments, jitRegForwards), which an
+// answer asks of a callee that keeps its arguments.
+func (n *jitWalkNode) argsOf() {
+	if n.argsDone {
+		return
+	}
+	n.argsDone = true
+	if n.cl.closureCode != nil {
+		n.readsArgs, n.forwards = jitRegReadsArguments(n.cl), jitRegForwards(n.cl)
+	}
 }
 
 // megaOf takes, once, n's megamorphic getters' answer (jitMegaGetter)
@@ -468,6 +510,7 @@ func (s *jitSnapshot) takeNode(r *Runtime, cl *closure) {
 	n.taken = true
 	w.order = append(w.order, n)
 	n.megaOf(r, k)
+	n.argsOf()
 	_, n.h, n.cached = r.jitRegHintsCopy(cl, n.rc)
 	if jitSnapMayInline(cl) {
 		n.level = s.depth + 1
@@ -482,10 +525,20 @@ func (s *jitSnapshot) takeNode(r *Runtime, cl *closure) {
 		}
 		return
 	}
-	f := &jitRegFeedback{fb: &jitFeedback{r: r, fn: cl.fn, cl: cl, e: n.e, root: k}, rc: n.rc}
-	cs := &jitSnapshot{root: root, fb: f.fb, depth: n.level}
+	// Its snapshot and its feedback, one allocation.
+	x := &struct {
+		s  jitSnapshot
+		rs jitRegSnapshot
+		f  jitRegFeedback
+		fb jitFeedback
+	}{}
+	x.fb = jitFeedback{r: r, fn: cl.fn, cl: cl, e: n.e, root: k}
+	x.f = jitRegFeedback{fb: &x.fb, rc: n.rc}
+	f, cs := &x.f, &x.s
+	cs.root, cs.fb, cs.depth = root, f.fb, n.level
 	cs.d.node = true
-	cs.reg = &jitRegSnapshot{s: cs, regs: len(n.rc.Code)}
+	x.rs = jitRegSnapshot{s: cs, regs: len(n.rc.Code)}
+	cs.reg = &x.rs
 	n.s = cs
 	root.callees[key] = cs
 	if n.level == 0 {
@@ -782,8 +835,20 @@ func (q jitInlineSnap) code(fn *bytecode.Function) *bytecode.RegCode {
 	return fn.RegCompiled()
 }
 
-func (q jitInlineSnap) readsArgs(cl *closure) bool { return q.fact(cl).readsArgs }
-func (q jitInlineSnap) forwards(cl *closure) bool  { return q.fact(cl).forwards }
+func (q jitInlineSnap) readsArgs(cl *closure) bool { return q.args(cl).readsArgs }
+func (q jitInlineSnap) forwards(cl *closure) bool  { return q.args(cl).forwards }
+
+// args is cl's node, whose arguments' answers are taken (argsOf): at the
+// gather, or by its taking (takeNode).
+func (q jitInlineSnap) args(cl *closure) *jitWalkNode {
+	n := q.fact(cl)
+	if q.gather {
+		n.argsOf()
+	} else if !n.argsDone {
+		panic(jitSnapMiss{snapInline, 0, q.s.depth})
+	}
+	return n
+}
 
 func (q jitInlineSnap) counted(cl *closure) bool {
 	w := q.w()

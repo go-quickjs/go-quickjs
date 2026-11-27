@@ -113,7 +113,8 @@ func (r *Runtime) regKeepLoweredAt(cl *closure, rc *bytecode.RegCode, h *jitcomp
 // jitRegHintsCopy is the hints cl's function's register code rc would be
 // lowered with now -- what jitRegLowering would take, KeepParams among
 // them, taken by the same code (jitHintsTake) -- in a copy of their own,
-// the function's key, and its lowering's programs (cached) where they were
+// its lists the learned ones' headers where nothing is taken past them,
+// which no write changes (they are only appended to), the function's key, and its lowering's programs (cached) where they were
 // lowered with those hints, nil where not: nothing of the runtime's
 // written -- no state made for the function, nothing lowered again or
 // anew -- for a snapshot's gather to hand a worker.
@@ -125,9 +126,13 @@ func (r *Runtime) jitRegHintsCopy(cl *closure, rc *bytecode.RegCode) (key jitKey
 	}
 	key = r.jitRegKeyOf(cl)
 	if e := s.regLearned[key]; e != nil {
+		// The learned lists' headers, cut to their lengths: the lists are
+		// only appended to, never written within a header's length, so the
+		// copy shares what they hold, and an append of jitHintsTake's makes
+		// a list of the copy's own.
 		x := &e.regHints
-		h.StringAdds, h.ElementReads = slices.Clone(x.StringAdds), slices.Clone(x.ElementReads)
-		h.StringReads, h.WholeOps = slices.Clone(x.StringReads), slices.Clone(x.WholeOps)
+		h.StringAdds, h.ElementReads = slices.Clip(x.StringAdds), slices.Clip(x.ElementReads)
+		h.StringReads, h.WholeOps = slices.Clip(x.StringReads), slices.Clip(x.WholeOps)
 	}
 	jitHintsTake(&h, cl, rc)
 	if l := s.regLowered[key]; l != nil {
