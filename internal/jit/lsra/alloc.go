@@ -319,6 +319,7 @@ type Allocator struct {
 	searchPreds  bool
 	rangeLists   bool
 	sortList     bool
+	alwaysTest   bool
 	maxPos       int32
 	evKnown      bool
 	blocksKnown  bool
@@ -405,8 +406,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.split, al.stress = !cfg.NoSplit, cfg.StressSplit && !cfg.NoSplit
 	al.displace, al.mutateHoles, al.oneByOne, al.twoPass, al.plainLists, al.markPass = cfg.Displace, cfg.mutateHoles, cfg.oneByOne, cfg.twoPass, cfg.plainLists, cfg.markPass
 	al.hintPass, al.blockByBlock, al.mergeAll, al.regByReg, al.phiWalks = cfg.hintPass, cfg.blockByBlock, cfg.mergeAll, cfg.regByReg, cfg.phiWalks
-	al.searchPreds, al.rangeLists, al.sortList = cfg.searchPreds, cfg.rangeLists, cfg.sortList
-
+	al.searchPreds, al.rangeLists, al.sortList, al.alwaysTest = cfg.searchPreds, cfg.rangeLists, cfg.sortList, cfg.alwaysTest
 
 	// Liveness, of the registers that may be live across a block's
 	// boundary -- a phi's, a phi's argument, one used in a block other
@@ -874,9 +874,19 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		if len(a) < len(b) {
 			a, b = b, a
 		}
+		// One ends by where the other begins, as 43% of the corpus's pairs
+		// do: they are apart, and the ranges of the one go after the
+		// other's, without a test (joinApart).
+		lo, hi := a, b
+		if b[len(b)-1].to <= a[0].from {
+			lo, hi = b, a
+		}
+		apart := !al.alwaysTest && lo[len(lo)-1].to <= hi[0].from
 		walk := !al.twoPass && len(b)*8 >= len(a)
 		var ok bool
 		switch {
+		case apart:
+			ok = true
 		case walk:
 			merged, ok = mergeApart(merged, a, b)
 		case al.twoPass:
@@ -893,6 +903,8 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		x.members = appendA(&al.vregs, x.members, y.members...)
 		merges++
 		switch {
+		case apart:
+			x.ranges, x.owned = joinApart(rngs, x, lo, hi), true
 		case !walk && !al.twoPass:
 			// The few put into the many where the searches found them: in
 			// its array, where it is its web's, else in one of its own
@@ -2213,6 +2225,36 @@ func mergeApart(out, a, b []rng) ([]rng, bool) {
 		out = append(out, rest...)
 	}
 	return out, true
+}
+
+// joinApart is lo's ranges and then hi's, the last of lo ending by where
+// the first of hi begins, joined there where they touch, for web x, one
+// of whose lists they are: in its array where it is x's own with room,
+// else in one of the arena's with the room unionInto would take.
+func joinApart(ar *arena[rng], x *web, lo, hi []rng) []rng {
+	n := len(lo) + len(hi)
+	var out []rng
+	if x.owned && cap(x.ranges) >= n {
+		out = x.ranges[:n]
+		if &x.ranges[0] == &hi[0] {
+			// hi is x's: moved up past where lo goes.
+			copy(out[len(lo):], hi)
+			copy(out, lo)
+		} else {
+			copy(out[len(lo):], hi)
+		}
+	} else {
+		c := len(x.ranges)
+		if x.owned {
+			c = cap(x.ranges)
+		}
+		out = append(append(ar.take(max(2*c, n)), lo...), hi...)
+	}
+	if k := len(lo); out[k-1].to == out[k].from {
+		out[k-1].to = out[k].to
+		out = append(out[:k], out[k+1:]...)
+	}
+	return out
 }
 
 // apartAt is, for each of b's ranges, the index of the first of a's that

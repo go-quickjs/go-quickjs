@@ -283,6 +283,10 @@ type Config struct {
 	// for the tests that compare it with listing them from the order in
 	// which the ranges' walk met their definitions.
 	sortList bool
+	// alwaysTest has the coalescing test and merge two webs' ranges
+	// whatever their extents, for the tests that compare it with putting
+	// the ranges of one that begins where the other has ended after it.
+	alwaysTest bool
 	// plainLists has the scan read every web on its active and inactive
 	// lists at every position, for the tests that compare it with reading
 	// each only where its entry says it may have changed.

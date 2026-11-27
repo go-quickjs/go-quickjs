@@ -1206,6 +1206,7 @@ func TestWalkMethods(t *testing.T) {
 		{"searchPreds", func(c *Config) { c.searchPreds = true }},
 		{"rangeLists", func(c *Config) { c.rangeLists = true }},
 		{"sortList", func(c *Config) { c.sortList = true }},
+		{"alwaysTest", func(c *Config) { c.alwaysTest = true }},
 	}
 	var al, old Allocator
 	twice := 0
@@ -1236,6 +1237,11 @@ func TestWalkMethods(t *testing.T) {
 				for _, h := range w.hints {
 					*out = append(*out, h.members[0])
 				}
+				// And its ranges, as the coalescing left them.
+				*out = append(*out, VReg(len(w.ranges)))
+				for _, r := range w.ranges {
+					*out = append(*out, VReg(r.from), VReg(r.to))
+				}
 			}
 		}
 	}
@@ -1256,7 +1262,7 @@ func TestWalkMethods(t *testing.T) {
 				t.Fatalf("%s: the walks and %s allocate differently\n%s\n%s", name, o.name, dump(f, a), dump(f, b))
 			}
 			if !slices.Equal(hintsA, hintsB) {
-				t.Fatalf("%s: the walks and %s give the registers different ranges or weights, or the webs different hints", name, o.name)
+				t.Fatalf("%s: the walks and %s give the registers different ranges or weights, or the webs different hints or ranges", name, o.name)
 			}
 		}
 	}
@@ -1468,6 +1474,56 @@ func TestClassWeight(t *testing.T) {
 	for d := -1; d <= numWeightClasses+2; d++ {
 		if got, want := classWeight(int8(weightClass(d))), depthWeight(d); got != want {
 			t.Fatalf("depth %d: %v, not %v", d, got, want)
+		}
+	}
+}
+
+// TestJoinApart joins random lists of ranges one of which ends by where
+// the other begins, some touching there, by joinApart, for a web whose
+// list is either and its own or not, with room or without, and checks
+// the result against unionInto's merge, and that the lists given are
+// unchanged where they are not the web's own.
+func TestJoinApart(t *testing.T) {
+	rnd := rand.New(rand.NewPCG(83, 89))
+	var ar arena[rng]
+	list := func(at int32, n int) ([]rng, int32) {
+		var rs []rng
+		for range n {
+			from := at + int32(rnd.IntN(3))
+			if len(rs) > 0 && from == rs[len(rs)-1].to {
+				from++
+			}
+			to := from + 1 + int32(rnd.IntN(4))
+			rs = append(rs, rng{from, to})
+			at = to
+		}
+		return rs, at
+	}
+	for range 20000 {
+		ar.reset()
+		lo, at := list(int32(rnd.IntN(3)), 1+rnd.IntN(6))
+		hi, _ := list(at+int32(rnd.IntN(2)), 1+rnd.IntN(6))
+		want := unionInto(&ar, append([]rng(nil), lo...), hi)
+		x := &web{owned: rnd.IntN(2) == 0}
+		// x's list is lo or hi, with room past it or not.
+		mine := &lo
+		if rnd.IntN(2) == 0 {
+			mine = &hi
+		}
+		*mine = append(make([]rng, 0, len(*mine)+rnd.IntN(len(lo)+len(hi)+2)), *mine...)
+		x.ranges = *mine
+		other := lo
+		if mine == &lo {
+			other = hi
+		}
+		before := append([]rng(nil), other...)
+		mineBefore := append([]rng(nil), *mine...)
+		got := joinApart(&ar, x, lo, hi)
+		if !slices.Equal(got, want) {
+			t.Fatalf("%v then %v (web's own %v, the %v): %v, not %v", lo, hi, x.owned, *mine, got, want)
+		}
+		if !slices.Equal(other, before) || !x.owned && !slices.Equal(x.ranges, mineBefore) {
+			t.Fatalf("%v then %v: a list not the web's own changed", lo, hi)
 		}
 	}
 }
