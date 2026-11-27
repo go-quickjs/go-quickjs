@@ -104,9 +104,6 @@ type jitSnapData struct {
 	// answers may name, whose kinds the snapshot asks ahead
 	// (jitRegSnapshotOf's LeafKind) with the answers'.
 	leaves []uintptr
-	// targets, the root's, is what its targets' gathers take once for
-	// all of its snapshots (jitTargetsShared).
-	targets jitTargetsShared
 }
 
 // jitClosureCopy is what of a closure's state a compile's gathers copy, on

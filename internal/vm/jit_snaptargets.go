@@ -82,6 +82,7 @@ type jitTargetsData struct {
 	// facts, regs and sites -- the closure's copy's (jitCallSiteFacts)
 	// -- are what the derivation's source answers (jitCallCopy), as the
 	// gather found them; realm the realm's built-ins.
+	facts []jitTargetFacts
 	regs  []jitTargetReg
 	sites []jitCallSiteFact
 	rpcs  []int32
@@ -92,8 +93,10 @@ type jitTargetsData struct {
 	// poolRoom).
 	constructs []jitTargetConstruct
 	rooms      []jitTargetRoom
-	// byReg indexes regs, made on the worker as it first derives.
-	byReg map[*closure]jitTargetReg
+	// byFacts and byReg index them, made on the worker as it first
+	// derives.
+	byFacts map[jitTargetKey]jitCallFacts
+	byReg   map[*closure]jitTargetReg
 	// regAt indexes regs on the gather's side, made once they are many.
 	regAt map[*closure]int
 }
@@ -148,12 +151,19 @@ type jitTargetKey struct {
 	rc *regCode
 }
 
+// jitTargetFacts is a target's facts (jitCallFacts).
+type jitTargetFacts struct {
+	k jitTargetKey
+	f jitCallFacts
+}
+
 // jitTargetReg is a closure's register code as the gather found it, and
 // the link native callers call it through, nil where the gather made
 // none.
 type jitTargetReg struct {
-	cl *closure
-	rc *regCode
+	cl   *closure
+	rc   *regCode
+	link *jitLink
 }
 
 // jitTargetConstruct is a construction's facts with o of argc arguments.
@@ -231,6 +241,7 @@ func jitTargetsGather(s *jitSnapshot, fb *jitRegFeedback) {
 	cc := s.root.d.closureCopy(d.cl)
 	t.sites, t.rpcs = cc.sites, cc.rpcs
 	t.gathered, t.live, t.realm = true, fb.fb.e, r.jitCallRealmNow()
+	t.facts = make([]jitTargetFacts, 0, len(t.sites)+len(fb.fb.e.nativeCalls))
 	t.regs = make([]jitTargetReg, 0, min(len(t.sites), 8))
 	l := t.live
 	live := jitCallLive{fb}
@@ -274,8 +285,9 @@ func jitTargetsGather(s *jitSnapshot, fb *jitRegFeedback) {
 				cls, pool := live.genNext(rpc)
 				t.gens = append(t.gens, jitTargetGen{rpc: int32(rpc), cls: cls, pool: pool})
 				for _, cl := range cls {
-					t.regOf(s, r, cl)
-					t.linkOf(s, r, cl, cl.reg)
+					if reg := t.regOf(s, r, cl); reg.link == nil {
+						reg.link = s.gatherLink(r.jitState().regLinkOf(cl, cl.reg))
+					}
 				}
 			}
 			for i := range l.genMakes {
@@ -305,8 +317,9 @@ func jitTargetsGather(s *jitSnapshot, fb *jitRegFeedback) {
 					p, skip, cl := live.superTarget(x.active, argc)
 					t.supers = append(t.supers, jitTargetSuper{active: x.active, p: p, skip: skip, argc: argc, cl: cl})
 					if cl != nil && cl.reg != nil {
-						t.regOf(s, r, cl)
-						t.linkOf(s, r, cl, cl.reg)
+						if reg := t.regOf(s, r, cl); reg.link == nil {
+							reg.link = s.gatherLink(r.jitState().regLinkOf(cl, cl.reg))
+						}
 					}
 					break
 				}
@@ -341,9 +354,9 @@ func jitTargetsGather(s *jitSnapshot, fb *jitRegFeedback) {
 			c := r.jitRegConstructOf(x.obj, argc)
 			t.constructs = append(t.constructs, jitTargetConstruct{x.obj, argc, c})
 			reg := t.regOf(s, r, x.cl)
-			t.factsOf(s, r, x.obj, x.cl, reg.rc)
-			if c.ok && c.cl == x.cl && c.parent == x.parent && reg.rc != nil {
-				t.linkOf(s, r, x.cl, reg.rc)
+			t.facts = append(t.facts, jitTargetFacts{jitTargetKey{x.obj, x.cl, reg.rc}, r.jitRegFactsOf(x.obj, x.cl, reg.rc)})
+			if c.ok && c.cl == x.cl && c.parent == x.parent && reg.rc != nil && reg.link == nil {
+				reg.link = s.gatherLink(r.jitState().regLinkOf(x.cl, reg.rc))
 			}
 			continue
 		}
@@ -455,69 +468,25 @@ func (t *jitTargetsData) viaLeafAt(rpc int32) bool {
 // last loop); and the link of cl where native callers may call it so,
 // through Function.prototype.call too.
 func (t *jitTargetsData) target(s *jitSnapshot, r *Runtime, o *Object, cl *closure, rc *regCode, argc int) {
-	reg := t.regOf(s, r, cl)
-	f := t.factsOf(s, r, o, cl, rc)
-	if rc != reg.rc {
-		f = t.factsOf(s, r, o, cl, reg.rc)
+	reg := &t.regs[t.regAtOf(s, r, cl)]
+	var f jitCallFacts
+	if rc != nil {
+		// None of no register code: no call of it is native
+		// (jitRegTargetFree), neither taken nor kept (jitCallCopy's
+		// target).
+		f = r.jitRegFactsOf(o, cl, rc)
+		t.facts = append(t.facts, jitTargetFacts{jitTargetKey{o, cl, rc}, f})
 	}
-	if reg.rc == nil {
+	if rc != reg.rc && reg.rc != nil {
+		f = r.jitRegFactsOf(o, cl, reg.rc)
+		t.facts = append(t.facts, jitTargetFacts{jitTargetKey{o, cl, reg.rc}, f})
+	}
+	if reg.link != nil || reg.rc == nil {
 		return
 	}
 	if f.callable(cl, reg.rc, argc, t.realm.quirks) || argc >= 1 && f.callable(cl, reg.rc, argc-1, t.realm.quirks) {
-		t.linkOf(s, r, cl, reg.rc)
+		reg.link = s.gatherLink(r.jitState().regLinkOf(cl, reg.rc))
 	}
-}
-
-// factsOf is the facts of o, cl's, of register code rc (jitRegFactsOf),
-// taken once a compile, by its root's gathers (jitTargetsShared): what of
-// a target the heap holds does not change while the compile is prepared,
-// nothing of the script's running meanwhile, and a closure's register
-// code made meanwhile is another rc. None of no register code: no call
-// of it is native (jitRegTargetFree).
-func (t *jitTargetsData) factsOf(s *jitSnapshot, r *Runtime, o *Object, cl *closure, rc *regCode) jitCallFacts {
-	if rc == nil {
-		return jitCallFacts{}
-	}
-	sh := &s.root.d.targets
-	k := jitTargetKey{o, cl, rc}
-	if f, ok := sh.facts[k]; ok {
-		return f
-	}
-	if sh.facts == nil {
-		sh.facts = make(map[jitTargetKey]jitCallFacts, 64)
-	}
-	f := r.jitRegFactsOf(o, cl, rc)
-	sh.facts[k] = f
-	return f
-}
-
-// linkOf makes, once a compile, the link native callers call cl's code rc
-// through (regLinkOf), kept in the snapshot's gained links (gatherLink).
-func (t *jitTargetsData) linkOf(s *jitSnapshot, r *Runtime, cl *closure, rc *regCode) {
-	sh := &s.root.d.targets
-	k := jitLinkKey{cl, rc}
-	if _, ok := sh.links[k]; ok {
-		return
-	}
-	if sh.links == nil {
-		sh.links = make(map[jitLinkKey]*jitLink, 16)
-	}
-	sh.links[k] = s.gatherLink(r.jitState().regLinkOf(cl, rc))
-}
-
-// jitTargetsShared is what a compile's snapshots' targets' gathers take
-// once for all of them (jitSnapData's targets): the facts of each target
-// by function object, closure and register code, and the links by
-// closure and register code.
-type jitTargetsShared struct {
-	facts map[jitTargetKey]jitCallFacts
-	links map[jitLinkKey]*jitLink
-}
-
-// jitLinkKey is a link's closure and register code.
-type jitLinkKey struct {
-	cl *closure
-	rc *regCode
 }
 
 // regAtOf is the index in t's regs of cl's register code as the gather
@@ -555,8 +524,12 @@ func (t *jitTargetsData) regOf(s *jitSnapshot, r *Runtime, cl *closure) *jitTarg
 
 // index makes t's indexes, on the worker.
 func (t *jitTargetsData) index() {
-	if t.byReg != nil {
+	if t.byFacts != nil {
 		return
+	}
+	t.byFacts = make(map[jitTargetKey]jitCallFacts, len(t.facts))
+	for _, f := range t.facts {
+		t.byFacts[f.k] = f.f
 	}
 	t.byReg = make(map[*closure]jitTargetReg, len(t.regs))
 	for _, x := range t.regs {
@@ -587,7 +560,9 @@ func (c jitCallCopy) target(o *Object, cl *closure, rc *regCode) jitCallFacts {
 	if rc == nil {
 		return jitCallFacts{}
 	}
-	f, ok := c.s.root.d.targets.facts[jitTargetKey{o, cl, rc}]
+	t := c.data()
+	t.index()
+	f, ok := t.byFacts[jitTargetKey{o, cl, rc}]
 	if !ok {
 		panic("jit: a snapshot's derivation of a call met a target its gather did not take")
 	}
@@ -605,8 +580,10 @@ func (c jitCallCopy) reg(cl *closure) *regCode {
 }
 
 func (c jitCallCopy) link(cl *closure, rc *regCode) *jitLink {
-	if l := c.s.root.d.targets.links[jitLinkKey{cl, rc}]; l != nil {
-		return l
+	t := c.data()
+	t.index()
+	if x := t.byReg[cl]; x.link != nil && x.rc == rc {
+		return x.link
 	}
 	panic("jit: a snapshot's derivation of a call met a link its gather did not make")
 }
