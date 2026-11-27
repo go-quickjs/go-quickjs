@@ -1207,6 +1207,7 @@ func TestWalkMethods(t *testing.T) {
 		{"rangeLists", func(c *Config) { c.rangeLists = true }},
 		{"sortList", func(c *Config) { c.sortList = true }},
 		{"alwaysTest", func(c *Config) { c.alwaysTest = true }},
+		{"webHeap", func(c *Config) { c.webHeap = true }},
 	}
 	var al, old Allocator
 	twice := 0

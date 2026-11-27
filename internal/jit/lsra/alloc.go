@@ -224,6 +224,7 @@ type Allocator struct {
 	back     []scanEntry
 	queue    []*web
 	partQ    webQueue
+	partH    partHeap
 	slots    [][]rng
 	slotScan slotScan
 	across   []acrossEntry
@@ -320,6 +321,7 @@ type Allocator struct {
 	rangeLists   bool
 	sortList     bool
 	alwaysTest   bool
+	webHeap      bool
 	maxPos       int32
 	evKnown      bool
 	blocksKnown  bool
@@ -406,7 +408,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.split, al.stress = !cfg.NoSplit, cfg.StressSplit && !cfg.NoSplit
 	al.displace, al.mutateHoles, al.oneByOne, al.twoPass, al.plainLists, al.markPass = cfg.Displace, cfg.mutateHoles, cfg.oneByOne, cfg.twoPass, cfg.plainLists, cfg.markPass
 	al.hintPass, al.blockByBlock, al.mergeAll, al.regByReg, al.phiWalks = cfg.hintPass, cfg.blockByBlock, cfg.mergeAll, cfg.regByReg, cfg.phiWalks
-	al.searchPreds, al.rangeLists, al.sortList, al.alwaysTest = cfg.searchPreds, cfg.rangeLists, cfg.sortList, cfg.alwaysTest
+	al.searchPreds, al.rangeLists, al.sortList, al.alwaysTest, al.webHeap = cfg.searchPreds, cfg.rangeLists, cfg.sortList, cfg.alwaysTest, cfg.webHeap
 
 	// Liveness, of the registers that may be live across a block's
 	// boundary -- a phi's, a phi's argument, one used in a block other
@@ -1124,7 +1126,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		// The webs to scan: the class's, in order of their starts, and
 		// the parts of webs taken apart, which start at or after the web
 		// they were part of, in a heap. Each is next where it is the less.
-		queue, parts := al.queue[:0], al.partQ[:0]
+		queue, parts, partH := al.queue[:0], al.partQ[:0], al.partH[:0]
 		for _, w := range list {
 			if int(w.cls) == cls {
 				queue = append(queue, w)
@@ -1146,17 +1148,24 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			hints := append(append(al.hints.take(len(w.hints)+len(ps)), w.hints...), ps...)
 			for _, p := range ps {
 				p.hints = hints
-				heap.Push(&parts, p)
+				if al.webHeap {
+					heap.Push(&parts, p)
+				} else {
+					partH.push(p)
+				}
 			}
 			clear(ps)
 			al.parts = ps[:0]
 			return true
 		}
-		for qi < len(queue) || len(parts) > 0 {
+		for qi < len(queue) || len(parts) > 0 || len(partH) > 0 {
 			var cur *web
-			if len(parts) > 0 && (qi == len(queue) || byStart(parts[0], queue[qi]) < 0) {
+			switch {
+			case len(partH) > 0 && (qi == len(queue) || partH.first(queue[qi])):
+				cur = partH.pop()
+			case len(parts) > 0 && (qi == len(queue) || byStart(parts[0], queue[qi]) < 0):
 				cur = heap.Pop(&parts).(*web)
-			} else {
+			default:
 				cur = queue[qi]
 				qi++
 			}
@@ -1377,7 +1386,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		clear(active)
 		clear(inactive)
 		clear(queue)
-		al.active, al.inactive, al.queue, al.partQ = active[:0], inactive[:0], queue[:0], parts[:0]
+		al.active, al.inactive, al.queue, al.partQ, al.partH = active[:0], inactive[:0], queue[:0], parts[:0], partH[:0]
 	}
 	lap(PhaseScan)
 
@@ -2158,7 +2167,76 @@ func weightClass(d int) int { return min(max(d, 0), numWeightClasses-1) }
 // classWeight is the depthWeight of weight class c: 8 to its power.
 func classWeight(c int8) float64 { return float64(uint64(1) << (3 * uint(c))) }
 
-// webQueue is webs by their starts, the first first.
+// partHeap is the parts of webs taken apart that the scan has yet to
+// reach, a heap of them by their starts and then their members, the first
+// first, each with the two: the heap compares them without going to the
+// webs, which do not change while they wait. A part is one register, its
+// member its own, so that no two compare the same and any heap gives them
+// in one order.
+type partHeap []partEntry
+
+type partEntry struct {
+	start int32
+	m     VReg
+	w     *web
+}
+
+func (e *partEntry) less(f *partEntry) bool {
+	return e.start < f.start || e.start == f.start && e.m < f.m
+}
+
+// first reports whether the heap's first part is scanned before w.
+func (h partHeap) first(w *web) bool {
+	s := w.start()
+	return h[0].start < s || h[0].start == s && h[0].m < w.members[0]
+}
+
+func (h *partHeap) push(w *web) {
+	e := partEntry{w.start(), w.members[0], w}
+	q := append(*h, e)
+	i := len(q) - 1
+	for i > 0 {
+		p := (i - 1) / 2
+		if !e.less(&q[p]) {
+			break
+		}
+		q[i] = q[p]
+		i = p
+	}
+	q[i] = e
+	*h = q
+}
+
+func (h *partHeap) pop() *web {
+	q := *h
+	top := q[0].w
+	last := q[len(q)-1]
+	q[len(q)-1] = partEntry{}
+	q = q[:len(q)-1]
+	i := 0
+	for {
+		c := 2*i + 1
+		if c >= len(q) {
+			break
+		}
+		if c+1 < len(q) && q[c+1].less(&q[c]) {
+			c++
+		}
+		if !q[c].less(&last) {
+			break
+		}
+		q[i] = q[c]
+		i = c
+	}
+	if len(q) > 0 {
+		q[i] = last
+	}
+	*h = q
+	return top
+}
+
+// webQueue is webs by their starts, the first first: the parts' heap with
+// Config.webHeap.
 type webQueue []*web
 
 func (q webQueue) Len() int { return len(q) }

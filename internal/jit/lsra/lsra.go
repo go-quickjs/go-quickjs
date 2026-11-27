@@ -287,6 +287,10 @@ type Config struct {
 	// whatever their extents, for the tests that compare it with putting
 	// the ranges of one that begins where the other has ended after it.
 	alwaysTest bool
+	// webHeap has the scan keep the parts of webs taken apart in a heap of
+	// the webs, which compares two by going to each, for the tests that
+	// compare it with the heap of their starts and members (partHeap).
+	webHeap bool
 	// plainLists has the scan read every web on its active and inactive
 	// lists at every position, for the tests that compare it with reading
 	// each only where its entry says it may have changed.
