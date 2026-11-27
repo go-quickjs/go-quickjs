@@ -1179,6 +1179,44 @@ func (s *jitState) regBuilding(rf **jitRegFeedback) func() {
 	}
 }
 
+// linksOnly makes fb's links each once, in the order of their first
+// (jitLinksOnce), if they are not.
+func (fb *jitFeedback) linksOnly() {
+	if !fb.linksOnce {
+		fb.links, fb.linksOnce = jitLinksOnce(fb.links), true
+	}
+}
+
+// jitLinksOnce is links with each once, in the order of its first, made in
+// place: by a scan of those before it for a few, by a set for more. A
+// keep holds a link for each of its calls of the function natively, a
+// callee inlined in a loop for each of its sites -- 25 a compile on
+// Octane's Typescript, 626 at most -- and a scan of those before each had
+// been some 196,000 comparisons for the code holding the most, at its
+// placing and again at its closing.
+func jitLinksOnce(links []*jitLink) []*jitLink {
+	n := 0
+	if len(links) <= 16 {
+		for _, l := range links {
+			if !slices.Contains(links[:n], l) {
+				links[n] = l
+				n++
+			}
+		}
+	} else {
+		seen := make(map[*jitLink]struct{}, len(links))
+		for _, l := range links {
+			if _, ok := seen[l]; !ok {
+				seen[l] = struct{}{}
+				links[n] = l
+				n++
+			}
+		}
+	}
+	clear(links[n:])
+	return links[:n]
+}
+
 // regDropLink takes l out of regLinks: native callers no longer call
 // code through it, and its slot of the hint table is freed (regUnhint),
 // where a call finds no link, and Go makes it.
@@ -1199,16 +1237,14 @@ func (s *jitState) regDropLink(l *jitLink) {
 // regHoldLinks counts code whose keep is fb calling through each of its
 // links once (jitLink's refs), by d: 1 as the code is placed, -1 as it is
 // closed, when a link no code calls through any longer is let go of
-// (regUnlink).
+// (regUnlink). Its links are made each once first (jitLinksOnce), where
+// the worker that placed the code has not.
 func (s *jitState) regHoldLinks(fb *jitFeedback, d int) {
 	if fb == nil {
 		return
 	}
-	links := fb.links
-	for i, l := range links {
-		if slices.Contains(links[:i], l) {
-			continue
-		}
+	fb.linksOnly()
+	for _, l := range fb.links {
 		l.refs += d
 		if d < 0 && l.refs <= 0 {
 			l.refs = 0

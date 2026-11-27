@@ -409,6 +409,9 @@ func (j *jitRegJob) workRecovering() {
 	if h := j.replayHook; h != nil {
 		h(j)
 	}
+	// And its keep's links each once, here, as the code's install holds
+	// them (regHoldLinks).
+	j.rf.fb.keep().linksOnly()
 	j.looped = jitRegShape(f, j.p, j.cl, j.c)
 	ssa.Optimize(f)
 	j.mc, j.err = mir.CompileWith(&j.w.MIR, f, j.enc, j.opts)

@@ -400,3 +400,49 @@ func TestJITKeepLoweredAt(t *testing.T) {
 		t.Fatal("kept, made with hints the function has outgrown")
 	}
 }
+
+// A keep's links held as its code is placed are each once, in the order of
+// their first (jitLinksOnce), however many and however often repeated --
+// by a scan for a few, a set for more -- and a hold counts each once: up
+// as the code is placed, down as it is closed, the links let go of by
+// none meanwhile.
+func TestJITLinksOnce(t *testing.T) {
+	t.Parallel()
+	for _, n := range []int{3, 16, 17, 200} {
+		links := make([]*jitLink, n)
+		for i := range links {
+			links[i] = &jitLink{}
+		}
+		var keep []*jitLink
+		for i := range 4 * n {
+			// Each repeated, the first of each in order: 0, 1, 0, 2, 1, 3, ...
+			keep = append(keep, links[(i/2+i%2*(i/4))%n])
+		}
+		var want []*jitLink
+		for _, l := range keep {
+			if !slices.Contains(want, l) {
+				want = append(want, l)
+			}
+		}
+		fb := &jitFeedback{links: slices.Clone(keep)}
+		s := &jitState{}
+		s.regHoldLinks(fb, 1)
+		if !slices.Equal(fb.links, want) || !fb.linksOnce {
+			t.Fatalf("%d links: held %d, want each of %d once in the order of its first", n, len(fb.links), len(want))
+		}
+		for i, l := range want {
+			if l.refs != 1 {
+				t.Fatalf("%d links: link %d held %d times", n, i, l.refs)
+			}
+		}
+		// Held again by its other code, then let go of by one: each held once
+		// still.
+		s.regHoldLinks(fb, 1)
+		s.regHoldLinks(fb, -1)
+		for i, l := range want {
+			if l.refs != 1 {
+				t.Fatalf("%d links: link %d held %d times after a hold and a let-go", n, i, l.refs)
+			}
+		}
+	}
+}

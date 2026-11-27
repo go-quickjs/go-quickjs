@@ -1526,9 +1526,11 @@ type jitFeedback struct {
 	// root is the function's feedback for an inlined callee's, which keeps
 	// what the callee's sites hold for the code; nil for the function's
 	// own. strings marks an inlined callee that calls charCodeAt. links
-	// are those of the functions the code calls natively (jitLink).
-	root  *jitFeedback
-	links []*jitLink
+	// are those of the functions the code calls natively (jitLink), each
+	// once where linksOnce says (jitLinksOnce).
+	root      *jitFeedback
+	links     []*jitLink
+	linksOnce bool
 	// inlined are the closures of the callees the code inlines, or that
 	// its compile asked to inline, inlinedN how many it inlines (ssa.Func's
 	// Inlined); pools the object pools its constructions take from.
