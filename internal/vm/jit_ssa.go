@@ -1829,6 +1829,7 @@ func jitHostCall(ctx *abi.Context) bool {
 		if r.jitRegIsFrameOp(ctx) {
 			// Register code's, whose frame is its window, not the stack
 			// form's frame these read (jit_frame.go).
+			r.jit.frameOps++
 			return r.jitRegFrameOp(ctx)
 		}
 	}
@@ -2321,9 +2322,12 @@ func (r *Runtime) jitMakeCells(ctx *abi.Context) bool {
 
 // jitNewCells is n cells and the array of pointers to them that code whose
 // captured locals are in cells of their own reads them through
-// (abi.Context's Cells): for up to four, one allocation, as a closure's
-// object holds its captured bindings' (newScriptFuncObject) -- the cells
-// had been two in five of AWFY DeltaBlue's allocations with the JIT.
+// (abi.Context's Cells): for up to jitCellsMax, one allocation, the array
+// first and the cells after it, as a closure's object holds its captured
+// bindings' (newScriptFuncObject) and as native code takes a pool's block
+// (mir's cellsTake) -- the cells had been two in five of AWFY DeltaBlue's
+// allocations with the JIT. A block past four holds its cells as
+// jitCellRooms, which no comparison needs an equality function for.
 func jitNewCells(n int) ([]*upvalue, []upvalue) {
 	switch n {
 	case 1:
@@ -2350,9 +2354,95 @@ func jitNewCells(n int) ([]*upvalue, []upvalue) {
 			u [4]upvalue
 		}{}
 		return x.p[:], x.u[:]
+	case 5:
+		x := &struct {
+			p [5]*upvalue
+			u [5]jitCellRoom
+		}{}
+		return x.p[:], unsafe.Slice(&x.u[0].u, 5)
+	case 6:
+		x := &struct {
+			p [6]*upvalue
+			u [6]jitCellRoom
+		}{}
+		return x.p[:], unsafe.Slice(&x.u[0].u, 6)
+	case 7:
+		x := &struct {
+			p [7]*upvalue
+			u [7]jitCellRoom
+		}{}
+		return x.p[:], unsafe.Slice(&x.u[0].u, 7)
+	case 8:
+		x := &struct {
+			p [8]*upvalue
+			u [8]jitCellRoom
+		}{}
+		return x.p[:], unsafe.Slice(&x.u[0].u, 8)
+	case 9:
+		x := &struct {
+			p [9]*upvalue
+			u [9]jitCellRoom
+		}{}
+		return x.p[:], unsafe.Slice(&x.u[0].u, 9)
+	case 10:
+		x := &struct {
+			p [10]*upvalue
+			u [10]jitCellRoom
+		}{}
+		return x.p[:], unsafe.Slice(&x.u[0].u, 10)
+	case 11:
+		x := &struct {
+			p [11]*upvalue
+			u [11]jitCellRoom
+		}{}
+		return x.p[:], unsafe.Slice(&x.u[0].u, 11)
+	case 12:
+		x := &struct {
+			p [12]*upvalue
+			u [12]jitCellRoom
+		}{}
+		return x.p[:], unsafe.Slice(&x.u[0].u, 12)
+	case 13:
+		x := &struct {
+			p [13]*upvalue
+			u [13]jitCellRoom
+		}{}
+		return x.p[:], unsafe.Slice(&x.u[0].u, 13)
+	case 14:
+		x := &struct {
+			p [14]*upvalue
+			u [14]jitCellRoom
+		}{}
+		return x.p[:], unsafe.Slice(&x.u[0].u, 14)
+	case 15:
+		x := &struct {
+			p [15]*upvalue
+			u [15]jitCellRoom
+		}{}
+		return x.p[:], unsafe.Slice(&x.u[0].u, 15)
+	case 16:
+		x := &struct {
+			p [16]*upvalue
+			u [16]jitCellRoom
+		}{}
+		return x.p[:], unsafe.Slice(&x.u[0].u, 16)
 	}
 	return make([]*upvalue, n), make([]upvalue, n)
 }
+
+// jitCellRoom is an upvalue laid out as one, of no comparable type: an
+// array of upvalues is one, whose type the compiler makes an equality
+// function for, which nothing calls and which moves the code after it
+// (docs/optimizing.md, "Equality functions").
+type jitCellRoom struct {
+	_ [0]func()
+	u upvalue
+}
+
+// jitCellsMax is how many cells code whose captured locals are in cells of
+// their own may take from a pool natively (jitCellsPoolOf): the most
+// jitNewCells makes in one block. EarleyBoyer's deriv_trees captures ten.
+const jitCellsMax = 16
 
 // jitRefillCells fills pool, a pool of cells (abi.ObjectPool's Cells),
 // again, with more, if native code ran it out.
@@ -4033,12 +4123,19 @@ type jitPoolSource struct {
 }
 
 // jitRefillPool fills pool again, run out, with more objects (ssa's
-// GoRefill), as an exit at its site has Go fill it, and reports whether it
-// has one now: a construction's function whose prototype is no longer an
-// object leaves it empty, and the site to Go.
+// GoRefill) -- or cells, a function's pool of them -- as an exit at its
+// site has Go fill it, and reports whether it has one now: a
+// construction's function whose prototype is no longer an object leaves
+// it empty, and the site to Go.
 func (r *Runtime) jitRefillPool(pool *abi.ObjectPool) bool {
 	if r.gcYield.on && r.gcMarking() {
 		r.gcYieldNow()
+	}
+	if pool.Cells != 0 {
+		// A function's cells (abi.ObjectPool's Cells), which native code
+		// takes again once they are made (mir's poolRefill).
+		jitRefillCells(pool)
+		return pool.Count != 0
 	}
 	src := (*jitPoolSource)(pool.Source)
 	if want := pool.Want; want != 0 && src != nil && src.ctor != nil {

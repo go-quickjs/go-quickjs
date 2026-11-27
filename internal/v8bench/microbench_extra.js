@@ -5250,6 +5250,67 @@ function closure_leaf_miss(n)
     return n;
 }
 
+/* a callee that reads its arguments in a loop, never making their object,
+   as a list builder does: arguments.length and arguments[i] */
+function extra_args_list()
+{
+    var r = null, i;
+    for (i = arguments.length - 1; i >= 0; i--)
+        r = {car: arguments[i], cdr: r};
+    return r;
+}
+
+function args_read(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s = (s + extra_args_list(j, 1, 2).cdr.car) | 0;
+    global_res = s;
+    return n;
+}
+
+/* a function capturing ten of its locals, a closure made of them on one
+   call in eight */
+function extra_cells_ten(a, b, c, d, e)
+{
+    var f = a + 1, g = b + 1, h = c + 1, i = d + 1, k = e + 1;
+    if ((a & 7) === 0)
+        return (function () { return a + b + c + d + e + f + g + h + i + k; })();
+    return a + k;
+}
+
+function closure_cells_ten(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s = (s + extra_cells_ten(j, 1, 2, 3, 4)) | 0;
+    global_res = s;
+    return n;
+}
+
+/* closures of seven captured locals, kept a thousand at a time: their
+   pools of closures and of cells run out over and over */
+function extra_cells_keep(a, b, c, d, e, f)
+{
+    var g = a + b;
+    return function () { return a + b + c + d + e + f + g; };
+}
+
+function closure_kept_cells(n)
+{
+    var j, k, s = 0, fs = [];
+    for (j = 0; j < n; j++) {
+        fs.push(extra_cells_keep(j, 1, 2, 3, 4, 5));
+        if (fs.length === 1024) {
+            for (k = 0; k < fs.length; k++)
+                s = (s + fs[k]()) | 0;
+            fs.length = 0;
+        }
+    }
+    global_res = s;
+    return n;
+}
+
 /* a render-like map callback returning an element factory's call */
 function array_map_tail(n)
 {

@@ -2221,15 +2221,29 @@ frame the k-th captured register's cell is the k-th cell: on the run's own
 frame the cells are open on the window's registers, the upvalues its
 closures share, which the frame closes as it ends; a native callee's are
 closed cells holding the registers' values, which Go opens on its window
-where it makes the callee's frame (`jitRegReopenCells`). A closure is made
+where it makes the callee's frame (`jitRegReopenCells`). A native callee's
+entry takes its cells natively, a block from the function's pool
+(`CellsPool`, mir's `cellsTake`): the block's pointers and its cells in one
+allocation (`jitNewCells`), of up to sixteen cells (`jitCellsMax`) --
+EarleyBoyer's `deriv_trees` captures ten, which had been Go's at every
+entry, 12% of Earley's calls of Go on a native frame; a function capturing
+more has Go make them on the frame. A closure is made
 of them as the interpreter's `regClosure` makes one, and a scope's end
 (`close_regs`, `ir.CloseUpvalues` with `Key` its first register and
 `Extra` their count) gives its registers fresh cells holding what the old
 ones held (`ssa.GoClose`, its `CallSite`'s `Closes` the count): natively
 from the function's pool of cells (mir's `cellsClose`), the old cells
 closed, on the run's own frame and a
-native callee's alike; by Go where the pool is empty
-(`jitRegCellsClosure`), which closes those registers alone.
+native callee's alike. A pool of closures or of cells that has run out,
+at a closure, an entry or a scope's end, is filled again by a call of Go
+that finds no frame (`ssa.GoRefill`, mir's `poolRefill`), as V8's code
+calls its runtime when its space runs out, and the take is made again
+from its start, every check again, the collector perhaps marking since;
+each refill had been an operation on the frame that made the object too,
+finding the native callee's level -- 58,000 in three runs of AWFY. Only
+where Go cannot fill it, and for what native code does not make, does Go
+make them on the frame (`jitRegCellsClosure`), which closes a scope's
+registers alone.
 
 An arrow made from its pool takes its maker's register 1 as its this
 (`LexThisReg`), an arrow's maker too. A maker that shares a derived
@@ -4205,7 +4219,9 @@ cleared through it, which shades the object, or, a construction's receiver,
 is shaded in its pool before the call takes it; what native code writes
 into it -- an array literal's elements and a generator's arguments, written
 while the pool still holds it, a closure's captured cells, the arguments in
-an entry's cells -- and a value pushed or popped go through it too, as do
+an entry's cells -- an argument native code reads from its context, whose
+words the collector does not see, into its read's keep cell (mir's
+`argRead`), and a value pushed or popped go through it too, as do
 the pointer words of the calls of Go native code makes itself, made alike
 whether the collector marks or not (mir's `byMarking`): an object spread by
 layout and a literal's field along its shape's transition -- the values,

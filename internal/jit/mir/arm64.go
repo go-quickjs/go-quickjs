@@ -5769,7 +5769,7 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard a64Guard) {
 		// As amd64's: natively from the function's pool where it can be,
 		// by Go otherwise.
 		slow, join := c.a.NewLabel(), c.a.NewLabel()
-		c.cellsTake(site, slow)
+		c.cellsTake(v, site, slow)
 		c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
 		c.setG(v, a64A)
 		c.a.B(join)
@@ -5790,7 +5790,7 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard a64Guard) {
 			c.a.CmpImm(a64A, abi.LiveCall, true)
 			c.a.BCond(arm64.EQ, join)
 		}
-		c.cellsClose(site, slow)
+		c.cellsClose(v, site, slow)
 		c.a.B(join)
 		c.a.Bind(slow)
 		c.movImm(a64A, uint64(site.Pool))
@@ -5918,14 +5918,16 @@ func (c *a64Compiler) leafCallOf(v *ssa.Value, st *abi.GoCallState, ops []*ssa.V
 // cellsTake is amd64's: an entry's cells from the function's pool, where
 // the collector does not mark and the context is a native call's. It uses
 // A, B and C.
-func (c *a64Compiler) cellsTake(site *ssa.CallSite, slow arm64.Label) {
-	marked, done := c.a.NewLabel(), c.a.NewLabel()
+func (c *a64Compiler) cellsTake(v *ssa.Value, site *ssa.CallSite, slow arm64.Label) {
+	marked, done, top := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.a.Bind(top)
+	empty := c.poolRefill(v, site.Pool, top, slow)
 	c.movImm(a64A, c.enc.WriteBarrier)
 	c.a.LoadU8(a64A, a64A, 0)
 	c.a.Cbnz(a64A, marked, false)
 	c.cold = append(c.cold, func() {
 		c.a.Bind(marked)
-		c.cellsTakeMarking(site, slow)
+		c.cellsTakeMarking(site, slow, empty)
 		c.a.B(done)
 	})
 	defer c.a.Bind(done)
@@ -5934,7 +5936,7 @@ func (c *a64Compiler) cellsTake(site *ssa.CallSite, slow arm64.Label) {
 	c.a.BCond(arm64.NE, slow)
 	c.movImm(a64A, uint64(site.Pool))
 	c.a.Load(a64B, a64A, abi.OffPoolCount)
-	c.a.Cbz(a64B, slow, true)
+	c.a.Cbz(a64B, empty, true)
 	c.a.AddImm(a64B, a64B, -1, true)
 	c.a.Store(a64A, abi.OffPoolCount, a64B)
 	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 3, true)
@@ -5962,20 +5964,22 @@ func (c *a64Compiler) cellsTake(site *ssa.CallSite, slow arm64.Label) {
 // cellsClose is amd64's: a scope's end, each local from Argc on given its
 // block's cell, holding what the old one holds, which is closed. It uses
 // A, B, C and D.
-func (c *a64Compiler) cellsClose(site *ssa.CallSite, slow arm64.Label) {
-	marked, done := c.a.NewLabel(), c.a.NewLabel()
+func (c *a64Compiler) cellsClose(v *ssa.Value, site *ssa.CallSite, slow arm64.Label) {
+	marked, done, top := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.a.Bind(top)
+	empty := c.poolRefill(v, site.Pool, top, slow)
 	c.movImm(a64A, c.enc.WriteBarrier)
 	c.a.LoadU8(a64A, a64A, 0)
 	c.a.Cbnz(a64A, marked, false)
 	c.cold = append(c.cold, func() {
 		c.a.Bind(marked)
-		c.cellsCloseMarking(site, slow)
+		c.cellsCloseMarking(site, empty)
 		c.a.B(done)
 	})
 	defer c.a.Bind(done)
 	c.movImm(a64A, uint64(site.Pool))
 	c.a.Load(a64B, a64A, abi.OffPoolCount)
-	c.a.Cbz(a64B, slow, true)
+	c.a.Cbz(a64B, empty, true)
 	c.a.AddImm(a64B, a64B, -1, true)
 	c.a.Store(a64A, abi.OffPoolCount, a64B)
 	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 3, true)
@@ -6006,11 +6010,11 @@ func (c *a64Compiler) cellsClose(site *ssa.CallSite, slow arm64.Label) {
 
 // cellsCloseMarking is amd64's: each pointer word written with Go's
 // barrier, the block kept in the context's second GoArgs meanwhile.
-func (c *a64Compiler) cellsCloseMarking(site *ssa.CallSite, slow arm64.Label) {
+func (c *a64Compiler) cellsCloseMarking(site *ssa.CallSite, empty arm64.Label) {
 	block := abi.OffGoArgs + c.enc.ValueSize + c.enc.RefOffset
 	c.movImm(a64A, uint64(site.Pool))
 	c.a.Load(a64B, a64A, abi.OffPoolCount)
-	c.a.Cbz(a64B, slow, true)
+	c.a.Cbz(a64B, empty, true)
 	c.a.AddImm(a64B, a64B, -1, true)
 	c.a.Store(a64A, abi.OffPoolCount, a64B)
 	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 3, true)
@@ -6059,13 +6063,13 @@ func (c *a64Compiler) cellsCloseMarking(site *ssa.CallSite, slow arm64.Label) {
 
 // cellsTakeMarking is amd64's: the pool's cell cleared, each cell's
 // argument's pointer word written, with Go's barrier.
-func (c *a64Compiler) cellsTakeMarking(site *ssa.CallSite, slow arm64.Label) {
+func (c *a64Compiler) cellsTakeMarking(site *ssa.CallSite, slow, empty arm64.Label) {
 	c.a.Load(a64A, a64Ctx, abi.OffLive)
 	c.a.CmpImm(a64A, abi.LiveCall, true)
 	c.a.BCond(arm64.NE, slow)
 	c.movImm(a64A, uint64(site.Pool))
 	c.a.Load(a64B, a64A, abi.OffPoolCount)
-	c.a.Cbz(a64B, slow, true)
+	c.a.Cbz(a64B, empty, true)
 	c.a.AddImm(a64B, a64B, -1, true)
 	c.a.Store(a64A, abi.OffPoolCount, a64B)
 	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 3, true)
@@ -6096,11 +6100,11 @@ func (c *a64Compiler) cellsTakeMarking(site *ssa.CallSite, slow arm64.Label) {
 
 // closureTakeMarking is amd64's: the pool's cell cleared, each cell and an
 // arrow's this written into what the closure keeps, with Go's barrier.
-func (c *a64Compiler) closureTakeMarking(v *ssa.Value, site *ssa.CallSite, slow arm64.Label) {
+func (c *a64Compiler) closureTakeMarking(v *ssa.Value, site *ssa.CallSite, empty arm64.Label) {
 	at := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
 	c.movImm(a64A, uint64(site.Pool))
 	c.a.Load(a64B, a64A, abi.OffPoolCount)
-	c.a.Cbz(a64B, slow, true)
+	c.a.Cbz(a64B, empty, true)
 	c.poolTakeMarking(v, site)
 	data := func() {
 		c.a.Load(a64C, a64Ctx, at+c.enc.RefOffset)
@@ -6134,19 +6138,21 @@ func (c *a64Compiler) closureTakeMarking(v *ssa.Value, site *ssa.CallSite, slow 
 }
 
 func (c *a64Compiler) closureTake(v *ssa.Value, site *ssa.CallSite, slow arm64.Label) {
-	marked, done := c.a.NewLabel(), c.a.NewLabel()
+	marked, done, top := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.a.Bind(top)
+	empty := c.poolRefill(v, site.Pool, top, slow)
 	c.movImm(a64A, c.enc.WriteBarrier)
 	c.a.LoadU8(a64A, a64A, 0)
 	c.a.Cbnz(a64A, marked, false)
 	c.cold = append(c.cold, func() {
 		c.a.Bind(marked)
-		c.closureTakeMarking(v, site, slow)
+		c.closureTakeMarking(v, site, empty)
 		c.a.B(done)
 	})
 	defer c.a.Bind(done)
 	c.movImm(a64A, uint64(site.Pool))
 	c.a.Load(a64B, a64A, abi.OffPoolCount)
-	c.a.Cbz(a64B, slow, true)
+	c.a.Cbz(a64B, empty, true)
 	c.poolTake(v, site)
 	c.a.Load(a64C, a64C, c.enc.ObjectExt+c.enc.ObjectData+8)
 	c.a.Load(a64B, a64C, c.enc.FuncClosure)
@@ -8644,6 +8650,23 @@ func (c *a64Compiler) refillOnEmpty(pool uintptr, stub arm64.Label) {
 		c.a.Cbnz(a64B, stub, true)
 		c.a.B(top)
 	})
+}
+
+// poolRefill is amd64's: where a take from an empty pool goes, out of
+// line, to have Go fill it (ssa.GoRefill) and take again from top, or to
+// slow where Go cannot.
+func (c *a64Compiler) poolRefill(v *ssa.Value, pool uintptr, top, slow arm64.Label) arm64.Label {
+	empty := c.a.NewLabel()
+	c.cold = append(c.cold, func() {
+		c.a.Bind(empty)
+		c.movImm(a64A, uint64(pool))
+		c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, a64A)
+		c.callGo(v, uint64(ssa.GoRefill), 0)
+		c.a.Load(a64B, a64Ctx, abi.OffGoStatus)
+		c.a.Cbnz(a64B, slow, true)
+		c.a.B(top)
+	})
+	return empty
 }
 
 // keepSource leaves in C where a tagged value came from, as amd64's does.

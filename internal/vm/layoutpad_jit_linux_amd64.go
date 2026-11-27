@@ -62,7 +62,7 @@ const (
 	layoutPadNJU  = 589
 	layoutPadNGJU = -1
 	layoutPadNMJU = -1
-	layoutPadNJG  = 328
+	layoutPadNJG  = 356
 	layoutPadNGJG = -1
 	layoutPadNMJG = -1
 	layoutPadNJ   = 86
@@ -74,7 +74,7 @@ const (
 	layoutPadNJS  = 498
 	layoutPadNGJS = -1
 	layoutPadNMJS = -1
-	layoutPadNKO  = 708
+	layoutPadNKO  = 594
 	layoutPadNGKO = -1
 	layoutPadNMKO = -1
 	layoutPadNCC  = 484

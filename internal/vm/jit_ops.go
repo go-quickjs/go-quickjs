@@ -464,7 +464,7 @@ func jitCellsPoolOf(p *ir.Program, pool **abi.ObjectPool, k *jitFeedback) (uintp
 		return 0, nil, false
 	}
 	regs := jitRegCapturedRegs(p.Captured)
-	if n := len(regs); n == 0 || n > 4 {
+	if n := len(regs); n == 0 || n > jitCellsMax {
 		return 0, nil, false
 	}
 	cells := make([]int32, len(regs))

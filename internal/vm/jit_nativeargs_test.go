@@ -117,12 +117,15 @@ func TestJITArgumentsRead(t *testing.T) {
 			for range 3 {
 				call("hot", 200)
 			}
-			calls := 0
+			calls, ops := 0, r.jit.frameOps
 			jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
 			before := r.RegNativeStats().HostOps
 			call("hot", 200)
 			after := r.RegNativeStats().HostOps
 			jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = nil })
+			if n := r.jit.frameOps - ops; n != 0 {
+				t.Errorf("%d operations on a frame in a warm run of hot(200)", n)
+			}
 			for _, op := range []string{"args_index", "args_len", "arguments"} {
 				if n := after[op] - before[op]; n != 0 {
 					t.Errorf("%d exits at %s once warm: %v", n, op, after)

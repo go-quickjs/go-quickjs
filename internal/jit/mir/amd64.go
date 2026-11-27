@@ -2809,7 +2809,7 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard guardTo) {
 		// Natively from the function's pool where it can be (cellsTake),
 		// by Go otherwise, which fills the pool again.
 		slow, join := c.a.NewLabel(), c.a.NewLabel()
-		c.cellsTake(site, slow)
+		c.cellsTake(v, site, slow)
 		c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
 		c.setG(v, scratchA)
 		c.a.Jmp(join)
@@ -2832,7 +2832,7 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard guardTo) {
 			c.a.OpImm(amd64.Cmp, scratchA, abi.LiveCall, true)
 			c.a.Jcc(amd64.CondE, join)
 		}
-		c.cellsClose(site, slow)
+		c.cellsClose(v, site, slow)
 		c.a.Jmp(join)
 		c.a.Bind(slow)
 		c.storeImm(regCtx, abi.OffGoArgs+c.enc.RefOffset, uint64(site.Pool), scratchA)
@@ -3373,17 +3373,19 @@ func (c *compiler) superGuards(t *ssa.CallSite, x *ssa.Value, guard guardTo) {
 // arrow's this into what it captured. Anything else goes to slow, where Go
 // makes it. It uses every scratch register.
 func (c *compiler) closureTake(v *ssa.Value, site *ssa.CallSite, slow amd64.Label) {
-	marked, done := c.a.NewLabel(), c.a.NewLabel()
+	marked, done, top := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.a.Bind(top)
+	empty := c.poolRefill(v, site.Pool, top, slow)
 	c.movImm(scratchA, c.enc.WriteBarrier)
 	c.a.TestMem8(scratchA, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, marked)
 	c.movImm(scratchA, uint64(site.Pool))
 	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
-	c.a.Jcc(amd64.CondE, slow)
+	c.a.Jcc(amd64.CondE, empty)
 	c.cold = append(c.cold, func() {
 		c.a.Bind(marked)
-		c.closureTakeMarking(v, site, slow)
+		c.closureTakeMarking(v, site, empty)
 		c.a.Jmp(done)
 	})
 	defer c.a.Bind(done)
@@ -3422,6 +3424,31 @@ func (c *compiler) lexThisAt(site *ssa.CallSite) (amd64.Reg, int32) {
 	return regCtx, abi.OffThis
 }
 
+// poolRefill is where a take from the pool at pool -- a closure's
+// (closureTake), a function's cells' (cellsTake, cellsClose) -- goes when
+// the pool has run out: out of line, Go fills it again (ssa.GoRefill),
+// called from native code with no frame to find, as V8's code calls its
+// runtime when its space runs out, and the take is made again from top,
+// every check again -- the collector may have begun marking meanwhile.
+// Only where Go cannot fill it does the take go to slow, the call of Go
+// that makes it on the frame. Each refill had been such a call, which
+// made the object on the frame too: AWFY's callbacks, 58,000 of them in
+// three runs, each finding its native callee's level. It uses every
+// scratch register.
+func (c *compiler) poolRefill(v *ssa.Value, pool uintptr, top, slow amd64.Label) amd64.Label {
+	empty := c.a.NewLabel()
+	c.cold = append(c.cold, func() {
+		c.a.Bind(empty)
+		c.storeImm(regCtx, abi.OffGoArgs+c.enc.RefOffset, uint64(pool), scratchA)
+		c.callGo(v, uint64(ssa.GoRefill), 0)
+		c.a.Load(scratchB, regCtx, abi.OffGoStatus)
+		c.a.Op(amd64.Test, scratchB, scratchB, true)
+		c.a.Jcc(amd64.CondNE, slow)
+		c.a.Jmp(top)
+	})
+	return empty
+}
+
 // cellsTake makes an entry's cells (ssa.GoCells) natively, as V8's code
 // allocates a function's context: where the collector does not mark, the
 // context is a native call's (abi.Context's Live) -- the frame Go entered
@@ -3432,14 +3459,16 @@ func (c *compiler) lexThisAt(site *ssa.CallSite) (amd64.Reg, int32) {
 // slow, where Go makes them. Each entry of such code had been a call of
 // Go: two million a run in AWFY's Havlak, 260,000 in DeltaBlue. It uses
 // every scratch register.
-func (c *compiler) cellsTake(site *ssa.CallSite, slow amd64.Label) {
-	marked, done := c.a.NewLabel(), c.a.NewLabel()
+func (c *compiler) cellsTake(v *ssa.Value, site *ssa.CallSite, slow amd64.Label) {
+	marked, done, top := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.a.Bind(top)
+	empty := c.poolRefill(v, site.Pool, top, slow)
 	c.movImm(scratchA, c.enc.WriteBarrier)
 	c.a.TestMem8(scratchA, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, marked)
 	c.cold = append(c.cold, func() {
 		c.a.Bind(marked)
-		c.cellsTakeMarking(site, slow)
+		c.cellsTakeMarking(site, slow, empty)
 		c.a.Jmp(done)
 	})
 	defer c.a.Bind(done)
@@ -3449,7 +3478,7 @@ func (c *compiler) cellsTake(site *ssa.CallSite, slow amd64.Label) {
 	c.movImm(scratchA, uint64(site.Pool))
 	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
-	c.a.Jcc(amd64.CondE, slow)
+	c.a.Jcc(amd64.CondE, empty)
 	// The pool's last block, its cell cleared.
 	c.a.OpImm(amd64.Sub, scratchB, 1, true)
 	c.a.Store(scratchA, abi.OffPoolCount, scratchB)
@@ -3487,21 +3516,23 @@ func (c *compiler) cellsTake(site *ssa.CallSite, slow amd64.Label) {
 // Go opens its new one there once native code has left it
 // (jitRegReopenCells). Anything else goes to slow, where Go makes them.
 // It uses every scratch register, and xScratch0 and xScratch1.
-func (c *compiler) cellsClose(site *ssa.CallSite, slow amd64.Label) {
-	marked, done := c.a.NewLabel(), c.a.NewLabel()
+func (c *compiler) cellsClose(v *ssa.Value, site *ssa.CallSite, slow amd64.Label) {
+	marked, done, top := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.a.Bind(top)
+	empty := c.poolRefill(v, site.Pool, top, slow)
 	c.movImm(scratchA, c.enc.WriteBarrier)
 	c.a.TestMem8(scratchA, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, marked)
 	c.cold = append(c.cold, func() {
 		c.a.Bind(marked)
-		c.cellsCloseMarking(site, slow)
+		c.cellsCloseMarking(site, empty)
 		c.a.Jmp(done)
 	})
 	defer c.a.Bind(done)
 	c.movImm(scratchA, uint64(site.Pool))
 	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
-	c.a.Jcc(amd64.CondE, slow)
+	c.a.Jcc(amd64.CondE, empty)
 	// The pool's last block, its cell cleared, in scratchC.
 	c.a.OpImm(amd64.Sub, scratchB, 1, true)
 	c.a.Store(scratchA, abi.OffPoolCount, scratchB)
@@ -3541,12 +3572,12 @@ func (c *compiler) cellsClose(site *ssa.CallSite, slow amd64.Label) {
 // old one's slot, the context's cell -- with Go's write barrier
 // (refStore). The block is kept in the context's second GoArgs while it
 // runs; the old cell is read again from the context's Cells after each.
-func (c *compiler) cellsCloseMarking(site *ssa.CallSite, slow amd64.Label) {
+func (c *compiler) cellsCloseMarking(site *ssa.CallSite, empty amd64.Label) {
 	block := abi.OffGoArgs + c.enc.ValueSize + c.enc.RefOffset
 	c.movImm(scratchA, uint64(site.Pool))
 	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
-	c.a.Jcc(amd64.CondE, slow)
+	c.a.Jcc(amd64.CondE, empty)
 	c.a.OpImm(amd64.Sub, scratchB, 1, true)
 	c.a.Store(scratchA, abi.OffPoolCount, scratchB)
 	c.a.ShiftImm(amd64.Shl, scratchB, 3, true)
@@ -3602,14 +3633,14 @@ func (c *compiler) cellsCloseMarking(site *ssa.CallSite, slow amd64.Label) {
 // write barrier (refStore) -- the cells outlive the frame the arguments
 // come from, in the closures that capture them. The block is read again
 // from the context's Cells after each.
-func (c *compiler) cellsTakeMarking(site *ssa.CallSite, slow amd64.Label) {
+func (c *compiler) cellsTakeMarking(site *ssa.CallSite, slow, empty amd64.Label) {
 	c.a.Load(scratchA, regCtx, abi.OffLive)
 	c.a.OpImm(amd64.Cmp, scratchA, abi.LiveCall, true)
 	c.a.Jcc(amd64.CondNE, slow)
 	c.movImm(scratchA, uint64(site.Pool))
 	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
-	c.a.Jcc(amd64.CondE, slow)
+	c.a.Jcc(amd64.CondE, empty)
 	c.a.OpImm(amd64.Sub, scratchB, 1, true)
 	c.a.Store(scratchA, abi.OffPoolCount, scratchB)
 	c.a.ShiftImm(amd64.Shl, scratchB, 3, true)
@@ -3642,12 +3673,12 @@ func (c *compiler) cellsTakeMarking(site *ssa.CallSite, slow amd64.Label) {
 // closure keeps, with Go's write barrier (refStore) -- the closure outlives
 // the context they come from. What refStore keeps in no register is read
 // again from where it was written: the closure from the call's keep cell.
-func (c *compiler) closureTakeMarking(v *ssa.Value, site *ssa.CallSite, slow amd64.Label) {
+func (c *compiler) closureTakeMarking(v *ssa.Value, site *ssa.CallSite, empty amd64.Label) {
 	at := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
 	c.movImm(scratchA, uint64(site.Pool))
 	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
-	c.a.Jcc(amd64.CondE, slow)
+	c.a.Jcc(amd64.CondE, empty)
 	c.poolTakeMarking(v, site)
 	// The function's data, from the object in the keep cell, into scratchC.
 	data := func() {

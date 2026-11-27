@@ -17,6 +17,22 @@ func TestLeafMissMicrobenchmark(t *testing.T) {
 	}
 }
 
+// TestArgumentsAndCellsMicrobenchmarks checks args_read's,
+// closure_cells_ten's and closure_kept_cells' results, Node's.
+func TestArgumentsAndCellsMicrobenchmarks(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval("var global_res;\n" + microbenchExtra); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"args_read": "2048", "closure_cells_ten": "2372608", "closure_kept_cells": "4225024"} {
+		v, err := rt.Eval(name + "(2048), global_res")
+		if err != nil || v.String() != want {
+			t.Errorf("%s: got %v, %v, want %s", name, v, err, want)
+		}
+	}
+}
+
 func TestTailCallbackMicrobenchmarks(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()

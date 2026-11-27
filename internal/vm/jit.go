@@ -1406,6 +1406,11 @@ type jitState struct {
 	// VM's routine for them (jitGoDirect), goStub those made through a
 	// routine of their own (abi.Encoding's GoStubs, jit_gostub.go).
 	goFast, goStub uint64
+	// frameOps counts native code's calls of Go that make an operation on
+	// a frame of register code (jitRegFrameOp), each finding its level:
+	// what native code leaves to them, its tests and the frames' work
+	// count.
+	frameOps uint64
 	// ssaKeeps is the most keep cells (abi.Context.Keep) any code compiled
 	// uses: what Go clears in a native callee's context.
 	ssaKeeps int

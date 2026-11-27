@@ -1733,10 +1733,12 @@ is under [The projection](#the-projection).
   callee's own arguments (`sc_list`, `sc_append`), 12% the entry cells of
   `deriv_trees`, which captures ten locals where the pool took four, and
   the rest refills. The arguments are now read natively (`mir`'s
-  `argRead`): Earley's calls of Go on a native frame fell from 524,288 to
-  about 66,000 in 30 runs, those cells nearly all that is left. Not yet
-  timed. Next: cells of up to sixteen locals, and refills without the
-  frame.
+  `argRead`), the cells of functions capturing up to sixteen locals taken
+  from their pools natively, and a pool run out filled again by a call of
+  Go that finds no frame (`poolRefill`): Earley's operations on a frame
+  (`jitRegFrameOp`), in 30 runs once warm, fell from 588,835 to 75,985
+  with the arguments, and to 416 with the cells and refills. Not yet
+  timed. Next: arguments objects and rest arrays made natively.
 
 ### Stage 4: inlining, loops and redundancy
 
