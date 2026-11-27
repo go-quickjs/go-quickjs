@@ -1513,6 +1513,11 @@ type jitState struct {
 	// unparked the code put back in the cache as it was (jitRegUnpark),
 	// for tests and the report (JITStats).
 	parkings, parkedCount, unparked uint64
+	// siteRegs is the call sites' pass's table by register
+	// (jitCallSiteFacts), reused from one closure's pass to the next: the
+	// pass ends on the runtime's goroutine, and nothing it hands on points
+	// into it.
+	siteRegs []int32
 }
 
 func (r *Runtime) initJIT(enabled bool, memoryLimit int64) {

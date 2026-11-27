@@ -1433,7 +1433,9 @@ is under [The projection](#the-projection).
   which needs the code relocated there and moves the link's making onto
   the install rather than removing it. A link found by the hint slot
   its template names, before the map of links: the targets' gather
-  4.1 and 10.2 to 3.6 and 9.1 (three runs each).
+  4.1 and 10.2 to 3.6 and 9.1 (three runs each). The call sites' pass
+  making its lists at once and keeping its table by register in the
+  runtime: 2.5 and 5.9 to 1.7 and 4.6.
 - **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
   was run beside mir's scan on every compile, given the same function: an
   instruction for each value and the block's end, the frame states' uses

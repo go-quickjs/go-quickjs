@@ -1030,9 +1030,20 @@ func jitCallSiteFacts(r *Runtime, cl *closure, calls []regCallCache) (out []jitC
 	l := r.jitState().regLearned[r.jitRegKeyOf(cl)]
 	fb := &jitRegFeedback{fb: &jitFeedback{r: r, fn: cl.fn, cl: cl, e: l}, rc: rc}
 	// By register, past 1: the last instruction whose A it is, and the
-	// last get_method_w that wrote it.
-	regs := make([]int32, 2*(rc.NumRegs+1))
-	last, method := regs[:rc.NumRegs+1:rc.NumRegs+1], regs[rc.NumRegs+1:]
+	// last get_method_w that wrote it, in the runtime's table for the pass
+	// (siteRegs), cleared.
+	j := r.jitState()
+	n := 2 * (rc.NumRegs + 1)
+	if cap(j.siteRegs) < n {
+		j.siteRegs = make([]int32, n)
+	}
+	regs := j.siteRegs[:n]
+	clear(regs)
+	last, method := regs[:rc.NumRegs+1:rc.NumRegs+1], regs[rc.NumRegs+1:n:n]
+	// The facts by site, and the register pcs the gathers look at, made at
+	// once: a fact for each call site, a pc for each and a few more.
+	out = make([]jitCallSiteFact, 0, rc.CallSites)
+	rpcs = make([]int32, 0, rc.CallSites+8)
 	at := func(list *[]int32, reg int) int {
 		if reg < len(*list) {
 			return int((*list)[reg]) - 1
