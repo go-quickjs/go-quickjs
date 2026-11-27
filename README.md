@@ -94,22 +94,22 @@ guaranteed: a few operations that are mostly a built-in's work run slower
 with it, so measure a workload with it on and off. See
 [its design notes](internal/jit/README.md).
 
-Its V8 version 7 composite score is 11.96 times goja's with the JIT off,
-30.32 times with synchronous JIT compilation, and 30.02 times with background
+Its V8 version 7 composite score is 11.81 times goja's with the JIT off,
+31.72 times with synchronous JIT compilation, and 31.77 times with background
 JIT compilation, on an AMD Ryzen 5 3600 with Go 1.27.3. This older
 workload suite does not represent every application; see the
 [goja comparison](docs/benchmarks.md#v8-version-7-benchmark-suite) for the
 individual scores and measurement details.
 
-Measured at `976e5cc1`, on the register interpreter, on the V8 benchmark
-suite as a whole it is well ahead of C QuickJS: it takes 0.33 times
-QuickJS's time over the suite and has 2.26 times its composite score, and
-with the experimental JIT 0.22 times its time and a composite score 5.8
+Measured at `f596215b`, on the register interpreter, on the V8 benchmark
+suite as a whole it is well ahead of C QuickJS: it takes 0.31 times
+QuickJS's time over the suite and has 2.27 times its composite score, and
+with the experimental JIT 0.20 times its time and a composite score 6.1
 times as high. On the larger programs of Octane and Are We Fast Yet it
 takes 0.43 and 0.64 times QuickJS's time, and 0.28 and 0.20 times with the
 JIT; Octane's zlib, an asm.js module run as typed code, takes 0.19 times,
-and 0.07 with the JIT. A page React 18 renders on the server takes 0.58
-times, and 0.47 with the JIT. Single operations cost about half as much:
+and 0.07 with the JIT. A page React 18 renders on the server takes 0.59
+times, and 0.48 with the JIT. Single operations cost about half as much:
 QuickJS's own micro-benchmarks take 0.49 times as long on average, and
 0.24 times with the JIT, though a few
 take up to 1.5 times as long, the weak collections and the BigInts past 64 bits among them. See [Compared with C QuickJS](docs/benchmarks.md#compared-with-c-quickjs).
