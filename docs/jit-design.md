@@ -1489,7 +1489,15 @@ is under [The projection](#the-projection).
   part of what the lowering ahead had been credited with was that
   warm-up. The wait is not kept: the line before the lowering ahead
   (d5d80845) had none, its first compiles at 0.870 of the base's
-  invocations and its run 1,608 ms.
+  invocations and its run 1,608 ms. On the line after the callee nodes' single
+  allocation (8 runs each alternated): prep 58.0 µs median, 110 mean,
+  to 51.6 and 101 (the change's mean counting ~54 host-only first asks
+  refused on the worker); install 6.8 and 16 to 7.2 and 16.4; the
+  hand-over 4.1 to 4.3; the run 1,519-1,601 ms, median 1,558, against
+  1,532-1,638, median 1,564. Compiled sooner, a compile's timing moves
+  its feedback more: compilediff native of background compiles at
+  `-jitmem 512` found 43 of Octane's compiles different between two runs
+  of the change, against 10 and 27 between two of the base.
 - **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
   was run beside mir's scan on every compile, given the same function: an
   instruction for each value and the block's end, the frame states' uses
