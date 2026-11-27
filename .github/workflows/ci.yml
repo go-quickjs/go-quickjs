@@ -189,7 +189,7 @@ jobs:
   native-boundary:
     name: Native boundary (${{ matrix.os }}, Go ${{ matrix.go }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -231,7 +231,13 @@ jobs:
       # together. The vm package's tests run mostly one at a time -- its
       # heavy tests are serial -- so that one command used little more
       # than one of the runner's CPUs, and the three one after another had
-      # taken slow runners past the job's 30 minutes. A lane stops at its
+      # taken slow runners past the job's 30 minutes. The macOS runners
+      # vary most: the same code's vm package took the checkptr lane 486 to
+      # 1,176 seconds there, and twice past 20 minutes, where the arm64
+      # Linux runner took 405 to 448. So each vm command has 30 minutes,
+      # half again the most seen, and the job 45: the native lane's two vm
+      # commands, at most about 24 minutes together, half again, and the
+      # job's setup. A lane stops at its
       # first failing command, as bash -e had the step stop; each lane's
       # output goes to a file, printed in full once both are done, so that
       # a failure reads as it did. The checkptr lane leaves out the vm
@@ -258,9 +264,9 @@ jobs:
           }
           # Cancelled at the job's timeout, the lanes' output so far.
           trap 'show; exit 1' INT TERM
-          go test -tags quickjs_jit -gcflags=all=-d=checkptr=2 -count=1 -timeout=20m ./internal/jit/... ./internal/regexp ./internal/vm . -run 'JIT|Native|Program|Validate|Lower' -skip 'TestRegNativeGenerated|TestJITCompileLinear|TestJITLongCodeCompilesARM64|TestJITLoweringsOnlyInRoom|TestJITRegRealmsWithinTheBudgetClocked' > "$RUNNER_TEMP/checkptr.log" 2>&1 &
+          go test -tags quickjs_jit -gcflags=all=-d=checkptr=2 -count=1 -timeout=30m ./internal/jit/... ./internal/regexp ./internal/vm . -run 'JIT|Native|Program|Validate|Lower' -skip 'TestRegNativeGenerated|TestJITCompileLinear|TestJITLongCodeCompilesARM64|TestJITLoweringsOnlyInRoom|TestJITRegRealmsWithinTheBudgetClocked' > "$RUNNER_TEMP/checkptr.log" 2>&1 &
           checkptr=$!
-          if { (go test -tags quickjs_jit -count=1 -timeout=10m ./internal/jit && go test -tags quickjs_jit -count=1 -timeout=10m ./internal/regexp -run Native && go test -tags quickjs_jit -count=1 -timeout=20m ./internal/vm . -run 'JIT|Native') && go test -tags quickjs_jit,quickjs_verify -count=1 -timeout=20m ./internal/jit/... ./internal/vm -run 'JIT|Native|SSA|Optimize|Build|Live' -skip 'TestJITLoweringsOnlyInRoom|TestJITRegRealmsWithinTheBudgetClocked'; } > "$RUNNER_TEMP/native.log" 2>&1; then native=0; else native=$?; fi
+          if { (go test -tags quickjs_jit -count=1 -timeout=10m ./internal/jit && go test -tags quickjs_jit -count=1 -timeout=10m ./internal/regexp -run Native && go test -tags quickjs_jit -count=1 -timeout=30m ./internal/vm . -run 'JIT|Native') && go test -tags quickjs_jit,quickjs_verify -count=1 -timeout=30m ./internal/jit/... ./internal/vm -run 'JIT|Native|SSA|Optimize|Build|Live' -skip 'TestJITLoweringsOnlyInRoom|TestJITRegRealmsWithinTheBudgetClocked'; } > "$RUNNER_TEMP/native.log" 2>&1; then native=0; else native=$?; fi
           if wait $checkptr; then lifetimes=0; else lifetimes=$?; fi
           trap - INT TERM
           show
