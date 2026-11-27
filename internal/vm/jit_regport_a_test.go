@@ -244,8 +244,10 @@ func jitRegHeldCountsEachKindForTest(t *testing.T, r *Runtime) {
 	lowered := 0
 	lowering := func(l *jitLowering) {
 		n := jitLoweringFixed + jitCapBytes(l.hints.StringAdds) + jitCapBytes(l.hints.ElementReads)
-		for _, p := range l.progs {
-			if p != nil {
+		// Each program once: the kinds that share a function's program
+		// (jitRegLowerKinds) hold the one, which it holds once.
+		for k, p := range l.progs {
+			if p != nil && !slices.Contains(l.progs[:k], p) {
 				n += p.Footprint()
 				if p.Footprint() < len(p.Code)*int(unsafe.Sizeof(ir.Instruction{})) {
 					t.Fatal("a program's instructions uncounted")
