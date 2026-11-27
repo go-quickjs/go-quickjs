@@ -40,9 +40,10 @@ func jitSnapMayInline(cl *closure) bool {
 // theirs name, to jitSnapDepth, by the level each is first named at. Each
 // closure walked is copied (d's closureCopy, d the compile's root's data):
 // its calls are read of the copy, which the snapshot's families derive
-// from, not copied again.
-func (r *Runtime) jitSnapCalleeWalk(d *jitSnapData, root *closure) map[*closure]int {
-	set := map[*closure]int{}
+// from, not copied again. order is the closures in the order they are
+// first named, which nothing of a map's decides.
+func (r *Runtime) jitSnapCalleeWalk(d *jitSnapData, root *closure) (set map[*closure]int, order []*closure) {
+	set = map[*closure]int{}
 	level := []*closure{root}
 	for lv := 0; lv < jitSnapDepth && len(level) != 0; lv++ {
 		var next []*closure
@@ -62,13 +63,14 @@ func (r *Runtime) jitSnapCalleeWalk(d *jitSnapData, root *closure) map[*closure]
 			}
 			set[c] = lv + 1
 			next = append(next, c)
+			order = append(order, c)
 		}
 		for _, cl := range level {
 			r.jitSnapCalleesOf(d, cl, add)
 		}
 		level = next
 	}
-	return set
+	return set, order
 }
 
 // jitSnapForwardsTo calls add with the functions the forwarder cl hands
