@@ -291,7 +291,9 @@ type Allocator struct {
 	before []int32
 	nodes  []rnode
 	nregs  int
-	order  []posOf
+	// depthCls is each block's weightClass.
+	depthCls []int8
+	order    []posOf
 	// outSum is a bit for each word of each block's live-out set that has
 	// one, outSumW words a block: explore's, or the dataflow's.
 	outSum  []uint64
@@ -610,8 +612,13 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	starts := grown(al.starts, nb)
 	ends := grown(al.ends, nb)
 	al.starts, al.ends = starts, ends
+	// depthCls is each block's depth's weightClass, which the walks of
+	// the phis read for their predecessors' without going to them.
+	depthCls := grown(al.depthCls, nb)
+	al.depthCls = depthCls
 	pos := int32(0)
 	for i := range f.Blocks {
+		depthCls[i] = int8(weightClass(f.Blocks[i].Depth))
 		starts[i] = pos
 		ends[i] = pos + 2 + 2*int32(len(f.Blocks[i].Insts))
 		pos = ends[i] + 2
@@ -827,7 +834,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			}
 			for k, a := range p.Args {
 				if a != p.Def && alloc(a) && webs[a] != nil && f.Class[a] == f.Class[p.Def] && widthOf(f, a) == widthOf(f, p.Def) {
-					pairs = append(pairs, pair{p.Def, a, weightClass(f.Blocks[b.Preds[k]].Depth)})
+					pairs = append(pairs, pair{p.Def, a, int(depthCls[b.Preds[k]])})
 				}
 			}
 		}
@@ -1010,13 +1017,13 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 						continue
 					}
 					if y == x {
-						x.weight -= depthWeight(f.Blocks[b.Preds[k]].Depth)
+						x.weight -= classWeight(depthCls[b.Preds[k]])
 					} else {
 						all = false
 					}
 				}
 				if all {
-					x.weight -= depthWeight(b.Depth)
+					x.weight -= classWeight(depthCls[i])
 				}
 			}
 			for ; h < len(hinted) && hinted[h].b == int32(i); h++ {
@@ -2112,6 +2119,9 @@ const numWeightClasses = 8
 
 // weightClass is the class of depthWeight(d), which orders the weights.
 func weightClass(d int) int { return min(max(d, 0), numWeightClasses-1) }
+
+// classWeight is the depthWeight of weight class c: 8 to its power.
+func classWeight(c int8) float64 { return float64(uint64(1) << (3 * uint(c))) }
 
 // webQueue is webs by their starts, the first first.
 type webQueue []*web

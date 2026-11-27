@@ -1462,3 +1462,12 @@ func TestJoinRuns(t *testing.T) {
 		}
 	}
 }
+
+// TestClassWeight checks classWeight against depthWeight for each class.
+func TestClassWeight(t *testing.T) {
+	for d := -1; d <= numWeightClasses+2; d++ {
+		if got, want := classWeight(int8(weightClass(d))), depthWeight(d); got != want {
+			t.Fatalf("depth %d: %v, not %v", d, got, want)
+		}
+	}
+}
