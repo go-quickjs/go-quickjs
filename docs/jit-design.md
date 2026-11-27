@@ -1275,7 +1275,32 @@ is under [The projection](#the-projection).
   phase slower; `TestJITCompileWork` rewritten downwards; `compilediff
   native` the same code for every compile, since the stage changes how
   code is made, not what.
-- **Status:** under way. The goroutine's part of a compile in the
+- **Status:** landed as it stands: the snapshot as a copy of the caches'
+  data, derived on the worker, the lowering on the worker, and the
+  workspace discipline in ssa and mir (below: compiles 1.2 to 3.2%
+  faster, their garbage 40 to 85% less); lsra tried and not landed
+  (below). The next step is the floor's design (*Next*, below).
+  *Measured* at the stage's end against its base (Ryzen 5 3600, each
+  build alternated with the other). `-jitcompile 10`, three rounds, ms a
+  run of all compiles: Typescript 385.7 to 385.1 and, in a second set,
+  384.4 to 387.1; Mandreel 80.7 to 79.2, zlib 128.8 to 124.6, PdfJS 77.7
+  to 77.3, Gameboy 76.6 to 75.9, no phase more than a tenth slower. The
+  build is the most slower, Typescript +4.6 and +5.9% in the two sets,
+  PdfJS +4.1%, Gameboy +6.4% (zlib -5.7%), since it now derives the
+  snapshot's answers where it asks them; the emit is 4 to 6% shorter and
+  the saves 2 to 8%. The heap a run: Typescript 60.3 to 38.2 MB,
+  Mandreel 12.9 to 6.6, zlib 19.7 to 3.2, PdfJS 11.0 to 8.3, Gameboy
+  11.3 to 9.0. Of fewer bytes, Typescript's compiles make 42 to 45% more
+  objects (240,000 to 340,000-347,000 a run; Gameboy +21%), not yet
+  traced to what makes them: a note for later, since the objects, not
+  the bytes, are what the collector marks. Typescript in the background,
+  eight runs each: 1,654-1,659 ms at the median to 1,519-1,520 (-8.1 to
+  -8.4%), projected 1,470 to 1,600; its compiles 620 to 685, sooner
+  (below); the goroutine's part a compile (QPC, the median of the runs'
+  medians and the mean of their means), preparation 110-116 µs and
+  256-259 to 50 and 97-98, install 26-27 and 64-65 to 7.2 and 16,
+  projected 30 to 60 µs in all. The rest of this item is the stage's
+  record, step by step. The goroutine's part of a compile in the
   background is measured now (`JITCompileClock`, `-jittier`'s line):
   on Octane's Typescript, 620 compiles, 256 µs each prepared and 76
   installed at the base (Ryzen 5 3600, medians of three to four runs),
@@ -1488,7 +1513,7 @@ is under [The projection](#the-projection).
   compiles at the base's invocations (stage 5's tier-up policy, below):
   part of what the lowering ahead had been credited with was that
   warm-up. The wait is not kept: the line before the lowering ahead
-  (d5d80845) had none, its first compiles at 0.870 of the base's
+  (06bc939f) had none, its first compiles at 0.870 of the base's
   invocations and its run 1,608 ms. On the line after the callee nodes' single
   allocation (8 runs each alternated): prep 58.0 µs median, 110 mean,
   to 51.6 and 101 (the change's mean counting ~54 host-only first asks
@@ -1600,6 +1625,13 @@ is under [The projection](#the-projection).
   | Mandreel | 8.0 | 12.1 (14.8) |
   | PdfJS | 10.7 | 13.1 (15.5) |
   | Gameboy | 7.6 | 15.5 (19.2) |
+
+  Those measurements predate a50f9b71d..62806404e, which took out the
+  quadratic parts blamed below -- one range for a register live through
+  blocks one after another, the slots' scan passing over slots that
+  certainly meet a web, and what a web lives across found from its uses
+  and ranges, not call by call -- so the comparison is due again before
+  the verdict stands.
 
   That is 1.45 to 3.2 times as long, before its locations are mapped
   back, with mir's uses and saves still needed. Projected: allocation
