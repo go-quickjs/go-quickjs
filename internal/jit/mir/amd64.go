@@ -2741,6 +2741,18 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard guardTo) {
 		c.setG(v, scratchA)
 		return
 	}
+	if argReads(site, c.f, c.enc) {
+		// The function's own arguments, natively where its call wrote
+		// them to its context (argRead), any other read Go's.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.argRead(v, site, slow, join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), guard, false)
+		c.a.Bind(join)
+		c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, scratchA)
+		return
+	}
 	if keyedReads(site, len(v.Args), c.f, c.enc) {
 		// An array's dense element, no hole, by an index or by a key
 		// string the VM handed out for one, natively (keyedRead), any
@@ -4263,6 +4275,93 @@ func (c *compiler) keyedRead(v *ssa.Value, slow amd64.Label) {
 	c.a.Store(regCtx, keep+c.enc.NumOffset, scratchC)
 	c.a.Load(scratchC, scratchA, c.enc.RefOffset)
 	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchC)
+}
+
+// argRead makes call v, arguments.length or arguments[k] of the function's
+// own arguments (ssa.GoArgument), where the code runs as a native callee
+// (abi.Context's Live) -- its call wrote its arguments and their count to
+// its context (ssa.CallSite's FrameArgs) -- and the arguments object, the
+// local of its last operand, is not made: their count, or argument k of a
+// number k whose truncation is itself, from the first a mapped object
+// would not alias (the parameters, the call's operands past the key and
+// the local) up to their count.
+// The value goes to the call's keep cell, its pointer word through
+// storeRef while the collector marks (byMarking): the context's words are
+// none the collector sees, the caller's frame keeping the object alive
+// while the code runs, and the barrier's store shades it. It goes on at
+// join; anything else goes to slow, where Go reads it as it did. It uses
+// every scratch register and xScratch2.
+func (c *compiler) argRead(v *ssa.Value, site *ssa.CallSite, slow, join amd64.Label) {
+	fail := guardLabel(c, slow)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.a.Load(scratchA, regCtx, abi.OffLive)
+	c.a.OpImm(amd64.Cmp, scratchA, abi.LiveCall, true)
+	fail.jump(amd64.CondNE)
+	// The local the object is kept in: the one operand of the count's
+	// read, the second of an argument's.
+	local := v.Args[0]
+	if site.Argc != 1 {
+		local = v.Args[1]
+	}
+	w := c.gpr(local, scratchA)
+	c.cmpWord(w, c.enc.Object)
+	fail.jump(amd64.CondE)
+	if site.Argc == 1 {
+		// arguments.length: their count, as a number.
+		c.a.Load(scratchA, regCtx, abi.OffArgc)
+		c.a.OpImm(amd64.Cmp, scratchA, abi.MaxGoArgs, true)
+		fail.jump(amd64.CondA)
+		c.a.Cvtsi2sd(xScratch2, scratchA, true)
+		c.a.MovQFromX(scratchC, xScratch2)
+		c.a.Store(regCtx, keep+c.enc.NumOffset, scratchC)
+		c.storeImm(regCtx, keep+c.enc.RefOffset, 0, scratchA)
+		c.a.Jmp(join)
+		return
+	}
+	// The index, in scratchB: a number whose truncation is itself, past
+	// the parameters a mapped object aliases and below the count -- a
+	// negative one is, unsigned, a count past them.
+	if w := c.gpr(v.Args[0], scratchA); w != scratchA {
+		c.a.MovRR(scratchA, w)
+	}
+	c.cmpWord(scratchA, abi.NumberLimit)
+	fail.jump(amd64.CondAE)
+	c.a.MovQToX(xScratch2, scratchA)
+	c.a.Cvttsd2si(scratchB, xScratch2)
+	c.a.Cvtsi2sd(xScratch2, scratchB, true)
+	c.a.MovQFromX(scratchC, xScratch2)
+	c.a.Op(amd64.Cmp, scratchC, scratchA, true)
+	fail.jump(amd64.CondNE)
+	if n := site.Argc - 2; n > 0 {
+		c.a.OpImm(amd64.Cmp, scratchB, int32(n), true)
+		fail.jump(amd64.CondB)
+	}
+	c.a.CmpMem(scratchB, regCtx, abi.OffArgc, true)
+	fail.jump(amd64.CondAE)
+	// Within the context's Args whatever its count says, as Go's reads
+	// bound them (jitContextArgs).
+	c.a.OpImm(amd64.Cmp, scratchB, abi.MaxGoArgs, true)
+	fail.jump(amd64.CondAE)
+	// Its words, from the context's Args.
+	num, ref := int32(unsafe.Offsetof(abi.GoArg{}.Num)), int32(unsafe.Offsetof(abi.GoArg{}.Ref))
+	c.a.ShiftImm(amd64.Shl, scratchB, 4, true)
+	c.a.Op(amd64.Add, scratchB, regCtx, true)
+	c.a.Load(scratchC, scratchB, abi.OffArgs+num)
+	c.a.Store(regCtx, keep+c.enc.NumOffset, scratchC)
+	c.a.Load(scratchC, scratchB, abi.OffArgs+ref)
+	c.byMarking(join, func(marking bool) {
+		c.a.Lea(scratchA, regCtx, keep+c.enc.RefOffset)
+		c.ptrStore(marking)
+	})
+}
+
+// argReads reports whether call site, a read of the function's own
+// arguments, is made natively where its call wrote them to its context
+// (argRead): code that keeps them (ssa.CallSite's FrameArgs), no
+// generator's, whose steps' contexts hold no call's arguments.
+func argReads(site *ssa.CallSite, f *ssa.Func, enc abi.Encoding) bool {
+	return site.Go == ssa.GoArgument && site.FrameArgs && !f.GenEntry && enc.ValueSize == 16 && enc.WriteBarrier != 0 &&
+		unsafe.Sizeof(abi.GoArg{}) == 16
 }
 
 // genStep is iterStep's step of a cursor over a generator of one of the

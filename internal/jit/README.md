@@ -3164,13 +3164,23 @@ call path makes as a call's (not a class's constructor, nor one that shares
 a derived constructor's this). A callee that keeps its arguments -- reads
 `arguments`, has a rest parameter -- is given them and their count in its
 context (`ssa.CallSite`'s `FrameArgs`, `mir`'s `windowArgs`), where its
-reads of them are answered from (`GoArgument`; a sloppy function's parameter
+reads of them are answered from: by native code itself, `arguments[k]` of
+an index below their count and `arguments.length` while the object is not
+made, as V8's code reads an arguments object it never made from its frame
+(`mir`'s `argRead`, the value to the read's keep cell, its pointer word
+through `storeRef` while the collector marks, the context's words being
+none the collector sees); by Go otherwise (`GoArgument`: a key that is no
+index of them, the object made, the frame Go entered the code with, whose
+context holds no call's arguments, and a sloppy function's parameter
 its object would alias read as the code has it, `ArgumentParams`, which
 `jitArgument` reads: the registers from `ParamBase`, 2, past the function's
 and its this, live at each read of the arguments, for the object the
-interpreter makes at an exit reads them), its rest parameter's array and its
-arguments object made from them (`jitRegFrameArgs`), and the frame Go makes
-of its level is given them (`jitRegPushLevel`) -- or it is inlined (see
+interpreter makes at an exit reads them). EarleyBoyer's `sc_list` and
+`sc_append`, native callees that read their arguments in a loop, had called
+Go at each read, 86% of Earley's calls of Go on a native frame, each finding
+the callee's level. Its rest parameter's array and its arguments object
+are made from them (`jitRegFrameArgs`), and the frame Go makes of its level
+is given them (`jitRegPushLevel`). Or the callee is inlined (see
 [Inlining](#inlining)). A forwarding call, `f.apply(x, arguments)` of the
 realm's `apply` (`apply_args`, `ssa.CallSite`'s `Forward`), is made so too,
 of the functions the code learned it forwards to at its calls of Go, settled

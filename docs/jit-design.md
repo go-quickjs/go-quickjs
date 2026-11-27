@@ -1727,6 +1727,16 @@ is under [The projection](#the-projection).
   is not slower than the interpreter on Earley; the marking rule's tests
   for the new stores (`jitMarkingForTest`, `TestJITSameWorkWhileMarking`).
 - **Status:** not started.
+- **Status, closures, cells and arguments:** what native code makes was
+  counted first: closures and cells were taken from their pools already,
+  and Earley's calls of Go on a native frame were 86% reads of a native
+  callee's own arguments (`sc_list`, `sc_append`), 12% the entry cells of
+  `deriv_trees`, which captures ten locals where the pool took four, and
+  the rest refills. The arguments are now read natively (`mir`'s
+  `argRead`): Earley's calls of Go on a native frame fell from 524,288 to
+  about 66,000 in 30 runs, those cells nearly all that is left. Not yet
+  timed. Next: cells of up to sixteen locals, and refills without the
+  frame.
 
 ### Stage 4: inlining, loops and redundancy
 

@@ -5642,6 +5642,16 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard a64Guard) {
 		c.setG(v, a64A)
 		return
 	}
+	if argReads(site, c.f, c.enc) {
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.argRead(v, site, slow, join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), false)
+		c.a.Bind(join)
+		c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, a64A)
+		return
+	}
 	if keyedReads(site, len(v.Args), c.f, c.enc) {
 		slow, join := c.a.NewLabel(), c.a.NewLabel()
 		c.keyedRead(v, slow)
@@ -7276,6 +7286,68 @@ func (c *a64Compiler) keyedRead(v *ssa.Value, slow arm64.Label) {
 	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64C)
 	c.a.Load(a64C, a64A, c.enc.RefOffset)
 	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64C)
+}
+
+// argRead is amd64's: arguments.length or arguments[k] of the function's
+// own arguments, read natively from its context where its call wrote
+// them, the object not made; its pointer word stored through storeRef
+// while the collector marks (byMarking). It goes on at join; anything else
+// goes to slow. It uses A, B, C, D and F2.
+func (c *a64Compiler) argRead(v *ssa.Value, site *ssa.CallSite, slow, join arm64.Label) {
+	fail := a64GuardLabel(c, slow)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.a.Load(a64A, a64Ctx, abi.OffLive)
+	c.a.CmpImm(a64A, abi.LiveCall, true)
+	fail.jump(arm64.NE)
+	local := v.Args[0]
+	if site.Argc != 1 {
+		local = v.Args[1]
+	}
+	w := c.gpr(local, a64A)
+	c.movImm(a64C, c.enc.Object)
+	c.a.Cmp(w, a64C, true)
+	fail.jump(arm64.EQ)
+	if site.Argc == 1 {
+		c.a.Load(a64A, a64Ctx, abi.OffArgc)
+		c.a.CmpImm(a64A, abi.MaxGoArgs, true)
+		fail.jump(arm64.HI)
+		c.a.Scvtf(a64F2, a64A, true)
+		c.a.FMovFromF(a64C, a64F2)
+		c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64C)
+		c.a.Store(a64Ctx, keep+c.enc.RefOffset, arm64.ZR)
+		c.a.B(join)
+		return
+	}
+	if w := c.gpr(v.Args[0], a64A); w != a64A {
+		c.a.MovRR(a64A, w)
+	}
+	c.movImm(a64B, abi.NumberLimit)
+	c.a.Cmp(a64A, a64B, true)
+	fail.jump(arm64.HS)
+	c.a.FMovToF(a64F2, a64A)
+	c.a.Fcvtzs(a64B, a64F2)
+	c.a.Scvtf(a64F2, a64B, true)
+	c.a.FMovFromF(a64C, a64F2)
+	c.a.Cmp(a64C, a64A, true)
+	fail.jump(arm64.NE)
+	if n := site.Argc - 2; n > 0 {
+		c.a.CmpImm(a64B, int64(n), true)
+		fail.jump(arm64.LO)
+	}
+	c.a.Load(a64C, a64Ctx, abi.OffArgc)
+	c.a.Cmp(a64B, a64C, true)
+	fail.jump(arm64.HS)
+	c.a.CmpImm(a64B, abi.MaxGoArgs, true)
+	fail.jump(arm64.HS)
+	num, ref := int32(unsafe.Offsetof(abi.GoArg{}.Num)), int32(unsafe.Offsetof(abi.GoArg{}.Ref))
+	c.a.AddLsl(a64D, a64Ctx, a64B, 4)
+	c.a.Load(a64C, a64D, abi.OffArgs+num)
+	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64C)
+	c.a.Load(a64C, a64D, abi.OffArgs+ref)
+	c.byMarking(join, func(marking bool) {
+		c.a.AddImm(a64A, a64Ctx, int64(keep+c.enc.RefOffset), true)
+		c.ptrStore(marking)
+	})
 }
 
 // keyedStore is amd64's: an array's dense element stored natively at a

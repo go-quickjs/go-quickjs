@@ -2080,7 +2080,11 @@ type CallSite struct {
 	// parameters (ir.Program's FrameArgs): the call writes all Argc of
 	// them, and their count, to its callee's context (abi.Context's Args
 	// and Argc), as V8's call pushes them all, where Go finds them for the
-	// frames it makes of the callee's level.
+	// frames it makes of the callee's level. Of a read of the function's
+	// own arguments (GoArgument), it says its code reads them so: where it
+	// runs as a native callee, its call wrote them to its context, which
+	// native code reads them from (mir's argRead), as V8's code reads an
+	// arguments object it never made from its frame.
 	FrameArgs bool
 	// Function says the callee's code reads its function object -- it
 	// pushes it (push_callee), reads its home object (a super reference)
@@ -2733,7 +2737,11 @@ const (
 // object is not made and k is an index of the arguments; with Argc 1, its
 // one operand that local, arguments.length, their count. Go refuses the
 // rest, and the code leaves for Go to make it there: the object
-// made, an index past the arguments, any other key.
+// made, an index past the arguments, any other key. Where the code runs
+// as a native callee and keeps its arguments (CallSite's FrameArgs),
+// native code reads them itself from its context, as its call wrote
+// them, and calls Go only for what it does not read: a parameter a mapped
+// object would alias, a key that is no index of them, the object made.
 
 // GoHost is an instruction of a function's own code that reads only its
 // Argc operands and the frame Go entered the code with (ir.Instruction's
@@ -9407,7 +9415,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 				argc += b.p.ArgumentParams
 			}
 			call := gd.guard(OpCall, Tagged, ir.HostExit, args...)
-			b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoArgument, Argc: argc, ThisSlot: -1}}, b.f.Keeps
+			b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoArgument, Argc: argc, ThisSlot: -1, FrameArgs: b.p.FrameArgs}}, b.f.Keeps
 			b.f.Keeps++
 			cell := f.newValue(blk, OpCallCell, Source, call)
 			r := f.newValue(blk, OpKept, Tagged, cell, call)
