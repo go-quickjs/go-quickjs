@@ -776,6 +776,120 @@ func BenchmarkManySlots(b *testing.B) {
 	}
 }
 
+// manyCallsFunc is a function of long values live across many calls: the
+// values made first, then the calls, then each value read twice, the
+// last made first. Each lives across every call, whose reloads weigh more
+// than its reads: it gives its register up over the calls, in a hole from
+// its definition to its first read. Where every is not 0, each value is
+// read after every that many calls too, which weigh more than the load
+// after them: a hole over each run of them. Where blocks is set, each
+// call is a block of its own, one after another.
+func manyCallsFunc(long, calls, every int, blocks bool) *Func {
+	f := &Func{}
+	var longs []VReg
+	var insts []Inst
+	for range long {
+		f.Class = append(f.Class, 0)
+		f.FixedSlot = append(f.FixedSlot, -1)
+		longs = append(longs, VReg(len(f.Class)-1))
+		insts = append(insts, mk(nil, longs[len(longs)-1:], None))
+	}
+	call := func() Inst { return Inst{Call: true, Hint: None} }
+	if blocks {
+		f.Blocks = append(f.Blocks, Block{Insts: insts})
+		insts = nil
+	}
+	for k := range calls {
+		insts = append(insts, call())
+		if every > 0 && (k+1)%every == 0 {
+			for i := range longs {
+				insts = append(insts, mk(longs[i:i+1], nil, None))
+			}
+		}
+		if blocks {
+			f.Blocks = append(f.Blocks, Block{Insts: insts})
+			insts = nil
+		}
+	}
+	for i := len(longs) - 1; i >= 0; i-- {
+		insts = append(insts, mk(longs[i:i+1], nil, None), mk(longs[i:i+1], nil, None))
+	}
+	f.Blocks = append(f.Blocks, Block{Insts: insts})
+	for i := range f.Blocks {
+		if i > 0 {
+			f.Blocks[i].Preds = []int{i - 1}
+		}
+		if i+1 < len(f.Blocks) {
+			f.Blocks[i].Succs = []int{i + 1}
+		}
+	}
+	return f
+}
+
+// BenchmarkManyCalls times the allocation of manyCallsFunc's functions,
+// values by calls, and the scan's phase (scan-ns/op), which punches each
+// value's holes over the calls, and the slots' (slots-ns/op), which finds
+// each call's reloads.
+func BenchmarkManyCalls(b *testing.B) {
+	for _, bc := range []struct {
+		name               string
+		long, calls, every int
+		blocks             bool
+	}{
+		{"1000x1000", 1000, 1000, 0, false},
+		{"2000x2000", 2000, 2000, 0, false},
+		{"4000x4000", 4000, 4000, 0, false},
+		{"1000x4000", 1000, 4000, 0, false},
+		{"4000x1000", 4000, 1000, 0, false},
+		{"1000x1000blocks", 1000, 1000, 0, true},
+		{"2000x2000blocks", 2000, 2000, 0, true},
+		{"4000x4000blocks", 4000, 4000, 0, true},
+		{"4x4000every2", 4, 4000, 2, false},
+		{"4x8000every2", 4, 8000, 2, false},
+		{"4x16000every2", 4, 16000, 2, false},
+	} {
+		b.Run(bc.name, func(b *testing.B) {
+			f := manyCallsFunc(bc.long, bc.calls, bc.every, bc.blocks)
+			var al Allocator
+			var mark time.Time
+			var phases [NumPhases]time.Duration
+			cfg := &Config{Classes: [][]int{{0, 1, 2, 3}}, NumSlots: 1 << 20, Lap: func(p Phase) {
+				now := time.Now()
+				phases[p] += now.Sub(mark)
+				mark = now
+			}}
+			for b.Loop() {
+				mark = time.Now()
+				if _, err := al.Allocate(f, cfg); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportMetric(float64(phases[PhaseScan].Nanoseconds())/float64(b.N), "scan-ns/op")
+			b.ReportMetric(float64(phases[PhaseSlots].Nanoseconds())/float64(b.N), "slots-ns/op")
+		})
+	}
+}
+
+// TestManyCalls allocates manyCallsFunc's functions and checks them: no
+// value is reloaded after a call.
+func TestManyCalls(t *testing.T) {
+	for _, c := range []struct {
+		long, calls, every int
+		blocks             bool
+	}{{200, 200, 0, false}, {200, 200, 0, true}, {4, 400, 2, false}, {4, 400, 2, true}} {
+		f := manyCallsFunc(c.long, c.calls, c.every, c.blocks)
+		cfg := &Config{Classes: [][]int{{0, 1, 2, 3}}, NumSlots: 1 << 20}
+		res, err := Allocate(f, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkAllocation(t, 0, f, cfg, res)
+		if len(res.acrossV) != 0 {
+			t.Errorf("%+v: %d reloads after calls", c, len(res.acrossV))
+		}
+	}
+}
+
 // TestManySlots allocates manySlotsFunc's functions and checks them: each
 // long value in a slot of its own, the short ones sharing.
 func TestManySlots(t *testing.T) {
