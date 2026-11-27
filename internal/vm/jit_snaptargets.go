@@ -986,9 +986,26 @@ type jitCallSiteFact struct {
 	now   *Object
 	cl    *closure
 	rc    *regCode
-	// seen are the method call's seen callees, where seenAsked.
-	seenAsked bool
-	seen      []jitCallee
+	// seen are the method call's seen callees, where seenAsked; none
+	// where seenSkipped, its read monomorphic and its call's cache full
+	// (jitSeenSkippable).
+	seenAsked, seenSkipped bool
+	seen                   []jitCallee
+}
+
+// jitSeenSkippable reports whether the method call w, of cl's register
+// code rc, whose method the get_method_w at register pc read put in its
+// window, has seen callees the call's cache (calls) does not give it: not
+// where the read's cache holds one shape and no other met before (no
+// poly, which keeps them), and the call's cache a function native calls
+// may enter (jitRegCallKind) -- the method that shape's holder has, the
+// function the call last called.
+func jitSeenSkippable(cl *closure, rc *bytecode.RegCode, read int, calls []regCallCache, w bytecode.RInstr) bool {
+	site := int(rc.Code[read].C())
+	if site >= len(cl.ic) || cl.ic[site].poly != nil || uint(w.C()) >= uint(len(calls)) {
+		return false
+	}
+	return jitRegCallKind(&calls[w.C()])
 }
 
 // jitCallSiteFacts are the facts of cl's call sites (jitCallSiteFact), by
@@ -1044,7 +1061,15 @@ func jitCallSiteFacts(r *Runtime, cl *closure, calls []regCallCache) (out []jitC
 			if isMethod {
 				x.seenAsked = true
 				if q := at(&method, int(w.A())); q >= 0 && rpc-1-q <= jitRegSeenReach && (op == bytecode.RCallMW || op == bytecode.RCallMWT) {
-					x.seen = r.jitRegSeenCalleesAt(cl, rc, q)
+					if jitSeenSkippable(cl, rc, q, calls, w) {
+						// Its read's one shape's method, the function the
+						// call's cache holds: a target the cache's gives the
+						// call already (TestJITSnapshotAnswersAsAsked holds
+						// them to it).
+						x.seenSkipped = true
+					} else {
+						x.seen = r.jitRegSeenCalleesAt(cl, rc, q)
+					}
 				}
 			}
 			if !jitCallUnfilled(calls, w, isMethod, int(w.X()), l != nil) || l == nil {

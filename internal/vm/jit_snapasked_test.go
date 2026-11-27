@@ -104,6 +104,7 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 	unbound := map[jitSnapMethod]int{}
 	typedMissed, litMissed := 0, 0
 	var eagerWhy [3]int
+	seenSkipped, seenOther := 0, 0
 	for _, cl := range cls {
 		c := r.regOf(cl)
 		if c == nil {
@@ -196,6 +197,23 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 				}
 			}
 			eagerWhy[s.d.calls.tg.eagerWhy]++
+			// The method calls whose seen callees the site pass skipped
+			// (jitSeenSkippable): the asking's, read now, give none but
+			// the call's cache's function.
+			if d := &s.d.calls; d.tg.gathered {
+				for _, x := range d.tg.sites {
+					if !x.seenSkipped {
+						continue
+					}
+					w := d.rc.Code[x.rpc]
+					for _, c := range r.jitRegSeenCallees(d.cl, d.rc, int(x.rpc), w) {
+						if c.o != d.copied[w.C()].callee {
+							seenOther++
+						}
+					}
+					seenSkipped++
+				}
+			}
 			// What the calls' gather made by register pc (jitTargetsBind)
 			// where no PC asks NativeCalls: a pool made early.
 			tg := &s.d.calls.tg
@@ -274,4 +292,8 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 	t.Logf("gathered by register pc at no PC: %d KeyedStore", unbound[snapKeyedStore])
 	t.Logf("TypedKind: cells made by register pc at no PC %d, PCs asked at no register pc %d", unbound[snapTypedKind], typedMissed)
 	t.Logf("literals: asked by register pc at no PC: %d Literal, %d Define; literal PCs asked at no register pc %d", unbound[snapLiteral], unbound[snapDefine], litMissed)
+	t.Logf("method calls' seen callees skipped: %d, of which met another function than the call's cache's: %d", seenSkipped, seenOther)
+	if seenOther != 0 {
+		t.Errorf("%d seen callees skipped the call's cache does not give", seenOther)
+	}
 }
