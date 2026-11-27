@@ -5311,6 +5311,42 @@ function closure_kept_cells(n)
     return n;
 }
 
+/* a callee's rest parameter's array, read and dropped */
+function extra_rest_sum(a, ...r)
+{
+    var s = a, i;
+    for (i = 0; i < r.length; i++)
+        s += r[i];
+    return s;
+}
+
+function rest_param(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s = (s + extra_rest_sum(j, 1, 2, 3)) | 0;
+    global_res = s;
+    return n;
+}
+
+/* a strict callee's arguments object, returned and read */
+function extra_args_object()
+{
+    "use strict";
+    return arguments;
+}
+
+function arguments_object(n)
+{
+    var j, s = 0, o;
+    for (j = 0; j < n; j++) {
+        o = extra_args_object(j, 2);
+        s = (s + o.length + o[0]) | 0;
+    }
+    global_res = s;
+    return n;
+}
+
 /* a render-like map callback returning an element factory's call */
 function array_map_tail(n)
 {

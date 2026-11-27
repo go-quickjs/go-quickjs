@@ -5769,6 +5769,15 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard a64Guard) {
 		c.a.Bind(join)
 		return
 	}
+	if frameMades(site, c.f, c.enc) {
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.frameMade(v, site, slow)
+		c.a.B(join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), false)
+		c.a.Bind(join)
+		return
+	}
 	if site.Go == ssa.GoCells && site.Pool != 0 {
 		// As amd64's: natively from the function's pool where it can be,
 		// by Go otherwise.
@@ -7368,6 +7377,107 @@ func (c *a64Compiler) argRead(v *ssa.Value, site *ssa.CallSite, slow, join arm64
 		c.a.AddImm(a64A, a64Ctx, int64(keep+c.enc.RefOffset), true)
 		c.ptrStore(marking)
 	})
+}
+
+// frameMade is amd64's: a rest parameter's array or an unmapped arguments
+// object taken from its pool, of the arguments a native call wrote to the
+// context, their count its length; a count past the pool's room, or an
+// empty pool, has Go fill it again and the take made again from its
+// start; the elements' pointer words stored with Go's write barrier while
+// the collector marks. It uses A, B, C, D and F2.
+func (c *a64Compiler) frameMade(v *ssa.Value, site *ssa.CallSite, slow arm64.Label) {
+	vs := int32(c.enc.ValueSize)
+	from := int32(0)
+	if site.Made == ssa.MadeRest {
+		from = int32(site.MadeFrom)
+	}
+	marked, done, top, grow := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.a.Bind(top)
+	empty := c.poolRefill(v, site.Pool, top, slow)
+	c.a.Load(a64A, a64Ctx, abi.OffLive)
+	c.a.CmpImm(a64A, abi.LiveCall, true)
+	c.a.BCond(arm64.NE, slow)
+	count := func(r arm64.Reg) {
+		c.a.Load(r, a64Ctx, abi.OffArgc)
+		if from > 0 {
+			zero, pos := c.a.NewLabel(), c.a.NewLabel()
+			c.a.CmpImm(r, int64(from), true)
+			c.a.BCond(arm64.LO, zero)
+			c.a.AddImm(r, r, -int64(from), true)
+			c.a.B(pos)
+			c.a.Bind(zero)
+			c.movImm(r, 0)
+			c.a.Bind(pos)
+		}
+	}
+	c.a.Load(a64B, a64Ctx, abi.OffArgc)
+	c.a.CmpImm(a64B, abi.MaxGoArgs, true)
+	c.a.BCond(arm64.HI, slow)
+	count(a64B)
+	c.movImm(a64A, uint64(site.Pool))
+	c.a.Load(a64C, a64A, abi.OffPoolRoom)
+	c.a.Cmp(a64B, a64C, true)
+	c.a.BCond(arm64.HI, grow)
+	c.a.Load(a64C, a64A, abi.OffPoolCount)
+	c.a.Cbz(a64C, empty, true)
+	c.movImm(a64C, c.enc.WriteBarrier)
+	c.a.LoadU8(a64C, a64C, 0)
+	c.a.Cbnz(a64C, marked, false)
+	keep := abi.OffKeep + int32(v.Index)*vs
+	num, ref := int32(unsafe.Offsetof(abi.GoArg{}.Num)), int32(unsafe.Offsetof(abi.GoArg{}.Ref))
+	c.cold = append(c.cold, func() {
+		c.a.Bind(grow)
+		c.a.AddImm(a64B, a64B, 1, true)
+		c.a.Store(a64A, abi.OffPoolWant, a64B)
+		c.a.B(empty)
+	})
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		c.poolTakeMarking(v, site)
+		for k := int32(0); from+k < abi.MaxGoArgs; k++ {
+			count(a64B)
+			c.a.CmpImm(a64B, int64(k), true)
+			c.a.BCond(arm64.LS, done)
+			c.a.Load(a64A, a64Ctx, keep+c.enc.RefOffset)
+			c.a.Load(a64A, a64A, c.enc.ObjectElems)
+			c.a.Load(a64C, a64Ctx, abi.OffArgs+(from+k)*16+num)
+			c.a.Store(a64A, k*vs+c.enc.NumOffset, a64C)
+			c.a.AddImm(a64A, a64A, int64(k*vs+c.enc.RefOffset), true)
+			c.a.Load(a64C, a64Ctx, abi.OffArgs+(from+k)*16+ref)
+			c.refStore()
+		}
+		c.a.B(done)
+	})
+	c.poolTake(v, site)
+	// The elements: A walks the object's, B the context's, to D.
+	loop, copied := c.a.NewLabel(), c.a.NewLabel()
+	count(a64B)
+	c.a.Load(a64A, a64Ctx, keep+c.enc.RefOffset)
+	c.a.Load(a64A, a64A, c.enc.ObjectElems)
+	c.a.AddImm(a64C, a64Ctx, int64(abi.OffArgs+from*16), true)
+	c.a.AddLsl(a64D, a64C, a64B, 4)
+	c.a.MovRR(a64B, a64C)
+	c.a.Bind(loop)
+	c.a.Cmp(a64B, a64D, true)
+	c.a.BCond(arm64.HS, copied)
+	c.a.Load(a64C, a64B, num)
+	c.a.Store(a64A, c.enc.NumOffset, a64C)
+	c.a.Load(a64C, a64B, ref)
+	c.a.Store(a64A, c.enc.RefOffset, a64C)
+	c.a.AddImm(a64A, a64A, int64(vs), true)
+	c.a.AddImm(a64B, a64B, 16, true)
+	c.a.B(loop)
+	c.a.Bind(copied)
+	c.a.Bind(done)
+	count(a64B)
+	c.a.Load(a64C, a64Ctx, keep+c.enc.RefOffset)
+	c.a.Store(a64C, c.enc.ObjectElems+8, a64B)
+	if site.Made == ssa.MadeArguments {
+		c.a.Scvtf(a64F2, a64B, true)
+		c.a.Load(a64A, a64C, c.enc.ObjectProps)
+		c.a.FMovFromF(a64B, a64F2)
+		c.a.Store(a64A, c.enc.NumOffset, a64B)
+	}
 }
 
 // keyedStore is amd64's: an array's dense element stored natively at a

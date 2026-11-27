@@ -54,6 +54,10 @@ type jitLearned struct {
 	// cellsPool is the pool the code takes its captured locals' cells
 	// from at its entries, kept across compiles (jitFeedback.CellsPool).
 	cellsPool *abi.ObjectPool
+	// madePools are the pools of the rest parameters' arrays and the
+	// arguments objects native code makes, by register pc, kept across
+	// compiles (jitRegFeedback.FrameMade).
+	madePools []jitMadePool
 	// poly are the property sites' cases and accessors the code met that
 	// their caches cannot hold, and whether each is megamorphic, which it
 	// is compiled again for (jitRegDeoptSeen, jitPolySeenOp).

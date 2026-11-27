@@ -56,6 +56,7 @@ const (
 	snapTypeofCells
 	snapWalkedCloseCell
 	snapTypedKind
+	snapFrameMade
 	snapFrequency
 	snapOperands
 	snapForEach
@@ -73,10 +74,10 @@ const (
 )
 
 // jitSnapAtPC says which methods' argument is a PC.
-var jitSnapAtPC = [...]bool{true, true, true, true, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, true, true, true, true, true, true, true, true, false, false, false, true, false, false, false, false, false, true, true, true, true, true, true, true, true, true, false, false, false, false, true, false}
+var jitSnapAtPC = [...]bool{true, true, true, true, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, true, true, true, true, true, true, true, true, false, false, false, true, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, false, false, false, false, true, false}
 
 // jitSnapNames are the methods' names, by jitSnapMethod.
-var jitSnapNames = [...]string{"BigInt", "BigIntWide", "BigIntFailed", "InlineExit", "KeepLimit", "CreatePool", "StringRead", "TypedRead", "TypedBigRead", "KeyedRead", "KeyedWrite", "UpvalueTyped", "KeyedStore", "Property", "StringProperty", "Accessor", "Global", "CallShape", "CalledClosure", "StringCell", "StringContent", "BigIntCell", "Generic", "Resumed", "EntryGeneric", "Inline", "GoCalls", "NativeCalls", "BigIntSole", "Leaf", "ViaLeaf", "CharCode", "Substring", "FromCharCode", "Intrinsic", "Literal", "Define", "LeafKind", "ArrayProtos", "GenNext", "GenSteps", "HasCache", "KeyAtoms", "MapNexts", "TypeofCells", "WalkedCloseCell", "TypedKind", "Frequency", "Operands", "ForEach", "InstanceOf", "IndexOf", "ParseInt", "BigString", "Closure", "CellsPool", "PureBody", "ExecReuse", "Heap", "RawMath", "VirtualRoot"}
+var jitSnapNames = [...]string{"BigInt", "BigIntWide", "BigIntFailed", "InlineExit", "KeepLimit", "CreatePool", "StringRead", "TypedRead", "TypedBigRead", "KeyedRead", "KeyedWrite", "UpvalueTyped", "KeyedStore", "Property", "StringProperty", "Accessor", "Global", "CallShape", "CalledClosure", "StringCell", "StringContent", "BigIntCell", "Generic", "Resumed", "EntryGeneric", "Inline", "GoCalls", "NativeCalls", "BigIntSole", "Leaf", "ViaLeaf", "CharCode", "Substring", "FromCharCode", "Intrinsic", "Literal", "Define", "LeafKind", "ArrayProtos", "GenNext", "GenSteps", "HasCache", "KeyAtoms", "MapNexts", "TypeofCells", "WalkedCloseCell", "TypedKind", "FrameMade", "Frequency", "Operands", "ForEach", "InstanceOf", "IndexOf", "ParseInt", "BigString", "Closure", "CellsPool", "PureBody", "ExecReuse", "Heap", "RawMath", "VirtualRoot"}
 
 // jitRegSnapStatePC are the methods the build asks by a state's PC, which
 // in a register program is a register pc, not an instruction's (Resumed and
@@ -329,6 +330,12 @@ type jitSnapAnsTypedKind struct {
 	r1 bool
 }
 
+type jitSnapAnsFrameMade struct {
+	_  [0]func()
+	r0 ssa.FrameMadeSite
+	r1 bool
+}
+
 type jitSnapAnsFrequency struct {
 	_  [0]func()
 	r0 float64
@@ -460,6 +467,7 @@ type jitSnapAnswers struct {
 	TypeofCells     jitSnapTable[jitSnapAnsTypeofCells]
 	WalkedCloseCell jitSnapTable[jitSnapAnsWalkedCloseCell]
 	TypedKind       jitSnapTable[jitSnapAnsTypedKind]
+	FrameMade       jitSnapTable[jitSnapAnsFrameMade]
 	Frequency       jitSnapTable[jitSnapAnsFrequency]
 	Operands        jitSnapTable[jitSnapAnsOperands]
 	ForEach         jitSnapTable[jitSnapAnsForEach]
@@ -525,6 +533,7 @@ func (a *jitSnapAnswers) seal() {
 	a.TypeofCells.seal()
 	a.WalkedCloseCell.seal()
 	a.TypedKind.seal()
+	a.FrameMade.seal()
 	a.Frequency.seal()
 	a.Operands.seal()
 	a.ForEach.seal()
@@ -591,6 +600,7 @@ func (a *jitSnapAnswers) answered() int {
 		a.TypeofCells.answered() +
 		a.WalkedCloseCell.answered() +
 		a.TypedKind.answered() +
+		a.FrameMade.answered() +
 		a.Frequency.answered() +
 		a.Operands.answered() +
 		a.ForEach.answered() +
@@ -1333,6 +1343,21 @@ func (q *jitRegSnapshot) TypedKind(pc int) (r0 ssa.TypedSite, r1 bool) {
 	}
 	if e == nil || !e.answered {
 		q.s.absent(snapTypedKind, int64(pc))
+		return
+	}
+	r0 = e.v.r0
+	r1 = e.v.r1
+	return r0, r1
+}
+
+func (q *jitRegSnapshot) FrameMade(pc int) (r0 ssa.FrameMadeSite, r1 bool) {
+	q.s.ready()
+	e := q.s.a.FrameMade.find(int64(pc))
+	if e != nil && e.eff != 0 {
+		q.s.used(e.eff)
+	}
+	if e == nil || !e.answered {
+		q.s.absent(snapFrameMade, int64(pc))
 		return
 	}
 	r0 = e.v.r0
@@ -2171,6 +2196,20 @@ func jitRegSnapAskTypedKind(s *jitSnapshot, fb *jitRegFeedback, pc int) {
 	}
 }
 
+func jitRegSnapAskFrameMade(s *jitSnapshot, fb *jitRegFeedback, pc int) {
+	before := s.begin(fb.fb)
+	r0, r1 := fb.FrameMade(pc)
+	eff := s.end(fb.fb, before)
+	ok := r1
+	if h := fb.fb.r.jitTest.snapAsked; h != nil {
+		h(s, snapFrameMade, int64(pc), ok, []any{r0, r1})
+	}
+	if ok || eff != 0 {
+		s.a.FrameMade.reserve(int(s.room[snapFrameMade]))
+		s.a.FrameMade.put(int64(pc), eff, ok, jitSnapAnsFrameMade{r0: r0, r1: r1})
+	}
+}
+
 func jitRegSnapAskFrequency(s *jitSnapshot, fb *jitRegFeedback, pc int) {
 	before := s.begin(fb.fb)
 	r0, r1 := fb.Frequency(pc)
@@ -2355,6 +2394,7 @@ const jitRegSnapMethods uint64 = 0 |
 	1<<snapTypeofCells |
 	1<<snapWalkedCloseCell |
 	1<<snapTypedKind |
+	1<<snapFrameMade |
 	1<<snapFrequency |
 	1<<snapOperands |
 	1<<snapForEach |
@@ -2408,6 +2448,7 @@ func init() {
 		snapDefine:         jitRegSnapAskDefine,
 		snapGenSteps:       jitRegSnapAskGenSteps,
 		snapTypedKind:      jitRegSnapAskTypedKind,
+		snapFrameMade:      jitRegSnapAskFrameMade,
 		snapFrequency:      jitRegSnapAskFrequency,
 		snapOperands:       jitRegSnapAskOperands,
 		snapForEach:        jitRegSnapAskForEach,

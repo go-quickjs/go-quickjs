@@ -840,7 +840,11 @@ item counts its steps (`core.steps`).
 (QuickJS's `tests/microbench.js`, kept as it is there), and ours beside it,
 `microbench_extra.js`, of what it has none of -- generators, async
 functions, try statements, iterators, using declarations, closures
-made and called anew, calls in tail position, method calls with a frame
+made and called anew, arguments a callee reads in a loop, its rest
+parameter's array and a strict arguments object, a function capturing ten
+locals that makes its closure on one call in eight, closures of seven
+captured locals kept until their pools run out, calls in tail position,
+method calls with a frame
 and without, loops of a few simple instructions, which time the register
 interpreter's dispatch (the Go table's with `QJS_NONATIVE=1`), private class members, Math.random, the in operator, a delete of an object's last property,
 object and array spread, object rest, computed keys and spread calls,

@@ -1409,8 +1409,9 @@ type jitState struct {
 	// frameOps counts native code's calls of Go that make an operation on
 	// a frame of register code (jitRegFrameOp), each finding its level:
 	// what native code leaves to them, its tests and the frames' work
-	// count.
-	frameOps uint64
+	// count; calleeFrameOps those on a native callee's level (abi.Context's
+	// Live), not the frame Go entered the code with.
+	frameOps, calleeFrameOps uint64
 	// ssaKeeps is the most keep cells (abi.Context.Keep) any code compiled
 	// uses: what Go clears in a native callee's context.
 	ssaKeeps int
@@ -1578,6 +1579,9 @@ func (e *jitEntry) learnedBytes() int {
 		n += jitPoolBytes(e.literals[i].pool)
 	}
 	n += jitPoolBytes(e.cellsPool)
+	for i := range e.madePools {
+		n += jitPoolBytes(e.madePools[i].pool)
+	}
 	for i := range e.creates {
 		n += jitPoolBytes(e.creates[i].pool)
 	}

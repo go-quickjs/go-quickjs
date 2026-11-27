@@ -3204,9 +3204,21 @@ and its this, live at each read of the arguments, for the object the
 interpreter makes at an exit reads them). EarleyBoyer's `sc_list` and
 `sc_append`, native callees that read their arguments in a loop, had called
 Go at each read, 86% of Earley's calls of Go on a native frame, each finding
-the callee's level. Its rest parameter's array and its arguments object
-are made from them (`jitRegFrameArgs`), and the frame Go makes of its level
-is given them (`jitRegPushLevel`). Or the callee is inlined (see
+the callee's level. Its rest parameter's array and an unmapped arguments
+object are made from them by native code itself, as V8's code allocates
+them inline from its frame (`ssa.CallSite`'s `Made`, `mir`'s `frameMade`):
+the next of a pool of the site's (`jitRegFeedback`'s `FrameMade`) --
+`new Array(n)`'s arrays of its room, or arguments objects of their
+allocation's room for 2, 4 or 7 elements, each with the realm's unmapped
+arguments objects' properties -- the arguments written into it and their
+count its length; a count past the pool's room has Go fill it with objects
+of room for it and the take made again, as `new Array(n)`'s is, and the
+elements' pointer words go through `storeRef` while the collector marks.
+A mapped arguments object, whose callee native code does not have, more
+arguments than an arguments object's allocation holds, and the frame Go
+entered the code with have Go make them from the arguments
+(`jitRegFrameArgs`); and the frame Go makes of its level is given them
+(`jitRegPushLevel`). Or the callee is inlined (see
 [Inlining](#inlining)). A forwarding call, `f.apply(x, arguments)` of the
 realm's `apply` (`apply_args`, `ssa.CallSite`'s `Forward`), is made so too,
 of the functions the code learned it forwards to at its calls of Go, settled

@@ -2811,6 +2811,18 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard guardTo) {
 		c.a.Bind(join)
 		return
 	}
+	if frameMades(site, c.f, c.enc) {
+		// A rest parameter's array, an arguments object: natively from
+		// its pool where the code runs as a native callee (frameMade), by
+		// Go on the frame otherwise.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.frameMade(v, site, slow)
+		c.a.Jmp(join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), guard, false)
+		c.a.Bind(join)
+		return
+	}
 	if site.Go == ssa.GoCells && site.Pool != 0 {
 		// Natively from the function's pool where it can be (cellsTake),
 		// by Go otherwise, which fills the pool again.
@@ -4422,6 +4434,139 @@ func (c *compiler) argRead(v *ssa.Value, site *ssa.CallSite, slow, join amd64.La
 func argReads(site *ssa.CallSite, f *ssa.Func, enc abi.Encoding) bool {
 	return site.Go == ssa.GoArgument && site.FrameArgs && !f.GenEntry && enc.ValueSize == 16 && enc.WriteBarrier != 0 &&
 		unsafe.Sizeof(abi.GoArg{}) == 16
+}
+
+// frameMades reports whether call site, a rest parameter's array or an
+// arguments object (ssa.CallSite's Made), is made natively where the code
+// runs as a native callee (frameMade): no generator's, whose steps'
+// contexts hold no call's arguments.
+func frameMades(site *ssa.CallSite, f *ssa.Func, enc abi.Encoding) bool {
+	return site.Go == ssa.GoHost && site.Made != ssa.MadeNone && site.Pool != 0 && !f.GenEntry && enc.ValueSize == 16 &&
+		enc.WriteBarrier != 0 && unsafe.Sizeof(abi.GoArg{}) == 16
+}
+
+// frameMade makes call v, a rest parameter's array or an unmapped
+// arguments object (ssa.CallSite's Made), of the arguments a native call
+// wrote to the code's context (abi.Context's Args, Argc), as V8's code
+// allocates them inline from its frame: the next of its pool's objects --
+// `new Array(n)`'s arrays of the pool's Room, or arguments objects with
+// room for as many elements, their properties those of the realm's
+// arguments objects -- taken (poolTake), the arguments from MadeFrom its
+// elements, their count its length. A count past the pool's room has Go
+// fill it again with objects of room for it (Want), and an empty pool
+// fill it again (poolRefill), the take made again from its start, every
+// check again; anything else -- a frame Go entered the code with, more
+// arguments than a context holds -- goes to slow, where Go makes it on the
+// frame. While the collector marks, the pool's cell is cleared and the
+// elements' pointer words stored with Go's write barrier (refStore): the
+// object outlives the context its elements come from. It uses every
+// scratch register and xScratch2.
+func (c *compiler) frameMade(v *ssa.Value, site *ssa.CallSite, slow amd64.Label) {
+	vs := int32(c.enc.ValueSize)
+	from := int32(0)
+	if site.Made == ssa.MadeRest {
+		from = int32(site.MadeFrom)
+	}
+	marked, done, top, grow := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.a.Bind(top)
+	empty := c.poolRefill(v, site.Pool, top, slow)
+	c.a.Load(scratchA, regCtx, abi.OffLive)
+	c.a.OpImm(amd64.Cmp, scratchA, abi.LiveCall, true)
+	c.a.Jcc(amd64.CondNE, slow)
+	// count loads their count, less the parameters before a rest
+	// parameter's, into r.
+	count := func(r amd64.Reg) {
+		c.a.Load(r, regCtx, abi.OffArgc)
+		if from > 0 {
+			pos := c.a.NewLabel()
+			c.a.OpImm(amd64.Sub, r, from, true)
+			c.a.Jcc(amd64.CondAE, pos)
+			c.movImm(r, 0)
+			c.a.Bind(pos)
+		}
+	}
+	c.a.Load(scratchB, regCtx, abi.OffArgc)
+	c.a.OpImm(amd64.Cmp, scratchB, abi.MaxGoArgs, true)
+	c.a.Jcc(amd64.CondA, slow)
+	count(scratchB)
+	c.movImm(scratchA, uint64(site.Pool))
+	c.a.CmpMem(scratchB, scratchA, abi.OffPoolRoom, true)
+	c.a.Jcc(amd64.CondA, grow)
+	c.a.Load(scratchC, scratchA, abi.OffPoolCount)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Jcc(amd64.CondE, empty)
+	c.movImm(scratchA, c.enc.WriteBarrier)
+	c.a.TestMem8(scratchA, 0, 0xFF)
+	c.a.Jcc(amd64.CondNE, marked)
+	keep := abi.OffKeep + int32(v.Index)*vs
+	num, ref := int32(unsafe.Offsetof(abi.GoArg{}.Num)), int32(unsafe.Offsetof(abi.GoArg{}.Ref))
+	// length writes the object's length, n in scratchB, the object in
+	// scratchC: its elements' count, and an arguments object's length
+	// property, its first.
+	length := func() {
+		c.a.Store(scratchC, c.enc.ObjectElems+8, scratchB)
+		if site.Made == ssa.MadeArguments {
+			c.a.Cvtsi2sd(xScratch2, scratchB, true)
+			c.a.Load(scratchA, scratchC, c.enc.ObjectProps)
+			c.a.MovQFromX(scratchB, xScratch2)
+			c.a.Store(scratchA, c.enc.NumOffset, scratchB)
+		}
+	}
+	c.cold = append(c.cold, func() {
+		c.a.Bind(grow)
+		// Room for n, 1 plus n, asked of Go's filling.
+		c.a.OpImm(amd64.Add, scratchB, 1, true)
+		c.a.Store(scratchA, abi.OffPoolWant, scratchB)
+		c.a.Jmp(empty)
+	})
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		c.poolTakeMarking(v, site)
+		// Each element, the object read again from the keep cell and the
+		// count from the context after each store: refStore keeps no
+		// scratch register.
+		for k := int32(0); from+k < abi.MaxGoArgs; k++ {
+			count(scratchB)
+			c.a.OpImm(amd64.Cmp, scratchB, k, true)
+			c.a.Jcc(amd64.CondBE, done)
+			c.a.Load(scratchA, regCtx, keep+c.enc.RefOffset)
+			c.a.Load(scratchA, scratchA, c.enc.ObjectElems)
+			c.a.Load(scratchC, regCtx, abi.OffArgs+(from+k)*16+num)
+			c.a.Store(scratchA, k*vs+c.enc.NumOffset, scratchC)
+			c.a.OpImm(amd64.Add, scratchA, k*vs+c.enc.RefOffset, true)
+			c.a.Load(scratchC, regCtx, abi.OffArgs+(from+k)*16+ref)
+			c.refStore()
+		}
+		c.a.Jmp(done)
+	})
+	c.poolTake(v, site)
+	// The elements, from the context's Args at from: scratchA walks the
+	// object's, scratchB the context's, to their end in xScratch2.
+	loop, copied := c.a.NewLabel(), c.a.NewLabel()
+	count(scratchB)
+	c.a.Load(scratchA, regCtx, keep+c.enc.RefOffset)
+	c.a.Load(scratchA, scratchA, c.enc.ObjectElems)
+	c.a.ShiftImm(amd64.Shl, scratchB, 4, true)
+	c.a.Lea(scratchC, regCtx, abi.OffArgs+from*16)
+	c.a.Op(amd64.Add, scratchB, scratchC, true)
+	c.a.MovQToX(xScratch2, scratchB)
+	c.a.MovRR(scratchB, scratchC)
+	c.a.Bind(loop)
+	c.a.MovQFromX(scratchC, xScratch2)
+	c.a.Op(amd64.Cmp, scratchB, scratchC, true)
+	c.a.Jcc(amd64.CondAE, copied)
+	c.a.Load(scratchC, scratchB, num)
+	c.a.Store(scratchA, c.enc.NumOffset, scratchC)
+	c.a.Load(scratchC, scratchB, ref)
+	c.a.Store(scratchA, c.enc.RefOffset, scratchC)
+	c.a.OpImm(amd64.Add, scratchA, vs, true)
+	c.a.OpImm(amd64.Add, scratchB, 16, true)
+	c.a.Jmp(loop)
+	c.a.Bind(copied)
+	c.a.Bind(done)
+	count(scratchB)
+	c.a.Load(scratchC, regCtx, keep+c.enc.RefOffset)
+	length()
 }
 
 // genStep is iterStep's step of a cursor over a generator of one of the

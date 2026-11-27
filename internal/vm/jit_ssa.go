@@ -1840,6 +1840,9 @@ func jitHostCall(ctx *abi.Context) bool {
 			// Register code's, whose frame is its window, not the stack
 			// form's frame these read (jit_frame.go).
 			r.jit.frameOps++
+			if ctx.Live == abi.LiveCall {
+				r.jit.calleeFrameOps++
+			}
 			return r.jitRegFrameOp(ctx)
 		}
 	}
@@ -4115,8 +4118,11 @@ func (r *Runtime) jitNewPool(o *Object) *abi.ObjectPool {
 
 // jitPoolSource is what an object pool is filled from (abi.ObjectPool's
 // Source): a construction's function, or a literal's root shape and how
-// many fields or elements it has.
+// many fields or elements it has. Nothing compares one: it is of no
+// comparable type (its _ field, first, taking no room), which the
+// compiler would make an equality function for.
 type jitPoolSource struct {
+	_    [0]func()
 	ctor *Object
 	root *shape
 	n    int
@@ -4124,11 +4130,13 @@ type jitPoolSource struct {
 	// of result objects (jitFillResults); sharedPC, with sharedOf, register
 	// code's new_array_k of constants whose arrays share them, made whole,
 	// sharedPC its site's index in sharedOf's caches (jitRegSharedLiteral);
-	// listed says an array literal's pool is in the JIT's arrayRooms. The
-	// four share a word.
+	// listed says an array literal's pool is in the JIT's arrayRooms;
+	// made, what a pool of rest parameters' arrays or of arguments objects
+	// holds (jitFillMade), of realm's. The five share a word.
 	array    bool
 	results  bool
 	listed   bool
+	made     ssa.FrameMade
 	sharedPC int32
 	lit      *bytecode.Constant
 	// A closure's (jitFillClosures): its template, the function it is made
@@ -4148,6 +4156,8 @@ type jitPoolSource struct {
 	gen *Object
 	// sharedOf is the closure of sharedPC's literal.
 	sharedOf *closure
+	// realm is made's realm.
+	realm *Realm
 }
 
 // jitRefillPool fills pool again, run out, with more objects (ssa's
@@ -4166,6 +4176,11 @@ func (r *Runtime) jitRefillPool(pool *abi.ObjectPool) bool {
 		return pool.Count != 0
 	}
 	src := (*jitPoolSource)(pool.Source)
+	if src != nil && src.made != ssa.MadeNone {
+		// A rest parameter's arrays, or arguments objects (mir's
+		// frameMade), of room for want less one where native code asked.
+		return r.jitRefillMade(pool, src)
+	}
 	if want := pool.Want; want != 0 && src != nil && src.ctor != nil {
 		// A new Array(n) of an n past its arrays' room, or one less than
 		// half of a room past abi.PoolSmallRoom: filled again, whatever it

@@ -8,7 +8,7 @@ package vm
 // stores (the assembly pad's 32-byte slots), -1 for a pad left out, or a
 // data lever's variables.
 const (
-	layoutPadNA   = 84
+	layoutPadNA   = 669
 	layoutPadNGA  = -1
 	layoutPadNMA  = -1
 	layoutPadNI   = 797
@@ -20,7 +20,7 @@ const (
 	layoutPadNT   = 514
 	layoutPadNGT  = -1
 	layoutPadNMT  = -1
-	layoutPadNJE  = 5
+	layoutPadNJE  = 590
 	layoutPadNGJE = -1
 	layoutPadNMJE = -1
 	layoutPadNJP  = 596
@@ -29,10 +29,10 @@ const (
 	layoutPadNJO  = 576
 	layoutPadNGJO = -1
 	layoutPadNMJO = -1
-	layoutPadNBM  = 0
+	layoutPadNBM  = 585
 	layoutPadNGBM = -1
 	layoutPadNMBM = -1
-	layoutPadNTA  = 1156
+	layoutPadNTA  = 571
 	layoutPadNGTA = -1
 	layoutPadNMTA = -1
 	layoutPadNCB  = 330
@@ -56,25 +56,25 @@ const (
 	layoutPadNB   = 487
 	layoutPadNGB  = -1
 	layoutPadNMB  = -1
-	layoutPadNJB  = 488
+	layoutPadNJB  = 465
 	layoutPadNGJB = -1
 	layoutPadNMJB = -1
 	layoutPadNJU  = 0
 	layoutPadNGJU = -1
 	layoutPadNMJU = -1
-	layoutPadNJG  = 349
+	layoutPadNJG  = 89
 	layoutPadNGJG = -1
 	layoutPadNMJG = -1
 	layoutPadNJ   = 80
 	layoutPadNGJ  = -1
 	layoutPadNMJ  = -1
-	layoutPadNJN  = 948
+	layoutPadNJN  = 962
 	layoutPadNGJN = -1
 	layoutPadNMJN = -1
-	layoutPadNJS  = 473
+	layoutPadNJS  = 368
 	layoutPadNGJS = -1
 	layoutPadNMJS = -1
-	layoutPadNKO  = 462
+	layoutPadNKO  = 453
 	layoutPadNGKO = -1
 	layoutPadNMKO = -1
 	layoutPadNCC  = 480
@@ -92,7 +92,7 @@ const (
 	layoutPadNP   = 385
 	layoutPadNGP  = -1
 	layoutPadNMP  = -1
-	layoutPadNQ   = 820
+	layoutPadNQ   = 235
 	layoutPadNGQ  = -1
 	layoutPadNMQ  = -1
 	layoutPadNW   = 361
@@ -115,7 +115,7 @@ const (
 	layoutPadNMV  = -1
 	layoutPadNVT  = 544
 	layoutPadNGVT = -1
-	layoutPadNMVT = 796
+	layoutPadNMVT = 787
 	layoutPadNK   = 688
 	layoutPadNGK  = 769
 	layoutPadNMK  = -1
@@ -140,11 +140,11 @@ const (
 	layoutPadNZ   = 861
 	layoutPadNGZ  = -1
 	layoutPadNMZ  = -1
-	layoutPadNCZ  = 1277
+	layoutPadNCZ  = 642
 	layoutPadNHJ  = 185
 	layoutPadNH   = 67
 	layoutPadNHT  = 141
-	layoutPadNDH  = 4
+	layoutPadNDH  = 0
 	layoutPadNDW  = 0
 	layoutPadNDG  = 0
 )

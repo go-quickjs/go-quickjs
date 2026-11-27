@@ -2086,6 +2086,13 @@ type CallSite struct {
 	// native code reads them from (mir's argRead), as V8's code reads an
 	// arguments object it never made from its frame.
 	FrameArgs bool
+	// Made, of a GoHost at a rest parameter or the arguments object
+	// (FrameMadeFeedback), is what native code makes itself, from the
+	// pool at Pool, where the code runs as a native callee, of the
+	// arguments its call wrote to its context: a rest parameter's array of
+	// those from MadeFrom, or an unmapped arguments object of all of them.
+	Made     FrameMade
+	MadeFrom int
 	// Function says the callee's code reads its function object -- it
 	// pushes it (push_callee), reads its home object (a super reference)
 	// or names it (a mapped arguments object's callee): the call writes it
@@ -2389,6 +2396,36 @@ type ClosureSite struct {
 	Captures   []int32
 	LexThis    bool
 	LexThisReg bool
+}
+
+// FrameMade is what native code makes of a frame's arguments itself
+// (CallSite's Made): none, a rest parameter's array, an unmapped arguments
+// object.
+type FrameMade uint8
+
+const (
+	MadeNone FrameMade = iota
+	MadeRest
+	MadeArguments
+)
+
+// FrameMadeSite is FrameMadeFeedback's answer: what native code makes at
+// a rest parameter or the arguments object, from the pool at Pool, an
+// abi.ObjectPool the VM keeps alive -- `new Array(n)`'s arrays of its
+// Room, or arguments objects of their Room's elements -- and, of a rest
+// parameter, the first argument its array holds.
+type FrameMadeSite struct {
+	Pool uintptr
+	Made FrameMade
+	From int
+}
+
+// FrameMadeFeedback is Feedback that knows where native code may make a
+// rest parameter's array or an arguments object itself (CallSite's Made):
+// the one at pc, of code that keeps its arguments (ir.Program's
+// FrameArgs), as V8's code allocates them inline from its frame.
+type FrameMadeFeedback interface {
+	FrameMade(pc int) (FrameMadeSite, bool)
 }
 
 // ClosureFeedback is Feedback that knows the closures native code may make
@@ -9661,7 +9698,15 @@ func (b *builder) instruction(blk *Block, pc int) {
 				args[i] = b.read(sp-in.Extra+i, blk)
 			}
 			call := gd.guard(OpCall, Tagged, ir.HostExit, args...)
-			b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoHost, Argc: in.Extra, ThisSlot: -1}}, b.f.Keeps
+			site := &CallSite{Go: GoHost, Argc: in.Extra, ThisSlot: -1}
+			if fb, ok := b.fb.(FrameMadeFeedback); ok && b.p.FrameArgs && in.Extra == 0 && in.Dest >= 0 {
+				// A rest parameter's array, an arguments object: natively
+				// where the code runs as a native callee (mir's frameMade).
+				if m, ok := fb.FrameMade(pc); ok && m.Pool != 0 && m.Made != MadeNone {
+					site.Pool, site.Made, site.MadeFrom = m.Pool, m.Made, m.From
+				}
+			}
+			b.f.cache(call).Calls, call.Index = []*CallSite{site}, b.f.Keeps
 			b.f.Keeps++
 			b.f.HostsLeft = append(b.f.HostsLeft, pc)
 			if in.Dest >= 0 {

@@ -1744,9 +1744,11 @@ is under [The projection](#the-projection).
   -6.3%, the V8 suite's total -4.0%. What was left was allocation: the
   JIT made 26% more objects than the interpreter on Earley, its entries'
   cells, taken whether or not a closure took them. They now go back to
-  their pool where none did (`ssa.Func`'s `CellsKept`): 2% more. Next:
-  that timed, closures filled more cheaply, then arguments objects and
-  rest arrays made natively.
+  their pool where none did (`ssa.Func`'s `CellsKept`): 2% more, and a
+  pool's closures are made without looking up what they capture. A rest
+  parameter's array and an unmapped arguments object are made natively
+  from pools too (`frameMade`), which no suite's native code makes: the
+  family closed for general code (`rest_param`, `arguments_object`).
 
 ### Stage 4: inlining, loops and redundancy
 

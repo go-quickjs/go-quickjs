@@ -485,6 +485,7 @@ var jitSnapOps = [...][]ir.Op{
 	snapCharCode:       {ir.Host},
 	snapIndexOf:        {ir.Host},
 	snapClosure:        {ir.Closure},
+	snapFrameMade:      {ir.Host},
 	snapInlineExit:     {ir.Host},
 	snapParseInt:       {ir.Host},
 	snapStringProperty: {ir.ReferenceRead},

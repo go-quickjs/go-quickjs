@@ -93,6 +93,110 @@ func methods(dir, recv string) ([]method, error) {
 	return out, nil
 }
 
+// checkFamilies reports a method of a PC, ms's, that a snapshot would not
+// answer, as the build may ask it: one the build asks at no op (the
+// package's jitSnapOps, keyed by method), but Generic, asked at every
+// one, and those asked by a state's PC (stateMethods); or one that no
+// family derives on the worker or gathers on the runtime's goroutine (an
+// init's jitSnapDerived |= or jitSnapAskedAtGather |=, of the methods'
+// bits or of a constant or variable of them). Either asked at a PC is a
+// miss at every compile that asks it, built on the runtime's goroutine
+// after all; FrameMade, in neither, had been, which the snapshot's tests
+// alone had caught.
+func checkFamilies(dir string, ms []method) error {
+	files, err := filepath.Glob(filepath.Join(dir, "jit_*.go"))
+	if err != nil {
+		return err
+	}
+	files = append(files, filepath.Join(dir, "jit.go"))
+	sort.Strings(files)
+	fset := token.NewFileSet()
+	ops, family := map[string]bool{}, map[string]bool{}
+	// The snapX bits each package-level constant or variable is made of,
+	// and the names of those an init adds to a family.
+	values, added := map[string][]string{}, []ast.Expr{}
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") || strings.HasSuffix(file, "_gen.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.ValueSpec:
+				for i, name := range n.Names {
+					if i >= len(n.Values) {
+						continue
+					}
+					if lit, ok := n.Values[i].(*ast.CompositeLit); ok && name.Name == "jitSnapOps" {
+						for _, e := range lit.Elts {
+							if kv, ok := e.(*ast.KeyValueExpr); ok {
+								if id, ok := kv.Key.(*ast.Ident); ok {
+									ops[id.Name] = true
+								}
+							}
+						}
+						continue
+					}
+					values[name.Name] = append(values[name.Name], idents(n.Values[i])...)
+				}
+			case *ast.AssignStmt:
+				if n.Tok != token.OR_ASSIGN || len(n.Lhs) != 1 {
+					break
+				}
+				if id, ok := n.Lhs[0].(*ast.Ident); ok && (id.Name == "jitSnapDerived" || id.Name == "jitSnapAskedAtGather") {
+					added = append(added, n.Rhs...)
+				}
+			}
+			return true
+		})
+	}
+	var add func(name string, depth int)
+	add = func(name string, depth int) {
+		if strings.HasPrefix(name, "snap") {
+			family[name] = true
+			return
+		}
+		if depth < 4 {
+			for _, v := range values[name] {
+				add(v, depth+1)
+			}
+		}
+	}
+	for _, e := range added {
+		for _, name := range idents(e) {
+			add(name, 0)
+		}
+	}
+	for _, m := range ms {
+		if !m.atPC() || stateMethods[m.name] {
+			continue
+		}
+		key := "snap" + m.name
+		if m.name != "Generic" && !ops[key] {
+			return fmt.Errorf("jitRegFeedback.%s is asked at a PC but at no op: give it its ops in jitSnapOps (jit_snapshot.go), or its snapshot misses at every compile that asks it", m.name)
+		}
+		if !family[key] {
+			return fmt.Errorf("jitRegFeedback.%s is asked at a PC but no snapshot family derives or gathers it (jitSnapDerived, jitSnapAskedAtGather): give it one, as jit_snapinstanceof.go's, or its snapshot misses at every compile that asks it", m.name)
+		}
+	}
+	return nil
+}
+
+// idents are the names e is made of.
+func idents(e ast.Expr) []string {
+	var out []string
+	ast.Inspect(e, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			out = append(out, id.Name)
+		}
+		return true
+	})
+	return out
+}
+
 // receiverIs reports whether fd is a method of *name.
 func receiverIs(fd *ast.FuncDecl, name string) bool {
 	star, ok := fd.Recv.List[0].Type.(*ast.StarExpr)
@@ -128,6 +232,9 @@ func Generate(dir string) (snapshot []byte, err error) {
 	}
 	if len(ms) > 64 {
 		return nil, fmt.Errorf("%d methods: the snapshot's sets of them are 64 bits", len(ms))
+	}
+	if err := checkFamilies(dir, ms); err != nil {
+		return nil, err
 	}
 	var b bytes.Buffer
 	b.WriteString(header)
