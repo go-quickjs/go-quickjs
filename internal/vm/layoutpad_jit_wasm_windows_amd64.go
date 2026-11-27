@@ -71,7 +71,7 @@ const (
 	layoutPadNJN  = 948
 	layoutPadNGJN = -1
 	layoutPadNMJN = -1
-	layoutPadNJS  = 496
+	layoutPadNJS  = 473
 	layoutPadNGJS = -1
 	layoutPadNMJS = -1
 	layoutPadNKO  = 462

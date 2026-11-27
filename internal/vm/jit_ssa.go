@@ -1396,11 +1396,21 @@ func (fb *jitFeedback) TypeofCells() (uintptr, bool) {
 // home object those of no frame, which native code writes as it takes one
 // (mir's closureTake) -- the cells and the this; an arrow that reads the
 // others its pool is not made for (jitFeedback's Closure).
+//
+// Each is newClosureIn's function, of no frame's bindings: what it
+// captures, of its maker's cells or its maker's own captured bindings, is
+// nil until native code writes it, so they are not looked for -- the
+// object, its data, its closure and its bindings' room made in one
+// (newScriptFuncObject), and the rest as any closure's (finishClosure).
+// Looking each binding up among the frame's locals (cellOfLocal) had been
+// a sixth of EarleyBoyer's filling of its closures.
 func (r *Runtime) jitFillClosures(pool *abi.ObjectPool, tmpl Value, fn *bytecode.Function, env *Object) {
 	f := &frame{cl: &closure{fn: fn, closureCode: &closureCode{env: env}, upvalues: make([]*upvalue, len(fn.Upvalues))}, this: Undefined, newTarget: Undefined}
-	cells := make([]*upvalue, jitCaptured(fn))
+	t := tmpl.template()
+	proto, arrow := r.funcProtoFor(t.fn), t.fn.Kind == bytecode.KindArrow
 	for i := range int(pool.Size) {
-		pool.Objects[i] = unsafe.Pointer(r.newClosureIn(f, tmpl, cells))
+		o, fd, child, upvalues, extra := newScriptFuncObject(proto, ClassFunction, len(t.fn.Upvalues), arrow)
+		pool.Objects[i] = unsafe.Pointer(r.finishClosure(f, t, o, fd, child, upvalues, extra))
 	}
 	pool.Count, pool.Proto = pool.Size, nil
 }
