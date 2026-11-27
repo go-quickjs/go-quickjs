@@ -1943,8 +1943,12 @@ func (al *Allocator) websOf(f *Func, nargs int, hinted []hintAt, pos int32) []*w
 		}
 		// The last of what weighs, from the webs listed: the definitions
 		// of a web's registers that live across no call, where it is joined
-		// with one that does (whole numbers, exactly, in any order).
+		// with one that does (whole numbers, exactly, in any order). A
+		// function without clobbers has none that does.
 		for _, w := range list {
+			if al.noAcross {
+				break
+			}
 			if !w.calls || len(w.members) == 1 {
 				continue
 			}
@@ -1967,15 +1971,18 @@ func (al *Allocator) websOf(f *Func, nargs int, hinted []hintAt, pos int32) []*w
 // once at most. It is a method of its own, that the walk, which every
 // allocation makes over every instruction, is laid out as itself.
 func (al *Allocator) defineWalk(f *Func) (globals []VReg, paths, later []useAt, hinted []hintAt, nargs int, once bool) {
-	cls := f.Class
-	defBlock, defInst, global := al.defBlock, al.defInst, al.global
+	// Each register's tables of n, which an index found below n in one is
+	// in for all, unchecked.
+	n := len(f.Class)
+	cls := f.Class[:n]
+	defBlock, defInst, global := al.defBlock[:n], al.defInst[:n], al.global[:n]
 	globals, paths, later, hinted = al.globals[:0], al.paths[:0], al.later[:0], al.hinted[:0]
 	once = true
 	markPass, hintPass := al.markPass, al.hintPass
 	for i := range f.Blocks {
 		b := &f.Blocks[i]
 		for _, p := range b.Phis {
-			if d := p.Def; d >= 0 && cls[d] != NoClass {
+			if d := p.Def; uint(d) < uint(n) && cls[d] != NoClass {
 				if defBlock[d] >= 0 {
 					once = false
 				}
@@ -1990,7 +1997,7 @@ func (al *Allocator) defineWalk(f *Func) (globals []VReg, paths, later []useAt, 
 			}
 			nargs += len(p.Args)
 			for _, a := range p.Args {
-				if a >= 0 && cls[a] != NoClass && global[a] == 0 {
+				if uint(a) < uint(n) && cls[a] != NoClass && global[a] == 0 {
 					if len(globals) == cap(globals) {
 						globals = doubled(globals)
 					}
@@ -2007,7 +2014,7 @@ func (al *Allocator) defineWalk(f *Func) (globals []VReg, paths, later []useAt, 
 			}
 			if !markPass {
 				for _, u := range regs[:nu] {
-					if u < 0 || cls[u] == NoClass {
+					if uint(u) >= uint(n) || cls[u] == NoClass {
 						continue
 					}
 					switch db := defBlock[u]; {
@@ -2029,7 +2036,7 @@ func (al *Allocator) defineWalk(f *Func) (globals []VReg, paths, later []useAt, 
 				}
 			}
 			for _, d := range regs[nu : nu+int(in.NDefs)] {
-				if d >= 0 && cls[d] != NoClass {
+				if uint(d) < uint(n) && cls[d] != NoClass {
 					if defBlock[d] >= 0 {
 						once = false
 					}
@@ -2059,7 +2066,7 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 	cls := f.Class[:n]
 	globals, edgeArgs, argOff := al.globals, al.edgeArgs, al.argOff
 	weight, defW, defAt, starts, ends := al.weight[:n], al.defW[:n], al.defAt[:n], al.starts, al.ends
-	outOff, outRegs := al.outOff, al.outRegs
+	outOff, outRegs, depthCls := al.outOff, al.outRegs, al.depthCls
 	// last is each register's range found last, which begins first, or
 	// none (to 0); before[v] is, plus one, the index of the node of the
 	// one found before it, which begins after it, or 0, each node's next
@@ -2081,7 +2088,7 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 	for i := nb - 1; i >= 0; i-- {
 		b := &f.Blocks[i]
 		start, end := starts[i], ends[i]
-		w := depthWeight(b.Depth)
+		w := classWeight(depthCls[i])
 		if al.byWords {
 			// The registers live out of the block, in words.
 			for _, x := range al.outByBlock[outOff[i]:outOff[i+1]] {

@@ -138,13 +138,10 @@ func (al *Allocator) events() {
 	al.blockTable()
 	n := len(al.f.Class)
 	// The events in the order the pass finds them, then by register, in
-	// that order: a counting sort.
-	pairs := al.eventPass(al.evPairs[:0])
+	// that order: a counting sort, each register's counted by the pass.
 	off := grown(al.evOff, n+1)
 	clear(off)
-	for _, pr := range pairs {
-		off[pr.v+1]++
-	}
+	pairs := al.eventPass(al.evPairs[:0], off)
 	for v := range n {
 		off[v+1] += off[v]
 	}
@@ -167,8 +164,9 @@ type evPair struct {
 // eventPass appends to pairs each use and definition of a register in order
 // of position, as events -- a phi's at its block's start, an argument's use
 // at its edge's predecessor's end, an instruction's uses at its start and
-// its definitions one after -- free as the webs are when it runs.
-func (al *Allocator) eventPass(pairs []evPair) []evPair {
+// its definitions one after -- free as the webs are when it runs, and
+// counts each register's in count[v+1].
+func (al *Allocator) eventPass(pairs []evPair, count []int32) []evPair {
 	f := al.f
 	webs := al.webs
 	cls := f.Class
@@ -192,6 +190,7 @@ func (al *Allocator) eventPass(pairs []evPair) []evPair {
 					e |= evFree
 				}
 				pairs = append(pairs, evPair{d, e})
+				count[d+1]++
 			}
 		}
 		u := start + 2
@@ -201,6 +200,7 @@ func (al *Allocator) eventPass(pairs []evPair) []evPair {
 			for _, v := range regs[:nu] {
 				if v >= 0 && cls[v] != NoClass {
 					pairs = append(pairs, evPair{v, u << 2})
+					count[v+1]++
 				}
 			}
 			for _, d := range regs[nu : nu+int(in.NDefs)] {
@@ -210,6 +210,7 @@ func (al *Allocator) eventPass(pairs []evPair) []evPair {
 						e |= evFree
 					}
 					pairs = append(pairs, evPair{d, e})
+					count[d+1]++
 				}
 			}
 			u += 2
@@ -221,6 +222,7 @@ func (al *Allocator) eventPass(pairs []evPair) []evPair {
 					e |= evFree
 				}
 				pairs = append(pairs, evPair{x.a, e})
+				count[x.a+1]++
 			}
 			continue
 		}
@@ -233,6 +235,7 @@ func (al *Allocator) eventPass(pairs []evPair) []evPair {
 						e |= evFree
 					}
 					pairs = append(pairs, evPair{a, e})
+					count[a+1]++
 				}
 			}
 		}
