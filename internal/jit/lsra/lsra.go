@@ -324,6 +324,11 @@ type Config struct {
 	// register at a time, for the tests that compare it with exploring 64
 	// at once (exploreWords).
 	byRegs, exploreOne bool
+	// meetsWalk has the scan test whether an inactive web meets the web
+	// scanned by a walk of their ranges whatever the inactive one's next
+	// range, for the tests that compare it with taking one that begins
+	// before the scanned one's first ends as meeting it (meetsCur).
+	meetsWalk bool
 	// mutateHoles has the allocation punch holes that leave a position
 	// where the webs meet out, for the test that the checks find it.
 	mutateHoles bool

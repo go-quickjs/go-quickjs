@@ -1223,6 +1223,7 @@ func TestWalkMethods(t *testing.T) {
 		{"liveSets", func(c *Config) { c.liveSets = true }},
 		{"walkLists", func(c *Config) { c.walkLists = true }},
 		{"exploreOne", func(c *Config) { c.exploreOne = true }},
+		{"meetsWalk", func(c *Config) { c.meetsWalk = true }},
 	}
 	var al, old Allocator
 	twice := 0

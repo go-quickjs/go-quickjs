@@ -238,7 +238,7 @@ type Allocator struct {
 	active   []scanEntry
 	inactive []scanEntry
 	back     []scanEntry
-	queue    []*web
+	queues   [][]*web
 	partQ    webQueue
 	partBy   partQueue
 	slots    [][]rng
@@ -369,6 +369,7 @@ type Allocator struct {
 	plainLists   bool
 	walkLists    bool
 	exploreOne   bool
+	meetsWalk    bool
 	mutateHoles  bool
 	oneByOne     bool
 	searchPreds  bool
@@ -436,12 +437,45 @@ func (al *Allocator) meets1(meets []int8, i int, e scanEntry, cur *web) bool {
 	m := meets[i]
 	if m == 0 {
 		m = meetNo
-		if overlap(e.w.ranges[e.w.cur:], cur.ranges) {
+		if al.meetsCur(e, cur) {
 			m = meetYes
 		}
 		meets[i] = m
 	}
 	return m == meetYes
+}
+
+// dropVictims removes from list, in place and in order, the entries of
+// victims, which have register reg.
+func dropVictims(list []scanEntry, reg int32, victims []*web) []scanEntry {
+	// Those before the first dropped stay where they are.
+	k := 0
+	for k < len(list) && !(list[k].reg == reg && slices.Contains(victims, list[k].w)) {
+		k++
+	}
+	if k == len(list) {
+		return list
+	}
+	for _, e := range list[k+1:] {
+		if e.reg == reg && slices.Contains(victims, e.w) {
+			continue
+		}
+		list[k] = e
+		k++
+	}
+	clear(list[k:])
+	return list[:k]
+}
+
+// meetsCur reports whether e, an inactive entry, meets cur, the web
+// scanned: e's next range begins at e.at, past cur's start, and meets cur's
+// first range where it begins before that ends (with Config.meetsWalk,
+// the lists are walked whatever e.at).
+func (al *Allocator) meetsCur(e scanEntry, cur *web) bool {
+	if e.at < cur.ranges[0].to && !al.meetsWalk {
+		return true
+	}
+	return overlap(e.w.ranges[e.w.cur:], cur.ranges)
 }
 
 // lazyWebsMin is the least registers with ranges past which the webs of
@@ -513,7 +547,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.hintPass, al.blockByBlock, al.mergeAll, al.regByReg, al.phiWalks = cfg.hintPass, cfg.blockByBlock, cfg.mergeAll, cfg.regByReg, cfg.phiWalks
 	al.searchPreds, al.rangeLists, al.sortList, al.alwaysTest, al.webHeap = cfg.searchPreds, cfg.rangeLists, cfg.sortList, cfg.alwaysTest, cfg.webHeap
 	al.partHints, al.eagerWebs, al.forceLazy = cfg.partHints, cfg.eagerWebs, cfg.lazyWebs
-	al.liveSets, al.walkLists, al.exploreOne = cfg.liveSets, cfg.walkLists, cfg.exploreOne
+	al.liveSets, al.walkLists, al.exploreOne, al.meetsWalk = cfg.liveSets, cfg.walkLists, cfg.exploreOne, cfg.meetsWalk
 
 	// Liveness, of the registers that may be live across a block's
 	// boundary -- a phi's, a phi's argument, one used in a block other
@@ -1083,6 +1117,15 @@ func (al *Allocator) scan(classes [][]int, list []*web) {
 	// every reads the lists at every web scanned (Config.plainLists,
 	// walkLists).
 	every := al.plainLists || al.walkLists
+	// Each class's webs, in order of their starts, from one walk of them.
+	queues := al.queues
+	for len(queues) < len(classes) {
+		queues = append(queues, nil)
+	}
+	for _, w := range list {
+		queues[w.cls] = append(queues[w.cls], w)
+	}
+	al.queues = queues
 	for cls, regs := range classes {
 		active, inactive := al.active[:0], al.inactive[:0]
 		// actAt and inAt are at most the least at of the active and the
@@ -1095,13 +1138,8 @@ func (al *Allocator) scan(classes [][]int, list []*web) {
 		// The webs to scan: the class's, in order of their starts, and
 		// the parts of webs taken apart, which start at or after the web
 		// they were part of, in a heap. Each is next where it is the less.
-		queue, parts, partBy := al.queue[:0], al.partQ[:0], &al.partBy
+		queue, parts, partBy := queues[cls], al.partQ[:0], &al.partBy
 		partBy.reset(pos)
-		for _, w := range list {
-			if int(w.cls) == cls {
-				queue = append(queue, w)
-			}
-		}
 		qi := 0
 		apart := func(w *web) bool {
 			if len(w.members) < 2 {
@@ -1261,7 +1299,7 @@ func (al *Allocator) scan(classes [][]int, list []*web) {
 				for i, e := range inactive {
 					if used&(1<<e.reg) == 0 && (e.at < end || al.plainLists) {
 						meets[i] = meetNo
-						if overlap(e.w.ranges[e.w.cur:], cur.ranges) {
+						if al.meetsCur(e, cur) {
 							meets[i] = meetYes
 							used |= 1 << e.reg
 						}
@@ -1396,9 +1434,8 @@ func (al *Allocator) scan(classes [][]int, list []*web) {
 				}
 				// Every victim has the register taken, which cur takes: the
 				// active ones' bit stays in actRegs.
-				evicted := func(e scanEntry) bool { return int(e.reg) == best && slices.Contains(victims, e.w) }
-				active = slices.DeleteFunc(active, evicted)
-				inactive = slices.DeleteFunc(inactive, evicted)
+				active = dropVictims(active, int32(best), victims)
+				inactive = dropVictims(inactive, int32(best), victims)
 				for k, a := range victims {
 					if h := holes[k]; h.e <= h.s {
 						a.spillWhole()
@@ -1442,7 +1479,8 @@ func (al *Allocator) scan(classes [][]int, list []*web) {
 		clear(active)
 		clear(inactive)
 		clear(queue)
-		al.active, al.inactive, al.queue, al.partQ = active[:0], inactive[:0], queue[:0], parts[:0]
+		al.active, al.inactive, al.partQ = active[:0], inactive[:0], parts[:0]
+		queues[cls] = queue[:0]
 	}
 }
 
