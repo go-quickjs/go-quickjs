@@ -169,6 +169,16 @@ func Generate(dir string) (snapshot []byte, err error) {
 // default to none within the register code, and record no use.
 var stateMethods = map[string]bool{"Resumed": true, "EntryGeneric": true}
 
+// compileWide are the methods of no argument whose answer is the
+// runtime's, the same for every snapshot of a compile: asked of the
+// compile's own function's snapshot alone (askOnceReg), whose table its
+// callees' snapshots answer from, its effects -- what the root's keep was
+// given, the keep of every snapshot of the compile -- used as the root's.
+var compileWide = map[string]bool{
+	"ArrayProtos": true, "GenNext": true, "HasCache": true, "KeyAtoms": true,
+	"MapNexts": true, "TypeofCells": true, "WalkedCloseCell": true,
+}
+
 // poolTypes are the results' types an answer names pools of objects in
 // (jitSnapPools), which the snapshot asks the roots of.
 var poolTypes = map[string]bool{
@@ -260,10 +270,20 @@ func registerSnapshot(b *bytes.Buffer, ms, regs []method) error {
 		}
 		fmt.Fprintf(b, "func (q *jitRegSnapshot) %s(%s) (%s) {\n", m.name, m.params, strings.Join(named, ", "))
 		// The answers derived first, where the worker has not (ready).
-		fmt.Fprintf(b, "\tq.s.ready()\n\te := q.s.a.%s.find(%s)\n", m.name, key)
-		if stateMethods[m.name] {
+		switch {
+		case compileWide[m.name]:
+			if len(m.pnames) != 0 {
+				panic("snapgen: compile-wide " + m.name + " takes an argument")
+			}
+			// The compile's own function's answer, its effect used as its.
+			fmt.Fprintf(b, "\tq.s.ready()\n\troot := q.s.root\n\te := root.a.%s.find(0)\n", m.name)
+			fmt.Fprintf(b, "\tif e != nil && e.eff != 0 {\n\t\troot.used(e.eff)\n\t}\n")
+			fmt.Fprintf(b, "\tif e == nil || !e.answered {\n\t\tq.s.absent(snap%s, 0)\n\t\treturn\n\t}\n", m.name)
+		case stateMethods[m.name]:
+			fmt.Fprintf(b, "\tq.s.ready()\n\te := q.s.a.%s.find(%s)\n", m.name, key)
 			fmt.Fprintf(b, "\tif e == nil || !e.answered {\n\t\tq.absent(snap%s, %s)\n\t\treturn\n\t}\n", m.name, key)
-		} else {
+		default:
+			fmt.Fprintf(b, "\tq.s.ready()\n\te := q.s.a.%s.find(%s)\n", m.name, key)
 			fmt.Fprintf(b, "\tif e != nil && e.eff != 0 {\n\t\tq.s.used(e.eff)\n\t}\n")
 			fmt.Fprintf(b, "\tif e == nil || !e.answered {\n\t\tq.s.absent(snap%s, %s)\n\t\treturn\n\t}\n", m.name, key)
 		}
@@ -279,16 +299,28 @@ func registerSnapshot(b *bytes.Buffer, ms, regs []method) error {
 		fmt.Fprintf(b, "\treturn %s\n}\n\n", strings.Join(rs, ", "))
 	}
 	b.WriteString("// askOnceReg asks fb the questions of no argument.\nfunc (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {\n")
+	wide := 0
 	for _, m := range regs {
 		if len(m.pnames) != 0 {
 			continue
 		}
+		if compileWide[m.name] {
+			wide++
+		}
 		rs := results(m)
 		// Not a method the worker derives (jitSnapDerived), whose gather
-		// copies what its answer is made of instead.
-		fmt.Fprintf(b, "\tif jitSnapDerived&(1<<snap%s) == 0 {\n\t\tbefore := s.begin(fb.fb)\n\t\t%s := fb.%s()\n\t\teff := s.end(fb.fb, before)\n", m.name, rs, m.name)
+		// copies what its answer is made of instead; a compile-wide one
+		// asked of the root alone, which its callees answer from.
+		root := ""
+		if compileWide[m.name] {
+			root = " && s == s.root"
+		}
+		fmt.Fprintf(b, "\tif jitSnapDerived&(1<<snap%s) == 0%s {\n\t\tbefore := s.begin(fb.fb)\n\t\t%s := fb.%s()\n\t\teff := s.end(fb.fb, before)\n", m.name, root, rs, m.name)
 		fmt.Fprintf(b, "\t\tif h := fb.fb.r.jitTest.snapAsked; h != nil {\n\t\t\th(s, snap%s, 0, true, []any{%s})\n\t\t}\n", m.name, rs)
 		fmt.Fprintf(b, "\t\ts.a.%s.put(0, eff, true, jitSnapAns%s{%s})\n\t}\n", m.name, m.name, rs)
+	}
+	if wide != len(compileWide) {
+		return fmt.Errorf("compileWide names %d methods, %d of them register methods of no argument", len(compileWide), wide)
 	}
 	b.WriteString("}\n\n// The askers of the register feedback's methods of a PC, as\n" +
 		"// jitSnapAskers's, the callees of the inline sites it names asked in turn\n" +

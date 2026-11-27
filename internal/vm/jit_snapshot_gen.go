@@ -1167,9 +1167,10 @@ func (q *jitRegSnapshot) LeafKind(fn uintptr) (r0 ssa.LeafKind) {
 
 func (q *jitRegSnapshot) ArrayProtos() (r0 [2]ssa.Holder, r1 bool) {
 	q.s.ready()
-	e := q.s.a.ArrayProtos.find(0)
+	root := q.s.root
+	e := root.a.ArrayProtos.find(0)
 	if e != nil && e.eff != 0 {
-		q.s.used(e.eff)
+		root.used(e.eff)
 	}
 	if e == nil || !e.answered {
 		q.s.absent(snapArrayProtos, 0)
@@ -1182,9 +1183,10 @@ func (q *jitRegSnapshot) ArrayProtos() (r0 [2]ssa.Holder, r1 bool) {
 
 func (q *jitRegSnapshot) GenNext() (r0 uintptr) {
 	q.s.ready()
-	e := q.s.a.GenNext.find(0)
+	root := q.s.root
+	e := root.a.GenNext.find(0)
 	if e != nil && e.eff != 0 {
-		q.s.used(e.eff)
+		root.used(e.eff)
 	}
 	if e == nil || !e.answered {
 		q.s.absent(snapGenNext, 0)
@@ -1211,9 +1213,10 @@ func (q *jitRegSnapshot) GenSteps(pc int) (r0 []ssa.GenStep) {
 
 func (q *jitRegSnapshot) HasCache() (r0 uintptr) {
 	q.s.ready()
-	e := q.s.a.HasCache.find(0)
+	root := q.s.root
+	e := root.a.HasCache.find(0)
 	if e != nil && e.eff != 0 {
-		q.s.used(e.eff)
+		root.used(e.eff)
 	}
 	if e == nil || !e.answered {
 		q.s.absent(snapHasCache, 0)
@@ -1225,9 +1228,10 @@ func (q *jitRegSnapshot) HasCache() (r0 uintptr) {
 
 func (q *jitRegSnapshot) KeyAtoms() (r0 uintptr, r1 uintptr) {
 	q.s.ready()
-	e := q.s.a.KeyAtoms.find(0)
+	root := q.s.root
+	e := root.a.KeyAtoms.find(0)
 	if e != nil && e.eff != 0 {
-		q.s.used(e.eff)
+		root.used(e.eff)
 	}
 	if e == nil || !e.answered {
 		q.s.absent(snapKeyAtoms, 0)
@@ -1240,9 +1244,10 @@ func (q *jitRegSnapshot) KeyAtoms() (r0 uintptr, r1 uintptr) {
 
 func (q *jitRegSnapshot) MapNexts() (r0 [2]uintptr) {
 	q.s.ready()
-	e := q.s.a.MapNexts.find(0)
+	root := q.s.root
+	e := root.a.MapNexts.find(0)
 	if e != nil && e.eff != 0 {
-		q.s.used(e.eff)
+		root.used(e.eff)
 	}
 	if e == nil || !e.answered {
 		q.s.absent(snapMapNexts, 0)
@@ -1254,9 +1259,10 @@ func (q *jitRegSnapshot) MapNexts() (r0 [2]uintptr) {
 
 func (q *jitRegSnapshot) TypeofCells() (r0 uintptr, r1 bool) {
 	q.s.ready()
-	e := q.s.a.TypeofCells.find(0)
+	root := q.s.root
+	e := root.a.TypeofCells.find(0)
 	if e != nil && e.eff != 0 {
-		q.s.used(e.eff)
+		root.used(e.eff)
 	}
 	if e == nil || !e.answered {
 		q.s.absent(snapTypeofCells, 0)
@@ -1269,9 +1275,10 @@ func (q *jitRegSnapshot) TypeofCells() (r0 uintptr, r1 bool) {
 
 func (q *jitRegSnapshot) WalkedCloseCell() (r0 uintptr) {
 	q.s.ready()
-	e := q.s.a.WalkedCloseCell.find(0)
+	root := q.s.root
+	e := root.a.WalkedCloseCell.find(0)
 	if e != nil && e.eff != 0 {
-		q.s.used(e.eff)
+		root.used(e.eff)
 	}
 	if e == nil || !e.answered {
 		q.s.absent(snapWalkedCloseCell, 0)
@@ -1536,7 +1543,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.BigIntSole.put(0, eff, true, jitSnapAnsBigIntSole{r0, r1})
 	}
-	if jitSnapDerived&(1<<snapArrayProtos) == 0 {
+	if jitSnapDerived&(1<<snapArrayProtos) == 0 && s == s.root {
 		before := s.begin(fb.fb)
 		r0, r1 := fb.ArrayProtos()
 		eff := s.end(fb.fb, before)
@@ -1545,7 +1552,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.ArrayProtos.put(0, eff, true, jitSnapAnsArrayProtos{r0, r1})
 	}
-	if jitSnapDerived&(1<<snapGenNext) == 0 {
+	if jitSnapDerived&(1<<snapGenNext) == 0 && s == s.root {
 		before := s.begin(fb.fb)
 		r0 := fb.GenNext()
 		eff := s.end(fb.fb, before)
@@ -1554,7 +1561,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.GenNext.put(0, eff, true, jitSnapAnsGenNext{r0})
 	}
-	if jitSnapDerived&(1<<snapHasCache) == 0 {
+	if jitSnapDerived&(1<<snapHasCache) == 0 && s == s.root {
 		before := s.begin(fb.fb)
 		r0 := fb.HasCache()
 		eff := s.end(fb.fb, before)
@@ -1563,7 +1570,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.HasCache.put(0, eff, true, jitSnapAnsHasCache{r0})
 	}
-	if jitSnapDerived&(1<<snapKeyAtoms) == 0 {
+	if jitSnapDerived&(1<<snapKeyAtoms) == 0 && s == s.root {
 		before := s.begin(fb.fb)
 		r0, r1 := fb.KeyAtoms()
 		eff := s.end(fb.fb, before)
@@ -1572,7 +1579,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.KeyAtoms.put(0, eff, true, jitSnapAnsKeyAtoms{r0, r1})
 	}
-	if jitSnapDerived&(1<<snapMapNexts) == 0 {
+	if jitSnapDerived&(1<<snapMapNexts) == 0 && s == s.root {
 		before := s.begin(fb.fb)
 		r0 := fb.MapNexts()
 		eff := s.end(fb.fb, before)
@@ -1581,7 +1588,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.MapNexts.put(0, eff, true, jitSnapAnsMapNexts{r0})
 	}
-	if jitSnapDerived&(1<<snapTypeofCells) == 0 {
+	if jitSnapDerived&(1<<snapTypeofCells) == 0 && s == s.root {
 		before := s.begin(fb.fb)
 		r0, r1 := fb.TypeofCells()
 		eff := s.end(fb.fb, before)
@@ -1590,7 +1597,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.TypeofCells.put(0, eff, true, jitSnapAnsTypeofCells{r0, r1})
 	}
-	if jitSnapDerived&(1<<snapWalkedCloseCell) == 0 {
+	if jitSnapDerived&(1<<snapWalkedCloseCell) == 0 && s == s.root {
 		before := s.begin(fb.fb)
 		r0 := fb.WalkedCloseCell()
 		eff := s.end(fb.fb, before)

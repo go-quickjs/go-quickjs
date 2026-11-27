@@ -1455,7 +1455,12 @@ is under [The projection](#the-projection).
   (`jitRegSnapshotOf` of none, `program` binding it on the worker,
   `CellsPool` derived there): over Octane's functions 733 of 738 are, the
   other 5 taking a forwarder. The root's lowering on the worker is next,
-  with the lowering ahead retired.
+  with the lowering ahead retired. Of what stays on the goroutine, a
+  question costs about 0.2 µs of the asking itself, whatever the method:
+  the seven of no argument whose answer is the runtime's are asked of the
+  root alone and its nodes answer from its table, the questions of no
+  argument 4.5 µs a compile at the median and 7.0 at the mean to 3.0
+  and 3.9 (three runs each).
 - **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
   was run beside mir's scan on every compile, given the same function: an
   instruction for each value and the block's end, the frame states' uses

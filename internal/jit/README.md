@@ -838,7 +838,12 @@ PCs and searched by halves, the questions put out of order sorted once the
 asking is done), and what a question appended to the feedback's lists, taken
 back, is a slice of the snapshot's own lists (`jitSnapshot`'s `gained`),
 found by its index in the answer; boxed in a map by question, an answer's
-keeping had cost about as much as its asking. A method may instead be
+keeping had cost about as much as its asking. A method of no argument whose
+answer is the runtime's (`snapgen`'s `compileWide`: the realm's array
+prototypes, the generators' `next`, the caches native code reads) is asked
+of the compile's own function's snapshot alone, and its callees' answer
+from its table, its effect used as its: each had asked them again, about
+0.2 µs a question of the asking itself. A method may instead be
 derived on the worker (`jitSnapDerived`, `jit_snapderive.go`): the
 goroutine does not ask it at the PCs, but gathers once a snapshot -- the
 function's and each callee's -- a copy of what its answers are made of that
