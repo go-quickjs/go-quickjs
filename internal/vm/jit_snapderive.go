@@ -396,15 +396,9 @@ func (s *jitSnapshot) sinkOf() *jitFeedback {
 // lets go of none of while the compile is pending (holdsLink), and among
 // those a derivation's effects may name (endDerived).
 func (s *jitSnapshot) gatherLink(l *jitLink) *jitLink {
-	root := s.root
-	if _, ok := root.d.links[l]; ok {
-		return l
-	}
-	if root.d.links == nil {
-		root.d.links = map[*jitLink]struct{}{}
-	}
-	root.d.links[l] = struct{}{}
-	root.gained.links = append(root.gained.links, l)
+	// Kept as often as gathered: a gather keeps a closure's once, and the
+	// set of them is made where a derivation first asks it (derivedLinks).
+	s.root.gained.links = append(s.root.gained.links, l)
 	return l
 }
 
@@ -425,6 +419,16 @@ func (s *jitSnapshot) endDerived(sink *jitFeedback, before [2]jitSnapLens) int32
 func (s *jitSnapshot) derivedLinks(links []*jitLink, n int) {
 	if len(links) <= n {
 		return
+	}
+	root := s.root
+	if root.d.links == nil {
+		// The gathers' links (gatherLink), and those the questions asked
+		// on the runtime's goroutine took back: what the runtime holds
+		// while the job is pending (holdsLink).
+		root.d.links = make(map[*jitLink]struct{}, len(root.gained.links))
+		for _, l := range root.gained.links {
+			root.d.links[l] = struct{}{}
+		}
 	}
 	for _, l := range links[n:] {
 		if _, ok := s.root.d.links[l]; !ok {

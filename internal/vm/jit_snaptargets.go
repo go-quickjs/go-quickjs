@@ -164,6 +164,12 @@ type jitTargetReg struct {
 	cl   *closure
 	rc   *regCode
 	link *jitLink
+	// o, frc and f are the last facts of a target of cl the gather took
+	// (factsOf), where known.
+	known bool
+	o     *Object
+	frc   *regCode
+	f     jitCallFacts
 }
 
 // jitTargetConstruct is a construction's facts with o of argc arguments.
@@ -253,6 +259,11 @@ func jitTargetsGather(s *jitSnapshot, fb *jitRegFeedback) {
 		argc := int(w.X())
 		switch op {
 		case bytecode.RCallW, bytecode.RCallMW, bytecode.RCallWT, bytecode.RCallMWT:
+			if rpc < len(rc.Marks) && rc.Marks[rpc]&bytecode.RMarkTail != 0 {
+				// Made in constant space by the interpreter: no native
+				// call's target (nativeCalls).
+				continue
+			}
 			if !t.siteKnownAt(rpc, w, d.copied, l) {
 				// A site of two calls, which the facts do not hold: asked
 				// at every PC (jitTargetsAskedAt), as the asking asks it,
@@ -354,7 +365,9 @@ func jitTargetsGather(s *jitSnapshot, fb *jitRegFeedback) {
 			c := r.jitRegConstructOf(x.obj, argc)
 			t.constructs = append(t.constructs, jitTargetConstruct{x.obj, argc, c})
 			reg := t.regOf(s, r, x.cl)
-			t.facts = append(t.facts, jitTargetFacts{jitTargetKey{x.obj, x.cl, reg.rc}, r.jitRegFactsOf(x.obj, x.cl, reg.rc)})
+			if reg.rc != nil {
+				t.factsOf(r, reg, x.obj, reg.rc)
+			}
 			if c.ok && c.cl == x.cl && c.parent == x.parent && reg.rc != nil && reg.link == nil {
 				reg.link = s.gatherLink(r.jitState().regLinkOf(x.cl, reg.rc))
 			}
@@ -474,12 +487,10 @@ func (t *jitTargetsData) target(s *jitSnapshot, r *Runtime, o *Object, cl *closu
 		// None of no register code: no call of it is native
 		// (jitRegTargetFree), neither taken nor kept (jitCallCopy's
 		// target).
-		f = r.jitRegFactsOf(o, cl, rc)
-		t.facts = append(t.facts, jitTargetFacts{jitTargetKey{o, cl, rc}, f})
+		f = t.factsOf(r, reg, o, rc)
 	}
 	if rc != reg.rc && reg.rc != nil {
-		f = r.jitRegFactsOf(o, cl, reg.rc)
-		t.facts = append(t.facts, jitTargetFacts{jitTargetKey{o, cl, reg.rc}, f})
+		f = t.factsOf(r, reg, o, reg.rc)
 	}
 	if reg.link != nil || reg.rc == nil {
 		return
@@ -487,6 +498,21 @@ func (t *jitTargetsData) target(s *jitSnapshot, r *Runtime, o *Object, cl *closu
 	if f.callable(cl, reg.rc, argc, t.realm.quirks) || argc >= 1 && f.callable(cl, reg.rc, argc-1, t.realm.quirks) {
 		reg.link = s.gatherLink(r.jitState().regLinkOf(cl, reg.rc))
 	}
+}
+
+// factsOf is the facts of o, reg's closure's, of register code rc
+// (jitRegFactsOf), taken once a snapshot: reg keeps the last it took, of
+// the object most of a closure's calls call. They do not change while the
+// gather runs: nothing of the script's runs, and register code made
+// meanwhile is another rc.
+func (t *jitTargetsData) factsOf(r *Runtime, reg *jitTargetReg, o *Object, rc *regCode) jitCallFacts {
+	if reg.known && reg.o == o && reg.frc == rc {
+		return reg.f
+	}
+	f := r.jitRegFactsOf(o, reg.cl, rc)
+	t.facts = append(t.facts, jitTargetFacts{jitTargetKey{o, reg.cl, rc}, f})
+	reg.known, reg.o, reg.frc, reg.f = true, o, rc, f
+	return f
 }
 
 // regAtOf is the index in t's regs of cl's register code as the gather
