@@ -11,32 +11,12 @@ import (
 )
 
 var (
-	kernel32                  = syscall.NewLazyDLL("kernel32.dll")
-	queryPerformanceCounter   = kernel32.NewProc("QueryPerformanceCounter")
-	queryPerformanceFrequency = kernel32.NewProc("QueryPerformanceFrequency")
-	queryProcessCycleTime     = kernel32.NewProc("QueryProcessCycleTime")
-	queryThreadCycleTime      = kernel32.NewProc("QueryThreadCycleTime")
-	getCurrentThread          = kernel32.NewProc("GetCurrentThread")
-	getProcessMemoryInfo      = kernel32.NewProc("K32GetProcessMemoryInfo")
-	performanceFrequency      = performanceCount(queryPerformanceFrequency)
+	kernel32              = syscall.NewLazyDLL("kernel32.dll")
+	queryProcessCycleTime = kernel32.NewProc("QueryProcessCycleTime")
+	queryThreadCycleTime  = kernel32.NewProc("QueryThreadCycleTime")
+	getCurrentThread      = kernel32.NewProc("GetCurrentThread")
+	getProcessMemoryInfo  = kernel32.NewProc("K32GetProcessMemoryInfo")
 )
-
-// performanceCount is what one of the performance counter's functions gives.
-func performanceCount(p *syscall.LazyProc) int64 {
-	var c int64
-	if r, _, _ := syscall.SyscallN(p.Addr(), uintptr(unsafe.Pointer(&c))); r == 0 {
-		panic("worker: no performance counter")
-	}
-	return c
-}
-
-// clock is the time from some moment of the process's, read from the
-// performance counter: Go's own clock on Windows moves only at the system
-// timer's tick, every 0.5 or 15.6 ms.
-func clock() time.Duration {
-	c, f := performanceCount(queryPerformanceCounter), performanceFrequency
-	return time.Duration(c/f*1e9 + c%f*1e9/f)
-}
 
 // processCPU is the CPU time the process has used so far, every thread's,
 // in user and kernel mode: its cycles at the rate they are counted, which
