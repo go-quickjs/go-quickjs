@@ -564,6 +564,19 @@ tooling").
   process from a fresh copy (`-freshcopy`). A row that moved by a tenth
   between two single builds is timed again from fresh copies before it is
   believed.
+- **Alternated rounds do not average a file's draw out.** Windows gives
+  an image its base once for its file, and every run of that file loads
+  there until the system lets the image go, so two builds run directly in
+  alternated rounds compare two load addresses as many times over. Two
+  files of one program, their code and data the same bytes, timed
+  Octane's Typescript in the interpreter at 1,541 and 1,522 ms, medians
+  of six such rounds on a Ryzen 5 3600, and looked like a regression of
+  the commits between them. Four fresh copies of the slower file took
+  1,502 to 1,516 ms, and both files at the image base, each process from
+  a fresh copy, 1,520 and 1,519. On Windows a build is timed only that
+  way, at its image base and from a fresh copy -- the placements tool's
+  and the matrix's `-fixedbase` and `-freshcopy` -- never as the go
+  command made it.
 - **Single builds are for profiles, not verdicts.**
 - **An idle machine.** Check per-process CPU before a comparison, and run
   nothing else during one. `-parallel` gives each label its own level-3
