@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/regexp"
 )
 
@@ -42,22 +43,30 @@ func (f *jitRegFeedback) ExecReuse(pc int, fn uintptr) uint32 {
 
 // jitExecReuse is ExecReuse's answer.
 func jitExecReuse[_ any](f *jitRegFeedback, pc int, fn uintptr) uint32 {
-	fb := f.fb
-	r := fb.r
-	if fb.cl == nil || pc >= len(f.p.Origin) || r.regexpExecFn == nil || uintptr(unsafe.Pointer(r.regexpExecFn)) != fn {
+	cl := f.fb.cl
+	if cl == nil {
 		return 0
 	}
-	c := fb.cl.reg
-	if c == nil || c.rc != f.rc || !jitReuseOwn[struct{}](c) {
+	c := cl.reg
+	return jitExecReuseOf(c, c != nil && c.rc == f.rc && jitReuseOwn[struct{}](c), f.p, f.fb.r.regexpExecFn, pc, fn)
+}
+
+// jitExecReuseOf is ExecReuse's answer at the program's instruction pc of
+// p, the closure's register code lowered, of fn, the leaf its Leaf
+// answered: c is that register code, own whether it is the program's and
+// its function's (jitReuseOwn), execFn the realm's exec -- as the feedback
+// reads them live, or a snapshot's gather took them.
+func jitExecReuseOf(c *regCode, own bool, p *ir.Program, execFn *Object, pc int, fn uintptr) uint32 {
+	if c == nil || pc >= len(p.Origin) || execFn == nil || uintptr(unsafe.Pointer(execFn)) != fn || !own {
 		return 0
 	}
-	rpc := int(f.p.Origin[pc])
+	rpc := int(p.Origin[pc])
 	site := jitReuseSite[struct{}](c, rpc)
 	if site == nil || rpc >= 1<<30 {
 		return 0
 	}
 	a := uint32(rpc+1) << 1
-	if site.strs && (site.s < 0 || !f.p.IsCaptured(site.s) && !f.p.LiveAt(pc+1, site.s)) {
+	if site.strs && (site.s < 0 || !p.IsCaptured(site.s) && !p.LiveAt(pc+1, site.s)) {
 		a |= 1
 	}
 	return a

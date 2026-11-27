@@ -82,6 +82,10 @@ func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 		k := fb.LeafKind(fn)
 		h := fb.fb.r.jitTest.snapAsked
 		for _, c := range all {
+			if !c.d.gathered {
+				// A callee no site inlines (nestReg), asked nothing.
+				continue
+			}
 			if h != nil {
 				h(c, snapLeafKind, int64(fn), true, []any{k})
 			}

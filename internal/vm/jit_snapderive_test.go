@@ -169,6 +169,11 @@ func TestJITSnapshotDerivesFromItsCopy(t *testing.T) {
 				if (jitSnapDerived&^jitSnapAskedAtGather)&(1<<m) == 0 || jitRegSnapMethods&(1<<m) == 0 || jitRegSnapStatePC&(1<<m) != 0 {
 					continue
 				}
+				if reflect.ValueOf(s.rf).MethodByName(jitSnapNames[m]).Type().NumIn() > 1 {
+					// A leaf's call's (CreatePool, ExecReuse), asked by the
+					// leaf its PC's Leaf answered: TestJITSnapshotAnswersAsAsked's.
+					continue
+				}
 				if !jitSnapAtPC[m] {
 					if reflect.ValueOf(s.rf).MethodByName(jitSnapNames[m]).Type().NumIn() == 0 {
 						ask(m, 0)

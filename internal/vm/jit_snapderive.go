@@ -60,6 +60,8 @@ type jitSnapData struct {
 	prop jitPropData
 	// consts is the constants' and captured bindings' (jit_snapconst.go).
 	consts jitConstData
+	// leaf is the leaves' (jit_snapleaf.go).
+	leaf jitLeafData
 	// native is the learning's methods' (jit_snapnative.go), calls the
 	// calls' (jit_snapcalls.go).
 	native jitNativeData

@@ -135,6 +135,11 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 					unbound[snapStringProperty]++
 				}
 			}
+			for _, c := range s.d.leaf.creates {
+				if !c.bound {
+					unbound[snapCreatePool]++
+				}
+			}
 			if s.d.native.unknownUnasked {
 				unbound[snapOperands]++
 			}
@@ -207,6 +212,7 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 	if functions == 0 || compared == 0 {
 		t.Fatalf("%d functions, %d answers compared", functions, compared)
 	}
+	t.Logf("leaves: CreatePool's pools made by register pc at no PC a Leaf answers: %d", unbound[snapCreatePool])
 	t.Logf("%d functions, %d questions compared; asked by register pc at no PC: %d Accessor, %d StringProperty; made by register pc at no PC: %d NativeCalls, %d Operands",
 		functions, compared, unbound[snapAccessor], unbound[snapStringProperty], unbound[snapNativeCalls], unbound[snapOperands])
 }

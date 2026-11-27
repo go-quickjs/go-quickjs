@@ -1323,65 +1323,8 @@ func regSoleRegisters(fn *bytecode.Function, rc *bytecode.RegCode, p *ir.Program
 // leaf of the realm's that native code calls without a frame (jitLeafOp):
 // answered from the interpreter's cache at the first compile.
 func (f *jitRegFeedback) Leaf(pc int) (uintptr, bool) {
-	w, op, ok := f.at(pc)
-	if ok && op == ir.Host && f.p.Code[pc].Window && w.Op() == bytecode.RLit {
-		// regexp_lit's call: the realm's exec or test, read where it is the
-		// built-in (regexpLitMethod), a leaf; the literal's RegExp, from
-		// the pool, nothing keeps.
-		m := f.fb.r.regexpLitMethod(w.X()&bytecode.RLitTest != 0)
-		if m == nil || !f.regLitFed(pc) {
-			return 0, false
-		}
-		f.fb.keep().holders = append(f.fb.keep().holders, m)
-		return uintptr(unsafe.Pointer(m)), true
-	}
-	call := jitRegCallOp(w.Op())
-	if !ok || op != ir.Host || !f.p.Code[pc].Window || call != bytecode.RCallW && call != bytecode.RCallMW {
-		return 0, false
-	}
-	var marks uint8
-	if rpc := int(f.p.Origin[pc]); rpc < len(f.rc.Marks) {
-		marks = f.rc.Marks[rpc]
-	}
-	if marks&bytecode.RMarkTail != 0 {
-		return 0, false
-	}
-	callee, cl, ok := f.callTarget(pc)
-	if !ok || cl != nil {
-		return 0, false
-	}
-	fd := callee.fn()
-	if fd == nil || fd.native == nil || fd.bound || fd.realm != nil && fd.realm != f.fb.r.Realm {
-		return 0, false
-	}
-	// RegExp's exec and test too -- a literal's call among them
-	// (RMarkLitRecv), its RegExp then from the pool (regexp_lit's lowering,
-	// compile's regexpLit), one whose value nothing reads but its truth
-	// (RMarkDead), which the leaf makes whole, and an exec whose array the
-	// interpreter may make again in the memory of the last (RMarkReuse),
-	// which the leaf makes anew: the old array, which only the local the
-	// new one replaces could reach, the interpreter's next call may make
-	// again, its slots' check finding the local holds it no more.
-	regexp := fd.elemOp == elemRegExpExec || fd.elemOp == elemRegExpTest
-	// String.prototype.replace of two arguments, s.replace(re, ""), whose
-	// leaf checks at each call that they are a RegExp it replaces with
-	// directly and a string (jitReplaceLeaf) -- a literal's too, which the
-	// call makes its first argument (RMarkLitArg), natively from the
-	// literal's pool (lowerreg's literal before the call), the leaf giving
-	// it back (ssa.CallSite's Give, jitLeafForm's giveArg), where its
-	// template is a string constant: a function's, which the leaf's check
-	// refuses, would leave native code at every call the call of Go makes
-	// now.
-	replace := callee == f.fb.r.strReplaceFn && call == bytecode.RCallMW && w.X() == 2 &&
-		(marks&bytecode.RMarkLitArg == 0 || f.regStringBefore(int(f.p.Origin[pc]), int(w.A())+3))
-	// Array.prototype.push of other than one value: one value's push native
-	// code appends itself.
-	push := fd.elemOp == elemPush && w.X() != 1
-	if !jitLeafOp(fd.elemOp) && !regexp && !replace && !push {
-		return 0, false
-	}
-	f.fb.keep().holders = append(f.fb.keep().holders, callee)
-	return uintptr(unsafe.Pointer(callee)), true
+	src := f.leafSrc()
+	return jitLeafOf(&src, pc, f.fb.keep())
 }
 
 // ViaLeaf is ssa.ViaLeafFeedback's: for the method call at the program's
@@ -1434,26 +1377,6 @@ func (q *jitCallCtx) viaLeaf(pc int) (uintptr, uintptr, bool) {
 func jitViaLeafCallable(o *Object, realm *Realm) bool {
 	fd := o.fn()
 	return fd != nil && fd.native != nil && !fd.bound && jitLeafOp(fd.elemOp) && (fd.realm == nil || fd.realm == realm)
-}
-
-// regStringBefore reports whether the register instruction before
-// register pc rpc loads a string constant into register reg: a call's
-// last argument, made right before it.
-func (f *jitRegFeedback) regStringBefore(rpc, reg int) bool {
-	if rpc < 1 || rpc > len(f.rc.Code) {
-		return false
-	}
-	w := f.rc.Code[rpc-1]
-	switch {
-	case int(w.A()) != reg:
-		return false
-	case w.Op() == bytecode.RLoadEmpty:
-		return true
-	case w.Op() == bytecode.RLoadConst:
-		consts := regConsts(f.fb.fn, f.rc)
-		return int(w.BC()) < len(consts) && consts[w.BC()].Kind == bytecode.ConstString
-	}
-	return false
 }
 
 // methodCall is the built-in the call at the program's instruction pc --
