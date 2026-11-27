@@ -2675,14 +2675,16 @@ Each arena keeps chunks for the most any of those compiles reached
 move schedule's, the exits' -- go once they hold more than twice the most
 any of them used. So a big compile's tables serve the next as big without
 being made again, and go once a whole cycle has passed with none as big.
-`jit.PutWorkspace` passes the pool's count of cycles. A pooled workspace
-goes whole after two idle cycles, or at the return after a turn that left
-it unused (`DropIdleWorkspaces`). Counted by jobs, the last sixteen, a big
-compile's chunks had gone as it ended, and the next as big made them
-again: half of the garbage Typescript's compiles made. The builder
-makes an instruction's guards with a method of a value on the stack
-(`ssa`'s `guarder`), not a closure it gives its helpers: a variadic call
-through a func value puts its arguments on the heap. A compile's
+`jit.PutWorkspace` and `jit.ReturnWorkspace` stamp a workspace with the
+pool's count of cycles as it is given back, and its rewind -- there, or on
+the worker that takes one given back unrewound -- passes that. A pooled
+workspace goes whole after two idle cycles, or at the return after a turn
+that left it unused (`DropIdleWorkspaces`). Counted by jobs, the last
+sixteen, a big compile's chunks had gone as it ended, and the next as big
+made them again: half of the garbage Typescript's compiles made. The
+builder makes an instruction's guards with a method of a value on the
+stack (`ssa`'s `guarder`), not a closure it gives its helpers: a variadic
+call through a func value puts its arguments on the heap. A compile's
 lists are the workspace's too: the exits' descriptions, which its code
 keeps, are copied out at their length, and the calls of Go whose refusals
 branch to a label are scratch on amd64, as on arm64.

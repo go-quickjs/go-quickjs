@@ -138,7 +138,22 @@ func pooled(w *Workspace) bool {
 func TestWorkspaceReturnedUnrewound(t *testing.T) {
 	clean, dirty := GetWorkspace(), GetWorkspace()
 	PutWorkspace(clean)
+	// Past the collector's first cycle, so that a cycle never stamped
+	// shows: the unrewound one is stamped with the cycle it is given back
+	// in, which its rewind (ssa's and mir's RewindAt) and its age count
+	// from, as a rewound one is.
+	for i := 0; i < 100 && workCycle.Load() == 0; i++ {
+		runtime.GC()
+		time.Sleep(time.Millisecond)
+	}
+	c0 := workCycle.Load()
+	if c0 == 0 {
+		t.Fatal("no collector cycle counted")
+	}
 	ReturnWorkspace(dirty)
+	if dirty.cycle < c0 {
+		t.Fatalf("given back unrewound at cycle %d, stamped %d", c0, dirty.cycle)
+	}
 	if !pooled(clean) || !pooled(dirty) || !dirty.dirty || clean.dirty {
 		t.Fatal("not pooled as given back")
 	}
