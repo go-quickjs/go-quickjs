@@ -273,7 +273,9 @@ func jitTargetsGather(s *jitSnapshot, fb *jitRegFeedback) {
 			}
 			method := op.MethodCall()
 			if site := int(w.C()); site < len(d.copied) {
-				if e := &d.copied[site]; e.callee != nil && e.cl != nil {
+				if e := &d.copied[site]; jitRegCallKind(e) || e.kind&regCallThrough != 0 && method && argc >= 1 && e.cl != nil && e.rc != nil {
+					// Only what callTargets takes of the cache: a callee
+					// the call enters, or G of G.call(...).
 					t.target(s, r, e.callee, e.cl, e.rc, argc)
 				} else if method && argc >= 1 && e.callee != nil && e.kind&^regCallMarks == regCallNative {
 					if fd := e.callee.fn(); fd != nil && fd.elemOp == elemPush {
