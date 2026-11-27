@@ -2277,9 +2277,26 @@ func jitCaptured(fn *bytecode.Function) int {
 	return n
 }
 
-// jitCellsOf is the context's cells (abi.Context's Cells), fn's code's.
+// jitCellsOf is the context's cells (abi.Context's Cells), fn's code's,
+// which Go then holds (jitCellsHeld).
 func jitCellsOf(ctx *abi.Context, fn *bytecode.Function) []*upvalue {
+	jitCellsHeld(ctx)
 	return unsafe.Slice((**upvalue)(ctx.Cells), jitCaptured(fn))
+}
+
+// jitCellsHeld marks ctx's cells (abi.Context's Cells) as held past the
+// code's return, where they would go back to their pool as it returns
+// natively (ssa.Func's CellsKept, abi.Context's CellsKept), by every path
+// of Go's that has them: the cells Go made (jitMakeCells,
+// jitRegMakeCells), not the pool's; a closure Go makes of them, or a
+// scope's end, on the frame (jitRegCellsClosure, jitCellsClosure); any
+// operation on the frame (jitRegFrameOp), an arguments object among them;
+// the frame Go makes of the code's level, its cells opened on its window
+// (jitRegReopenCells). Native code sets it too, for a closure it makes of
+// them (mir's closureTake), and clears it where it takes them from the
+// pool (mir's cellsTake).
+func jitCellsHeld(ctx *abi.Context) {
+	ctx.CellsKept = 1
 }
 
 // jitMakeCells makes, at an entry of code whose captured locals are in
@@ -2317,6 +2334,7 @@ func (r *Runtime) jitMakeCells(ctx *abi.Context) bool {
 		k++
 	}
 	ctx.Cells = unsafe.Pointer(unsafe.SliceData(cells))
+	jitCellsHeld(ctx)
 	return true
 }
 

@@ -1737,8 +1737,16 @@ is under [The projection](#the-projection).
   from their pools natively, and a pool run out filled again by a call of
   Go that finds no frame (`poolRefill`): Earley's operations on a frame
   (`jitRegFrameOp`), in 30 runs once warm, fell from 588,835 to 75,985
-  with the arguments, and to 416 with the cells and refills. Not yet
-  timed. Next: arguments objects and rest arrays made natively.
+  with the arguments, and to 416 with the cells and refills. Timed on a
+  Ryzen 5 3600 (5 rounds, fresh processes): Earley with the JIT 76.6 ms
+  at the base, 63.6 with the arguments, 51.9 with the cells (1.48x; the
+  projection was 1.7-2.1x), against the interpreter's 49.1; EarleyBoyer
+  -6.3%, the V8 suite's total -4.0%. What was left was allocation: the
+  JIT made 26% more objects than the interpreter on Earley, its entries'
+  cells, taken whether or not a closure took them. They now go back to
+  their pool where none did (`ssa.Func`'s `CellsKept`): 2% more. Next:
+  that timed, closures filled more cheaply, then arguments objects and
+  rest arrays made natively.
 
 ### Stage 4: inlining, loops and redundancy
 

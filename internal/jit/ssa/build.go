@@ -4587,15 +4587,24 @@ func (b *builder) inlineCallsOf(p *ir.Program) ([]int, bool) {
 // is a loop's callback it inlines and does not make (planCallback's
 // made), whose frame Go makes, the closure with it, only at an exit,
 // after which the frame is Go's and returns through Go; and no inlined
-// callee makes a closure (InlineCalls).
+// callee makes a closure (InlineCalls). Code that makes other closures
+// gives them back where its entry made none of them (Func's CellsKept):
+// EarleyBoyer's deriv_trees, which takes ten cells at every entry and
+// makes its closure on one path, had made the JIT allocate a third more
+// than the interpreter. Not code that suspends, a generator's or an async
+// function's.
 func (b *builder) cellsBack() {
 	p := b.root.p
-	if !p.Cells || len(b.made) == 0 {
+	if !p.Cells {
 		return
 	}
+	kept := len(b.made) == 0
 	for pc, in := range p.Code {
-		if in.Op == ir.Closure && reachable(p, pc) && b.made[pc] == 0 {
+		if in.Op == ir.Host && (in.Suspend || in.Await) {
 			return
+		}
+		if in.Op == ir.Closure && reachable(p, pc) && b.made[pc] == 0 {
+			kept = true
 		}
 	}
 	fb, ok := b.fb.(CellsFeedback)
@@ -4603,7 +4612,7 @@ func (b *builder) cellsBack() {
 		return
 	}
 	if pool, cells, ok := fb.CellsPool(); ok {
-		b.f.CellsBack, b.f.CellsPool, b.f.CellsCount = true, pool, len(cells)
+		b.f.CellsBack, b.f.CellsPool, b.f.CellsCount, b.f.CellsKept = true, pool, len(cells), kept
 	}
 }
 

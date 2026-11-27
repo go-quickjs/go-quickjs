@@ -1324,6 +1324,14 @@ type Func struct {
 	CellsBack  bool
 	CellsPool  uintptr
 	CellsCount int
+	// CellsKept, of CellsBack code that makes closures of its cells, says
+	// whether they go back is decided as it returns, by its context's
+	// CellsKept (abi.Context's), which a closure made of them sets, as
+	// Go does where it has them: an entry no closure took the cells of
+	// gives them back, as V8's context of a function that made no closure
+	// dies young. Not a generator's or an async function's code, whose
+	// cells live across a suspension.
+	CellsKept bool
 	// HomesEnd is the slot past the homes of the objects the code does
 	// not make (escape.go), which an exit writes past the frame's slots and
 	// Go makes the objects of: 0 for none. The frame takes them, as it

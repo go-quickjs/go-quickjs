@@ -89,6 +89,9 @@ func (r *Runtime) jitRegIsFrameOp(ctx *abi.Context) bool {
 // code leaves to its exit there, where Go runs the register instruction
 // on the frame it makes.
 func (r *Runtime) jitRegFrameOp(ctx *abi.Context) bool {
+	// Whatever it makes may hold the frame's cells: a closure, an
+	// arguments object, the frame (jitCellsHeld).
+	jitCellsHeld(ctx)
 	run, level, ok := r.jitRegFrameRun(ctx)
 	if !ok || run.e == nil || run.e.p == nil {
 		return false
@@ -314,6 +317,7 @@ func (r *Runtime) jitRegMakeCells(ctx *abi.Context, f *frame, e *jitRegEntry, wb
 		cells[k] = u
 	}
 	ctx.Cells = unsafe.Pointer(unsafe.SliceData(cells))
+	jitCellsHeld(ctx)
 	if !level {
 		ctx.Open = uint64(len(f.openUpvalues))
 	}
@@ -328,6 +332,7 @@ func (r *Runtime) jitRegMakeCells(ctx *abi.Context, f *frame, e *jitRegEntry, wb
 // run's own frame, the old ones closed -- as mir's cellsClose takes them
 // natively.
 func (r *Runtime) jitRegCellsClosure(ctx *abi.Context, f *frame, c *regCode, e *jitRegEntry, wb int, level bool, i int) bool {
+	jitCellsHeld(ctx)
 	regs := jitRegCapturedRegs(e.p.Captured)
 	cells := unsafe.Slice((**upvalue)(ctx.Cells), len(regs))
 	if ssa.GoOp(ctx.GoOp&0xff) == ssa.GoClose {
@@ -446,6 +451,7 @@ func keepClosure(ctx *abi.Context, v Value) {
 // registers -- cells native code closed at a scope's end -- the frame's no
 // more.
 func (r *Runtime) jitRegReopenCells(f *frame, e *jitRegEntry, wb int, ctx *abi.Context, run bool) {
+	jitCellsHeld(ctx)
 	if ctx.Cells == nil || e == nil || e.p == nil || wb+e.p.Regs > len(r.stack) {
 		return
 	}

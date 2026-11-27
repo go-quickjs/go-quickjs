@@ -1050,7 +1050,7 @@ func (c *compiler) returnFast(x *ssa.Value) {
 	if !c.retTailUsed {
 		c.retTail, c.retTailUsed = c.a.NewLabel(), true
 		c.a.Bind(c.retTail)
-		if c.f.CellsBack {
+		if c.f.CellsBack && !(c.f.CellsKept && c.f.GenEntry) {
 			c.cellsBack()
 		}
 		c.returnTail()
@@ -1071,6 +1071,12 @@ func (c *compiler) returnFast(x *ssa.Value) {
 func (c *compiler) cellsBack() {
 	const block, pool, count, cell, word, at = amd64.R8, amd64.R9, amd64.R10, amd64.R12, amd64.R13, amd64.R15
 	skip, marking := c.a.NewLabel(), c.a.NewLabel()
+	if c.f.CellsKept {
+		// Not where something may hold them (abi.Context's CellsKept).
+		c.a.Load(block, regCtx, abi.OffCellsKept)
+		c.a.Op(amd64.Test, block, block, true)
+		c.a.Jcc(amd64.CondNE, skip)
+	}
 	c.a.Load(block, regCtx, abi.OffCells)
 	c.a.Op(amd64.Test, block, block, true)
 	c.a.Jcc(amd64.CondE, skip)
@@ -2823,7 +2829,7 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard guardTo) {
 		// Natively from the function's pool of cells where it can be
 		// (cellsClose), by Go otherwise, which fills the pool again.
 		slow, join := c.a.NewLabel(), c.a.NewLabel()
-		if c.f.CellsBack {
+		if c.f.CellsBack && !c.f.CellsKept {
 			// Nothing in a native call's frame of code whose cells go back
 			// to their pool (ssa.Func's CellsBack): no closure has taken
 			// them, to keep the old ones. A frame Go entered the code with
@@ -3373,6 +3379,11 @@ func (c *compiler) superGuards(t *ssa.CallSite, x *ssa.Value, guard guardTo) {
 // arrow's this into what it captured. Anything else goes to slow, where Go
 // makes it. It uses every scratch register.
 func (c *compiler) closureTake(v *ssa.Value, site *ssa.CallSite, slow amd64.Label) {
+	if c.f.CellsKept && capturesCells(site) {
+		// The code's cells held past its return (abi.Context's CellsKept),
+		// made here or by Go.
+		c.storeImm(regCtx, abi.OffCellsKept, 1, scratchA)
+	}
 	marked, done, top := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
 	c.a.Bind(top)
 	empty := c.poolRefill(v, site.Pool, top, slow)
@@ -3422,6 +3433,17 @@ func (c *compiler) lexThisAt(site *ssa.CallSite) (amd64.Reg, int32) {
 		return regLocals, c.enc.ValueSize
 	}
 	return regCtx, abi.OffThis
+}
+
+// capturesCells reports whether closure site's closure captures a cell of
+// the code's own (ssa.CallSite's Captures, |1 its cells').
+func capturesCells(site *ssa.CallSite) bool {
+	for _, x := range site.Captures {
+		if x&1 != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // poolRefill is where a take from the pool at pool -- a closure's
@@ -3487,6 +3509,10 @@ func (c *compiler) cellsTake(v *ssa.Value, site *ssa.CallSite, slow amd64.Label)
 	c.a.Load(scratchC, scratchB, abi.OffPoolObjects)
 	c.storeImm(scratchB, abi.OffPoolObjects, 0, scratchA)
 	c.a.Store(regCtx, abi.OffCells, scratchC)
+	if c.f.CellsKept {
+		// Fresh: nothing holds them yet.
+		c.storeImm(regCtx, abi.OffCellsKept, 0, scratchA)
+	}
 	vs, n := c.enc.ValueSize, int32(len(site.Captures))
 	for k, x := range site.Captures {
 		at := 8*n + int32(k)*c.enc.UpvalueSize + c.enc.UpvalueClosed
@@ -3647,6 +3673,9 @@ func (c *compiler) cellsTakeMarking(site *ssa.CallSite, slow, empty amd64.Label)
 	c.a.Op(amd64.Add, scratchB, scratchA, true)
 	c.a.Load(scratchC, scratchB, abi.OffPoolObjects)
 	c.a.Store(regCtx, abi.OffCells, scratchC)
+	if c.f.CellsKept {
+		c.storeImm(regCtx, abi.OffCellsKept, 0, scratchA)
+	}
 	c.a.Lea(scratchA, scratchB, abi.OffPoolObjects)
 	c.movImm(scratchC, 0)
 	c.refStore()

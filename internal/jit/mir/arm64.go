@@ -1107,7 +1107,7 @@ func (c *a64Compiler) returnFast(x *ssa.Value) {
 	if !c.retTailUsed {
 		c.retTail, c.retTailUsed = c.a.NewLabel(), true
 		c.a.Bind(c.retTail)
-		if c.f.CellsBack {
+		if c.f.CellsBack && !(c.f.CellsKept && c.f.GenEntry) {
 			c.cellsBack()
 		}
 		c.returnTail()
@@ -1124,6 +1124,10 @@ func (c *a64Compiler) returnFast(x *ssa.Value) {
 func (c *a64Compiler) cellsBack() {
 	block, pool, count, cell, word, at := arm64.Reg(3), arm64.Reg(4), arm64.Reg(5), arm64.Reg(6), arm64.Reg(7), arm64.Reg(8)
 	skip, marking := c.a.NewLabel(), c.a.NewLabel()
+	if c.f.CellsKept {
+		c.a.Load(block, a64Ctx, abi.OffCellsKept)
+		c.a.Cbnz(block, skip, true)
+	}
 	c.a.Load(block, a64Ctx, abi.OffCells)
 	c.a.Cbz(block, skip, true)
 	c.movImm(pool, uint64(c.f.CellsPool))
@@ -5785,7 +5789,7 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard a64Guard) {
 		// can be, by Go otherwise; nothing in a native call's frame of code
 		// whose cells go back to their pool.
 		slow, join := c.a.NewLabel(), c.a.NewLabel()
-		if c.f.CellsBack {
+		if c.f.CellsBack && !c.f.CellsKept {
 			c.a.Load(a64A, a64Ctx, abi.OffLive)
 			c.a.CmpImm(a64A, abi.LiveCall, true)
 			c.a.BCond(arm64.EQ, join)
@@ -5944,6 +5948,9 @@ func (c *a64Compiler) cellsTake(v *ssa.Value, site *ssa.CallSite, slow arm64.Lab
 	c.a.Load(a64C, a64B, abi.OffPoolObjects)
 	c.a.Store(a64B, abi.OffPoolObjects, arm64.ZR)
 	c.a.Store(a64Ctx, abi.OffCells, a64C)
+	if c.f.CellsKept {
+		c.a.Store(a64Ctx, abi.OffCellsKept, arm64.ZR)
+	}
 	vs, n := c.enc.ValueSize, int32(len(site.Captures))
 	for k, x := range site.Captures {
 		at := 8*n + int32(k)*c.enc.UpvalueSize + c.enc.UpvalueClosed
@@ -6076,6 +6083,9 @@ func (c *a64Compiler) cellsTakeMarking(site *ssa.CallSite, slow, empty arm64.Lab
 	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
 	c.a.Load(a64C, a64B, abi.OffPoolObjects)
 	c.a.Store(a64Ctx, abi.OffCells, a64C)
+	if c.f.CellsKept {
+		c.a.Store(a64Ctx, abi.OffCellsKept, arm64.ZR)
+	}
 	c.a.AddImm(a64A, a64B, int64(abi.OffPoolObjects), true)
 	c.movImm(a64C, 0)
 	c.refStore()
@@ -6138,6 +6148,10 @@ func (c *a64Compiler) closureTakeMarking(v *ssa.Value, site *ssa.CallSite, empty
 }
 
 func (c *a64Compiler) closureTake(v *ssa.Value, site *ssa.CallSite, slow arm64.Label) {
+	if c.f.CellsKept && capturesCells(site) {
+		c.movImm(a64A, 1)
+		c.a.Store(a64Ctx, abi.OffCellsKept, a64A)
+	}
 	marked, done, top := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
 	c.a.Bind(top)
 	empty := c.poolRefill(v, site.Pool, top, slow)

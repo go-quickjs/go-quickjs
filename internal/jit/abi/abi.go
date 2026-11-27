@@ -509,6 +509,13 @@ type Context struct {
 	// code's entry (ssa.GoCells) and a native call clears for its callee.
 	// Native code only reads them.
 	Cells unsafe.Pointer
+	// CellsKept, nonzero, says something may hold Cells' cells past the
+	// code's return, where they would otherwise go back to their pool as
+	// it returns natively (ssa.Func's CellsKept): a closure native code
+	// made of them, or Go, which had them -- the cells made, a closure, an
+	// operation on the frame, the frame made of them. Native code clears it
+	// where it takes the cells from their pool.
+	CellsKept uint64
 	// Records counts the Record entries an exit filled. Every other slot of
 	// its state is in the frame already.
 	Records uint64
@@ -1246,6 +1253,7 @@ var (
 	OffOpen          = int32(unsafe.Offsetof(Context{}.Open))
 	OffLoop          = int32(unsafe.Offsetof(Context{}.Loop))
 	OffCells         = int32(unsafe.Offsetof(Context{}.Cells))
+	OffCellsKept     = int32(unsafe.Offsetof(Context{}.CellsKept))
 	OffCallTarget    = int32(unsafe.Offsetof(Context{}.CallTarget))
 	OffCallLink      = int32(unsafe.Offsetof(Context{}.CallLink))
 	OffCallTable     = int32(unsafe.Offsetof(Context{}.CallTable))

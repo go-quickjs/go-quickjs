@@ -2047,7 +2047,19 @@ index; one that leaves too often has the callback called natively again.
 Where every closure the code makes is such a callback, a native call's frame
 gives its cells back to their pool as it returns (`ssa.Func`'s `CellsBack`),
 and a scope's end gives it none fresh: nothing else can hold them, as V8's
-escape analysis leaves a context only such closures read unmade.
+escape analysis leaves a context only such closures read unmade. Code that
+makes other closures gives them back too where the invocation made none of
+them (`ssa.Func`'s `CellsKept`), decided as it returns by its context's
+`CellsKept`: cleared where native code takes the cells from their pool
+(mir's `cellsTake`), set by a closure native code makes of them
+(`closureTake`) and by every path of Go's that has them (`jitCellsHeld`) --
+the cells Go made, a closure or a scope's end Go makes on the frame, any
+operation on the frame, the frame made of the code's level with its cells
+opened on its window. Code that suspends, a generator's or an async
+function's, gives none back; a function with a direct eval is no native
+callee. EarleyBoyer's `deriv_trees` takes ten cells at every entry and
+makes its closure on one path: the JIT had allocated a quarter more objects
+than the interpreter on Earley, 2% more since.
 
 Register code's loop is a `call_method_w` its code's calls of Go have made
 of such a built-in on an array of the realm's (`jitRegForEachSeen`), the
