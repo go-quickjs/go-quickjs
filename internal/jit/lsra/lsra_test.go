@@ -1217,6 +1217,7 @@ func TestWalkMethods(t *testing.T) {
 		{"sortList", func(c *Config) { c.sortList = true }},
 		{"alwaysTest", func(c *Config) { c.alwaysTest = true }},
 		{"webHeap", func(c *Config) { c.webHeap = true }},
+		{"partHints", func(c *Config) { c.partHints = true }},
 		{"slotHeap", func(c *Config) { c.slotHeap = true }},
 	}
 	var al, old Allocator

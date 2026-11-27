@@ -291,6 +291,10 @@ type Config struct {
 	// the webs, which compares two by going to each, for the tests that
 	// compare it with the heap of their starts and members (partHeap).
 	webHeap bool
+	// partHints has each part of a web taken apart hinted to the web's hints
+	// and all its parts in one list, walked whole, for the tests that
+	// compare it with walking only the parts that have had a register.
+	partHints bool
 	// slotHeap has the slots' scan keep the ends of the ranges that give the
 	// slots their keys in a heap, for the tests that compare it with
 	// keeping them by position.

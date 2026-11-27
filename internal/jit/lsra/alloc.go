@@ -98,8 +98,22 @@ type web struct {
 	// owned says ranges is its own, not a register's, and may grow in
 	// place.
 	owned bool
+	// For a part of a web taken apart, its web's parts (group), which it
+	// is hinted to after its hints, and its index among them (gi).
+	gi    int32
+	group *partGroup
 	// sp is what splitting knows of it, once it is planned: nil before.
 	sp *webSplit
+}
+
+// partGroup is the parts of a web taken apart, in the order of its
+// members, each hinted to all of them; held are the indices of those that
+// have taken a register, in order. A part has a register only once it is
+// scanned: the first of them that is in a register free for one scanned
+// is the first of those held.
+type partGroup struct {
+	parts []*web
+	held  []int32
 }
 
 // webSplit is what splitting knows of a web. holes are where it gives its
@@ -322,6 +336,7 @@ type Allocator struct {
 	sortList     bool
 	alwaysTest   bool
 	webHeap      bool
+	partHints    bool
 	maxPos       int32
 	evKnown      bool
 	blocksKnown  bool
@@ -333,8 +348,10 @@ type Allocator struct {
 	i32s  arena[int32]
 	f64s  arena[float64]
 	pool  chunks[web]
-	// spPool is the webs' webSplits.
+	// spPool is the webs' webSplits, groups the webs taken apart's
+	// partGroups.
 	spPool chunks[webSplit]
+	groups chunks[partGroup]
 }
 
 // keyedMove is a move of a split register and its key: a block and an
@@ -402,6 +419,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.f64s.reset()
 	al.pool.reset()
 	al.spPool.reset()
+	al.groups.reset()
 	// Splitting needs a place for each edge's moves (Result.Edge): a
 	// function with a critical edge is allocated without (below).
 	al.f, al.evKnown, al.blocksKnown, al.kindsKnown = f, false, false, false
@@ -409,6 +427,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.displace, al.mutateHoles, al.oneByOne, al.twoPass, al.plainLists, al.markPass = cfg.Displace, cfg.mutateHoles, cfg.oneByOne, cfg.twoPass, cfg.plainLists, cfg.markPass
 	al.hintPass, al.blockByBlock, al.mergeAll, al.regByReg, al.phiWalks = cfg.hintPass, cfg.blockByBlock, cfg.mergeAll, cfg.regByReg, cfg.phiWalks
 	al.searchPreds, al.rangeLists, al.sortList, al.alwaysTest, al.webHeap = cfg.searchPreds, cfg.rangeLists, cfg.sortList, cfg.alwaysTest, cfg.webHeap
+	al.partHints = cfg.partHints
 
 	// Liveness, of the registers that may be live across a block's
 	// boundary -- a phi's, a phi's argument, one used in a block other
@@ -1144,10 +1163,19 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 				webs[m] = p
 				ps = append(ps, p)
 			}
-			// The parts share their hints, which nothing changes after.
+			// The parts share their hints, which nothing changes after: the
+			// web's, then the parts, which they are hinted to by the parts
+			// that have had a register (partGroup); with Config.partHints,
+			// in their one list.
 			hints := append(append(al.hints.take(len(w.hints)+len(ps)), w.hints...), ps...)
-			for _, p := range ps {
-				p.hints = hints
+			var g *partGroup
+			if !al.partHints {
+				g = al.groups.fill()
+				*g = partGroup{parts: hints[len(w.hints):]}
+				hints = hints[:len(w.hints)]
+			}
+			for k, p := range ps {
+				p.hints, p.group, p.gi = hints, g, int32(k)
 				if al.webHeap {
 					heap.Push(&parts, p)
 				} else {
@@ -1248,6 +1276,14 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 				if h.reg >= 0 && used&(1<<h.reg) == 0 {
 					reg = h.reg
 					break
+				}
+			}
+			if g := cur.group; reg < 0 && g != nil {
+				for _, k := range g.held {
+					if h := g.parts[k]; h.reg >= 0 && used&(1<<h.reg) == 0 {
+						reg = h.reg
+						break
+					}
 				}
 			}
 			if reg < 0 {
@@ -1381,6 +1417,15 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 				reg = best
 			}
 			cur.reg = reg
+			if g := cur.group; g != nil {
+				// Held, in the order of the parts.
+				k := len(g.held)
+				g.held = appendA(&al.i32s, g.held, cur.gi)
+				for ; k > 0 && g.held[k-1] > cur.gi; k-- {
+					g.held[k] = g.held[k-1]
+				}
+				g.held[k] = cur.gi
+			}
 			active = append(active, activeEntry(cur))
 		}
 		clear(active)
@@ -1716,7 +1761,7 @@ func (al *Allocator) setSingle(w *web, v VReg, rs []rng, m []VReg, a *vacross) {
 	w.hints = nil
 	w.fixed, w.arrive, w.width, w.slot = -1, 0, widthOf(f, v), -1
 	w.cls, w.calls, w.spilled, w.owned = f.Class[v], a.calls, false, false
-	w.sp = nil
+	w.sp, w.group = nil, nil
 	if f.FixedSlot[v] >= 0 {
 		w.fixed, w.arrive = f.FixedSlot[v], al.defAt[v]
 	}
