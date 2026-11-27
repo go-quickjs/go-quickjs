@@ -285,6 +285,17 @@ type Allocator struct {
 	predAt      []int32
 	predsSorted bool
 
+	// The ranges' walk's: each register's range found last, and the
+	// node of the one found before it (walkRanges).
+	last   []rng
+	before []int32
+	nodes  []rnode
+	nregs  int
+	// outSum is a bit for each word of each block's live-out set that has
+	// one, outSumW words a block: explore's, or the dataflow's.
+	outSum  []uint64
+	outSumW int
+
 	// The function being allocated, where splitting is allowed (split),
 	// its positions' end (maxPos), and whether its events and blockOf's
 	// table are known.
@@ -303,6 +314,7 @@ type Allocator struct {
 	mutateHoles  bool
 	oneByOne     bool
 	searchPreds  bool
+	rangeLists   bool
 	maxPos       int32
 	evKnown      bool
 	blocksKnown  bool
@@ -389,7 +401,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.split, al.stress = !cfg.NoSplit, cfg.StressSplit && !cfg.NoSplit
 	al.displace, al.mutateHoles, al.oneByOne, al.twoPass, al.plainLists, al.markPass = cfg.Displace, cfg.mutateHoles, cfg.oneByOne, cfg.twoPass, cfg.plainLists, cfg.markPass
 	al.hintPass, al.blockByBlock, al.mergeAll, al.regByReg, al.phiWalks = cfg.hintPass, cfg.blockByBlock, cfg.mergeAll, cfg.regByReg, cfg.phiWalks
-	al.searchPreds = cfg.searchPreds
+	al.searchPreds, al.rangeLists = cfg.searchPreds, cfg.rangeLists
 
 	// predIdx is, for each block's successor k, the block's index among
 	// that successor's predecessors: predIdx[predOff[i]+k]. The walk that
@@ -602,122 +614,126 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		ends[i] = pos + 2 + 2*int32(len(f.Blocks[i].Insts))
 		pos = ends[i] + 2
 	}
-	// open is, for a register live in the block being walked, the index
-	// of its range there plus one.
-	open := grown(al.open, n)
-	clear(open)
-	al.open = open
-	opened := al.opened[:0]
 	rngs := &al.rngs
-	def := func(d VReg, at int32) {
-		if o := open[d]; o > 0 {
-			ranges[d][o-1].from = at
-			open[d] = 0
-		} else {
-			ranges[d] = appendA(rngs, ranges[d], rng{at, at + 1})
-		}
-		defAt[d] = at
-	}
-	for i := nb - 1; i >= 0; i-- {
-		b := &f.Blocks[i]
-		start, end := starts[i], ends[i]
-		w := depthWeight(b.Depth)
-		opened = opened[:0]
-		for wi, word := range liveOut(i) {
-			for word != 0 {
-				v := globals[wi*64+bits.TrailingZeros64(word)]
-				word &= word - 1
-				if rs := ranges[v]; len(rs) > 0 && rs[len(rs)-1].from == end+2 {
-					// Live into the next block too: its range, the last
-					// found, runs from here.
-					rs[len(rs)-1].from = start
-				} else {
-					ranges[v] = appendA(rngs, rs, rng{start, end + 1})
-				}
-				open[v] = int32(len(ranges[v]))
-				opened = append(opened, v)
+	if al.rangeLists {
+		// open is, for a register live in the block being walked, the index
+		// of its range there plus one.
+		open := grown(al.open, n)
+		clear(open)
+		al.open = open
+		opened := al.opened[:0]
+		def := func(d VReg, at int32) {
+			if o := open[d]; o > 0 {
+				ranges[d][o-1].from = at
+				open[d] = 0
+			} else {
+				ranges[d] = appendA(rngs, ranges[d], rng{at, at + 1})
 			}
+			defAt[d] = at
 		}
-		if al.phiWalks {
-			for k, s := range b.Succs {
-				pi := predIdx[int(predOff[i])+k]
-				for _, p := range f.Blocks[s].Phis {
-					if a := p.Args[pi]; alloc(a) {
-						weight[a] += w
+		for i := nb - 1; i >= 0; i-- {
+			b := &f.Blocks[i]
+			start, end := starts[i], ends[i]
+			w := depthWeight(b.Depth)
+			opened = opened[:0]
+			for wi, word := range liveOut(i) {
+				for word != 0 {
+					v := globals[wi*64+bits.TrailingZeros64(word)]
+					word &= word - 1
+					if rs := ranges[v]; len(rs) > 0 && rs[len(rs)-1].from == end+2 {
+						// Live into the next block too: its range, the last
+						// found, runs from here.
+						rs[len(rs)-1].from = start
+					} else {
+						ranges[v] = appendA(rngs, rs, rng{start, end + 1})
 					}
-				}
-			}
-		} else {
-			for _, x := range edgeArgs[argOff[i]:argOff[i+1]] {
-				weight[x.a] += w
-			}
-		}
-		for j := len(b.Insts) - 1; j >= 0; j-- {
-			in := &b.Insts[j]
-			u := start + 2 + 2*int32(j)
-			regs, nu, nd := in.Regs, int(in.NUses), int(in.NUses)+int(in.NDefs)
-			for _, d := range regs[nu:nd] {
-				if alloc(d) {
-					weight[d] += w
-					defW[d] += w
-					def(d, u+1)
-				}
-			}
-			for _, v := range regs[:nu] {
-				if !alloc(v) {
-					continue
-				}
-				weight[v] += w
-				if open[v] == 0 {
-					ranges[v] = appendA(rngs, ranges[v], rng{start, u + 1})
 					open[v] = int32(len(ranges[v]))
 					opened = append(opened, v)
 				}
 			}
-			for _, t := range regs[nd:] {
-				// Live from the reads to the writes, and heavier than
-				// anything it meets, which gives way to it.
-				if alloc(t) {
-					weight[t] = math.Inf(1)
-					ranges[t] = appendA(rngs, ranges[t], rng{u, u + 2})
+			if al.phiWalks {
+				for k, s := range b.Succs {
+					pi := predIdx[int(predOff[i])+k]
+					for _, p := range f.Blocks[s].Phis {
+						if a := p.Args[pi]; alloc(a) {
+							weight[a] += w
+						}
+					}
+				}
+			} else {
+				for _, x := range edgeArgs[argOff[i]:argOff[i+1]] {
+					weight[x.a] += w
 				}
 			}
-			if in.Call || in.Clobber != 0 {
-				clobbers = append(clobbers, clobber{at: u, masks: f.ClobberOf(in), call: in.Call, kind: in.Clobber, key: [2]int32{int32(i), int32(j)}, weight: w})
+			for j := len(b.Insts) - 1; j >= 0; j-- {
+				in := &b.Insts[j]
+				u := start + 2 + 2*int32(j)
+				regs, nu, nd := in.Regs, int(in.NUses), int(in.NUses)+int(in.NDefs)
+				for _, d := range regs[nu:nd] {
+					if alloc(d) {
+						weight[d] += w
+						defW[d] += w
+						def(d, u+1)
+					}
+				}
+				for _, v := range regs[:nu] {
+					if !alloc(v) {
+						continue
+					}
+					weight[v] += w
+					if open[v] == 0 {
+						ranges[v] = appendA(rngs, ranges[v], rng{start, u + 1})
+						open[v] = int32(len(ranges[v]))
+						opened = append(opened, v)
+					}
+				}
+				for _, t := range regs[nd:] {
+					// Live from the reads to the writes, and heavier than
+					// anything it meets, which gives way to it.
+					if alloc(t) {
+						weight[t] = math.Inf(1)
+						ranges[t] = appendA(rngs, ranges[t], rng{u, u + 2})
+					}
+				}
+				if in.Call || in.Clobber != 0 {
+					clobbers = append(clobbers, clobber{at: u, masks: f.ClobberOf(in), call: in.Call, kind: in.Clobber, key: [2]int32{int32(i), int32(j)}, weight: w})
+				}
+			}
+			for _, p := range b.Phis {
+				if alloc(p.Def) {
+					weight[p.Def] += w
+					def(p.Def, start)
+				}
+			}
+			for _, v := range opened {
+				open[v] = 0
 			}
 		}
-		for _, p := range b.Phis {
-			if alloc(p.Def) {
-				weight[p.Def] += w
-				def(p.Def, start)
+		al.opened = opened
+		for v, r := range ranges {
+			if len(r) < 2 {
+				continue
 			}
+			// Found backwards, a register's ranges are in the reverse of their
+			// order.
+			slices.Reverse(r)
+			out := r[:1]
+			for _, x := range r[1:] {
+				if l := &out[len(out)-1]; x.from <= l.to {
+					l.to = max(l.to, x.to)
+				} else {
+					out = append(out, x)
+				}
+			}
+			ranges[v] = out
 		}
-		for _, v := range opened {
-			open[v] = 0
-		}
+	} else {
+		clobbers = al.walkRanges(f, liveOut, clobbers)
 	}
-	al.opened = opened
 	al.maxPos = pos
 	// The clobbers were found backwards: their positions are distinct.
 	slices.Reverse(clobbers)
 	al.clobbers = clobbers
-	for v, r := range ranges {
-		if len(r) < 2 {
-			continue
-		}
-		// Found backwards, a register's ranges are in the reverse of their
-		// order.
-		slices.Reverse(r)
-		out := r[:1]
-		for _, x := range r[1:] {
-			if l := &out[len(out)-1]; x.from <= l.to {
-				l.to = max(l.to, x.to)
-			} else {
-				out = append(out, x)
-			}
-		}
-		ranges[v] = out
-	}
 	// clobAt is each clobber's position, in order; callsTo and weightTo
 	// the number and weight of the calls before each clobber, callK the
 	// calls' indices among the clobbers -- those from lo to hi are
@@ -775,80 +791,29 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			}
 		}
 	}
-	lap(PhaseRanges)
 
-	// Webs: each register its own, then a phi's and an argument's joined
-	// where their lifetimes do not meet and their parameters' slots allow,
-	// the edges of the deepest blocks first.
-	// single is v's web of its own: the clobbers it lives across are
-	// found once, for its first, and kept for a web taken apart. A web
-	// that lives across a call is stored where each of its registers is
-	// defined, in its register or not: its definitions weigh nothing.
 	vacr := grown(al.vacross, n)
 	al.vacross = vacr
-	single := func(v VReg) *web {
-		// Every field set in place: a literal is made aside and copied.
-		w := al.pool.fill()
-		a := &vacr[v]
-		w.ranges, w.cur, w.reg, w.dense = ranges[v], 0, -1, 0
-		w.members = append(al.vregs.take(1), v)
-		w.weight, w.callWeight, w.avoid = weight[v], a.weight, a.avoid
-		w.hints = nil
-		w.fixed, w.arrive, w.width, w.slot = -1, 0, widthOf(f, v), -1
-		w.cls, w.calls, w.spilled, w.owned = f.Class[v], a.calls, false, false
-		w.sp = nil
-		if f.FixedSlot[v] >= 0 {
-			w.fixed, w.arrive = f.FixedSlot[v], defAt[v]
-		}
-		if w.calls {
-			w.weight -= defW[v]
-		}
-		return w
-	}
 	webs := grown(al.webs, n)
 	clear(webs)
 	al.webs = webs
-	for v := range n {
-		if alloc(VReg(v)) && len(ranges[v]) > 0 {
-			// The clobbers each range lives across, from lo to hi: their
-			// calls counted and weighed by the sums before them (whole
-			// numbers, exactly), the masks of those that have them.
-			a := vacross{}
-			cls := int(f.Class[v])
-			if len(clobAt) > 0 {
-				mi := 0
-				rs := ranges[v]
-				if clobIdx[rs[0].from] == clobIdx[rs[len(rs)-1].to-1] {
-					// No clobber in its extent: none in its ranges.
-					rs = nil
-				}
-				for _, r := range rs {
-					lo, hi := int(clobIdx[r.from]), int(clobIdx[r.to-1])
-					if lo == hi {
-						continue
-					}
-					if callsTo[hi] > callsTo[lo] {
-						a.calls = true
-						a.weight += weightTo[hi] - weightTo[lo]
-					}
-					if al.oneByOne {
-						for mi < len(masked) && int(masked[mi]) < lo {
-							mi++
-						}
-						for ; mi < len(masked) && int(masked[mi]) < hi; mi++ {
-							if c := &clobbers[masked[mi]]; cls < len(c.masks) {
-								a.avoid |= c.masks[cls]
-							}
-						}
-						continue
-					}
-					if i, j := maskedTo[lo], maskedTo[hi]; j > i {
-						a.avoid |= al.maskOf(cls, i, j)
-					}
-				}
+	if !al.rangeLists {
+		// The ranges laid out, and each register's web of its own made, in
+		// one visit of each register.
+		al.layoutRanges()
+	}
+	lap(PhaseRanges)
+
+	// Webs: each register its own (single), then a phi's and an
+	// argument's joined where their lifetimes do not meet and their
+	// parameters' slots allow, the edges of the deepest blocks first.
+	// (With Config.rangeLists, the webs of their own made here.)
+	if al.rangeLists {
+		for v := range n {
+			if alloc(VReg(v)) && len(ranges[v]) > 0 {
+				vacr[v] = al.acrossOf(VReg(v), ranges[v])
+				webs[v] = al.single(VReg(v))
 			}
-			vacr[v] = a
-			webs[v] = single(VReg(v))
 		}
 	}
 	pairs := al.pairs[:0]
@@ -1104,7 +1069,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			al.moved = true
 			ps := al.parts[:0]
 			for _, m := range w.members {
-				p := single(m)
+				p := al.single(m)
 				webs[m] = p
 				ps = append(ps, p)
 			}
@@ -1485,6 +1450,260 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	return res, nil
 }
 
+// walkRanges makes each register's ranges, its weight and the clobbers by
+// the walk of the blocks backwards that Config.rangeLists makes them by,
+// keeping each register's range found last apart from those found before
+// it: the last is the one a definition cuts, a use finds open in its block
+// -- it begins at the block's start -- and a register live out of the
+// block and into the next extends. Those found before it are on a list of
+// nodes, which only the registers of more than one range have; and
+// layoutRanges lays them out after. The registers live out of a block are
+// read from the words of its set that explore or the dataflow found any in
+// (outSum), not from all of them: a large function's sets are mostly
+// empty words.
+func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []clobber) []clobber {
+	n, nb := len(f.Class), len(f.Blocks)
+	cls := f.Class
+	globals, edgeArgs, argOff := al.globals, al.edgeArgs, al.argOff
+	weight, defW, defAt, starts, ends := al.weight, al.defW, al.defAt, al.starts, al.ends
+	// last is each register's range found last, which begins first, or
+	// none (to 0); before[v] is, plus one, the index of the node of the
+	// one found before it, which begins after it, or 0, each node's next
+	// the one found before it.
+	last := grown(al.last, n)
+	clear(last)
+	before := grown(al.before, n)
+	clear(before)
+	nodes := al.nodes[:0]
+	sw := al.outSumW
+	// nregs is the number of registers that have ranges.
+	nregs := 0
+	for i := nb - 1; i >= 0; i-- {
+		b := &f.Blocks[i]
+		start, end := starts[i], ends[i]
+		w := depthWeight(b.Depth)
+		out := liveOut(i)
+		for si, sword := range al.outSum[i*sw : (i+1)*sw] {
+			for sword != 0 {
+				wi := si*64 + bits.TrailingZeros64(sword)
+				sword &= sword - 1
+				word := out[wi]
+				for word != 0 {
+					v := globals[wi*64+bits.TrailingZeros64(word)]
+					word &= word - 1
+					l := &last[v]
+					switch {
+					case l.from == end+2:
+						// Live into the next block too: its range, the last
+						// found, runs from here.
+						l.from = start
+					case l.to == 0:
+						*l = rng{start, end + 1}
+						nregs++
+					default:
+						nodes = append(nodes, rnode{*l, before[v]})
+						before[v] = int32(len(nodes))
+						*l = rng{start, end + 1}
+					}
+				}
+			}
+		}
+		for _, x := range edgeArgs[argOff[i]:argOff[i+1]] {
+			weight[x.a] += w
+		}
+		for j := len(b.Insts) - 1; j >= 0; j-- {
+			in := &b.Insts[j]
+			u := start + 2 + 2*int32(j)
+			regs, nu, nd := in.Regs, int(in.NUses), int(in.NUses)+int(in.NDefs)
+			for _, d := range regs[nu:nd] {
+				if d < 0 || cls[d] == NoClass {
+					continue
+				}
+				weight[d] += w
+				defW[d] += w
+				defAt[d] = u + 1
+				// Cut where it is open, else a range of its own.
+				switch l := &last[d]; {
+				case l.from == start && l.to != 0:
+					l.from = u + 1
+				case l.to == 0:
+					*l = rng{u + 1, u + 2}
+					nregs++
+				default:
+					nodes = append(nodes, rnode{*l, before[d]})
+					before[d] = int32(len(nodes))
+					*l = rng{u + 1, u + 2}
+				}
+			}
+			for _, v := range regs[:nu] {
+				if v < 0 || cls[v] == NoClass {
+					continue
+				}
+				weight[v] += w
+				switch l := &last[v]; {
+				case l.from == start && l.to != 0:
+				case l.to == 0:
+					*l = rng{start, u + 1}
+					nregs++
+				default:
+					nodes = append(nodes, rnode{*l, before[v]})
+					before[v] = int32(len(nodes))
+					*l = rng{start, u + 1}
+				}
+			}
+			for _, t := range regs[nd:] {
+				// Live from the reads to the writes, and heavier than
+				// anything it meets, which gives way to it.
+				if t < 0 || cls[t] == NoClass {
+					continue
+				}
+				weight[t] = math.Inf(1)
+				if l := &last[t]; l.to == 0 {
+					nregs++
+				} else {
+					nodes = append(nodes, rnode{*l, before[t]})
+					before[t] = int32(len(nodes))
+				}
+				last[t] = rng{u, u + 2}
+			}
+			if in.Call || in.Clobber != 0 {
+				clobbers = append(clobbers, clobber{at: u, masks: f.ClobberOf(in), call: in.Call, kind: in.Clobber, key: [2]int32{int32(i), int32(j)}, weight: w})
+			}
+		}
+		for _, p := range b.Phis {
+			d := p.Def
+			if d < 0 || cls[d] == NoClass {
+				continue
+			}
+			weight[d] += w
+			defAt[d] = start
+			switch l := &last[d]; {
+			case l.from == start && l.to != 0:
+			case l.to == 0:
+				*l = rng{start, start + 1}
+				nregs++
+			default:
+				nodes = append(nodes, rnode{*l, before[d]})
+				before[d] = int32(len(nodes))
+				*l = rng{start, start + 1}
+			}
+		}
+	}
+	al.last, al.before, al.nodes, al.nregs = last, before, nodes, nregs
+	return clobbers
+}
+
+// single is v's web of its own: the clobbers it lives across (vacross)
+// are found once, for its first, and kept for a web taken apart. A web
+// that lives across a call is stored where each of its registers is
+// defined, in its register or not: its definitions weigh nothing.
+func (al *Allocator) single(v VReg) *web {
+	f := al.f
+	// Every field set in place: a literal is made aside and copied.
+	w := al.pool.fill()
+	a := &al.vacross[v]
+	w.ranges, w.cur, w.reg, w.dense = al.ranges[v], 0, -1, 0
+	w.members = append(al.vregs.take(1), v)
+	w.weight, w.callWeight, w.avoid = al.weight[v], a.weight, a.avoid
+	w.hints = nil
+	w.fixed, w.arrive, w.width, w.slot = -1, 0, widthOf(f, v), -1
+	w.cls, w.calls, w.spilled, w.owned = f.Class[v], a.calls, false, false
+	w.sp = nil
+	if f.FixedSlot[v] >= 0 {
+		w.fixed, w.arrive = f.FixedSlot[v], al.defAt[v]
+	}
+	if w.calls {
+		w.weight -= al.defW[v]
+	}
+	return w
+}
+
+// acrossOf is what v, of ranges rs, lives across (vacross).
+func (al *Allocator) acrossOf(v VReg, rs []rng) vacross {
+	clobAt, clobIdx, callsTo, weightTo := al.clobAt, al.clobIdx, al.callsTo, al.weightTo
+	masked, maskedTo, clobbers := al.masked, al.maskedTo, al.clobbers
+	// The clobbers each range lives across, from lo to hi: their calls
+	// counted and weighed by the sums before them (whole numbers,
+	// exactly), the masks of those that have them.
+	a := vacross{}
+	cls := int(al.f.Class[v])
+	if len(clobAt) > 0 {
+		mi := 0
+		if clobIdx[rs[0].from] == clobIdx[rs[len(rs)-1].to-1] {
+			// No clobber in its extent: none in its ranges.
+			rs = nil
+		}
+		for _, r := range rs {
+			lo, hi := int(clobIdx[r.from]), int(clobIdx[r.to-1])
+			if lo == hi {
+				continue
+			}
+			if callsTo[hi] > callsTo[lo] {
+				a.calls = true
+				a.weight += weightTo[hi] - weightTo[lo]
+			}
+			if al.oneByOne {
+				for mi < len(masked) && int(masked[mi]) < lo {
+					mi++
+				}
+				for ; mi < len(masked) && int(masked[mi]) < hi; mi++ {
+					if c := &clobbers[masked[mi]]; cls < len(c.masks) {
+						a.avoid |= c.masks[cls]
+					}
+				}
+				continue
+			}
+			if i, j := maskedTo[lo], maskedTo[hi]; j > i {
+				a.avoid |= al.maskOf(cls, i, j)
+			}
+		}
+	}
+	return a
+}
+
+// layoutRanges lays each register's ranges out in order -- its last found
+// by walkRanges, then those found before it, each next after the one
+// before -- joined where they meet, in one array, and makes its web of its
+// own (single) with what it lives across, each register's in one visit.
+func (al *Allocator) layoutRanges() {
+	last, before, nodes, ranges, webs, vacr := al.last, al.before, al.nodes, al.ranges, al.webs, al.vacross
+	clobIdx := al.clobIdx
+	flat := al.rngs.take(al.nregs + len(nodes))
+	for v := range last {
+		l := last[v]
+		if l.to == 0 {
+			continue
+		}
+		a := len(flat)
+		flat = append(flat, l)
+		for k := before[v]; k > 0; k = nodes[k-1].next {
+			x := nodes[k-1].r
+			if o := &flat[len(flat)-1]; x.from <= o.to {
+				o.to = max(o.to, x.to)
+			} else {
+				flat = append(flat, x)
+			}
+		}
+		rs := flat[a:len(flat):len(flat)]
+		ranges[v] = rs
+		// What it lives across, where a clobber lies in its extent.
+		var ac vacross
+		if len(clobIdx) > 0 && clobIdx[rs[0].from] != clobIdx[rs[len(rs)-1].to-1] {
+			ac = al.acrossOf(VReg(v), rs)
+		}
+		vacr[v] = ac
+		webs[v] = al.single(VReg(v))
+	}
+	al.nodes = nodes[:0]
+}
+
+// rnode is a range of a register's found before its last (walkRanges), and
+// plus one the index of the node of the one found before it, or 0.
+type rnode struct {
+	r    rng
+	next int32
+}
+
 // kinds makes, the first time maskOf searches in an allocation, kindIdx:
 // the masked clobbers' indices among al.masked by their kind, in order
 // within each, those of kind q from kindOff[q] to kindOff[q+1].
@@ -1573,6 +1792,12 @@ func widthOf(f *Func, v VReg) int32 {
 func (al *Allocator) explore(f *Func, words, stride int, defBlock, defInst []int32, gi func(VReg) int, paths []useAt) {
 	live := al.live
 	work := al.work[:0]
+	// sum has a bit for each word of a block's live-out set that has one,
+	// sw words a block, for the ranges' walk of the sets (outSum).
+	sw := (words + 63) / 64
+	sum := grown(al.outSum, len(f.Blocks)*sw)
+	clear(sum)
+	al.outSum, al.outSumW = sum, sw
 	// up has register v, global x, live into block b.
 	up := func(v VReg, x int, b int) {
 		w, bit := x/64, uint64(1)<<(x%64)
@@ -1587,6 +1812,7 @@ func (al *Allocator) explore(f *Func, words, stride int, defBlock, defInst []int
 			work = work[:len(work)-1]
 			for _, p := range f.Blocks[c].Preds {
 				live[(stride*p+1)*words+w] |= bit
+				sum[p*sw+w/64] |= 1 << (w % 64)
 				if int32(p) == defBlock[v] {
 					continue
 				}
@@ -1624,6 +1850,7 @@ func (al *Allocator) explore(f *Func, words, stride int, defBlock, defInst []int
 			for _, e := range al.edgeArgs[al.argOff[i]:al.argOff[i+1]] {
 				x := gi(e.a)
 				live[(stride*i+1)*words+x/64] |= 1 << (x % 64)
+				sum[i*sw+x/4096] |= 1 << (x / 64 % 64)
 				if defBlock[e.a] != int32(i) {
 					up(e.a, x, i)
 				}
@@ -1640,6 +1867,7 @@ func (al *Allocator) explore(f *Func, words, stride int, defBlock, defInst []int
 				}
 				x := gi(a)
 				live[(stride*i+1)*words+x/64] |= 1 << (x % 64)
+				sum[i*sw+x/4096] |= 1 << (x / 64 % 64)
 				if defBlock[a] != int32(i) {
 					up(a, x, i)
 				}
@@ -1748,6 +1976,18 @@ func (al *Allocator) dataflow(f *Func, words int, gi func(VReg) int) {
 			}
 		}
 	}
+	// The summary of the live-out sets explore makes as it goes (outSum).
+	sw := (words + 63) / 64
+	sum := grown(al.outSum, nb*sw)
+	clear(sum)
+	for i := range nb {
+		for w, x := range liveOut(i) {
+			if x != 0 {
+				sum[i*sw+w/64] |= 1 << (w % 64)
+			}
+		}
+	}
+	al.outSum, al.outSumW = sum, sw
 }
 
 // sortByStart sorts list, in order of the webs' first members, into

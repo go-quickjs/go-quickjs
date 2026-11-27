@@ -273,6 +273,12 @@ type Config struct {
 	// for the tests that compare it with sorting them where they are many
 	// (predIndex).
 	searchPreds bool
+	// rangeLists has the ranges' walk append each register's ranges to a
+	// list of its own as it finds them, the lists reversed after, and the
+	// registers' webs of their own made in a visit of their own, for the
+	// tests that compare it with keeping the range found last apart and
+	// laying the ranges out with the webs made (walkRanges, layoutRanges).
+	rangeLists bool
 	// plainLists has the scan read every web on its active and inactive
 	// lists at every position, for the tests that compare it with reading
 	// each only where its entry says it may have changed.
@@ -289,7 +295,8 @@ type Phase int
 const (
 	// PhaseLiveness is the registers live into and out of each block.
 	PhaseLiveness Phase = iota
-	// PhaseRanges is each register's ranges and weight, and the clobbers.
+	// PhaseRanges is each register's ranges and weight, the clobbers, and
+	// each register's web of its own.
 	PhaseRanges
 	// PhaseWebs is the coalescing of phis and their arguments, and the
 	// hints.

@@ -2,6 +2,7 @@ package lsra
 
 import (
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"slices"
 	"testing"
@@ -1203,6 +1204,7 @@ func TestWalkMethods(t *testing.T) {
 		{"regByReg", func(c *Config) { c.regByReg = true }},
 		{"phiWalks", func(c *Config) { c.phiWalks = true }},
 		{"searchPreds", func(c *Config) { c.searchPreds = true }},
+		{"rangeLists", func(c *Config) { c.rangeLists = true }},
 	}
 	var al, old Allocator
 	twice := 0
@@ -1210,10 +1212,21 @@ func TestWalkMethods(t *testing.T) {
 	// member: their order chooses among the registers free.
 	hints := func(al *Allocator, out *[]VReg) func(Phase) {
 		return func(p Phase) {
+			if p == PhaseRanges {
+				// And each register's ranges, as the ranges' phase leaves
+				// them, with the weights.
+				*out = (*out)[:0]
+				for v, rs := range al.ranges {
+					*out = append(*out, VReg(v), VReg(len(rs)), VReg(math.Float64bits(al.weight[v])), VReg(math.Float64bits(al.weight[v])>>32), VReg(al.defAt[v]))
+					for _, r := range rs {
+						*out = append(*out, VReg(r.from), VReg(r.to))
+					}
+				}
+				return
+			}
 			if p != PhaseWebs {
 				return
 			}
-			*out = (*out)[:0]
 			for _, w := range al.webs {
 				if w == nil {
 					continue
@@ -1242,7 +1255,7 @@ func TestWalkMethods(t *testing.T) {
 				t.Fatalf("%s: the walks and %s allocate differently\n%s\n%s", name, o.name, dump(f, a), dump(f, b))
 			}
 			if !slices.Equal(hintsA, hintsB) {
-				t.Fatalf("%s: the walks and %s give the webs different hints", name, o.name)
+				t.Fatalf("%s: the walks and %s give the registers different ranges or weights, or the webs different hints", name, o.name)
 			}
 		}
 	}
@@ -1324,6 +1337,9 @@ func TestWalkMethods(t *testing.T) {
 			check("manyPreds", manyPredsFunc(n, kind), big)
 		}
 	}
+	// More than 4096 values live across blocks: their sets' summaries
+	// of more than a word.
+	check("wide", manyCallsFunc(4200, 3, 0, true), big)
 }
 
 // TestPredIndex finds each block's index among the predecessors of blocks
