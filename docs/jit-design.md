@@ -1387,6 +1387,37 @@ is under [The projection](#the-projection).
   hand-over 4.0 to 3.7 µs, within the runs' noise -- waking the
   worker's thread is the cost, whether it waits or is started -- and
   dropped.
+  The snapshot is keyed by register pc: its gathers read the register
+  code and the copies, never the program, which is bound to it after
+  (`bindProgram`, `jitSnapBinders`), so that a callee's state may be
+  gathered before anything lowers it. The callees a compile may inline
+  are walked before it asks anything (`jitSnapCalleeWalk`): every
+  closure the function's state names as one it calls or makes, to the
+  snapshot's depth, of register code short enough to inline
+  (`ssa.MayInlineSize`, one size bound with the inliner's); over
+  Octane's functions it finds every callee the snapshot asks (1,226 of
+  2,071 walked, so 1.7 times as many copied). A function never called
+  has no register code, and names nothing until the asking makes it;
+  the walk makes the register code of the targets its calls' bindings
+  name, as the asking does, 14 functions over Typescript's run beyond
+  the base's, 0.3 µs a compile. The constants, the captured typed
+  arrays and `RawMath` are derived on the worker too. Where a
+  snapshot's time on the goroutine goes now (QPC, exclusive, Typescript
+  in the background, µs a snapshot at the mean, 3.8 callees each):
+  `Inline` about 45, with its callees' lowerings on the goroutine 9,
+  their call targets 10, their seen feedback 5; the gathers 44, the
+  calls' two 28 of it and the property sites' 12; the no-argument
+  questions 7.5; the rest of the asking (the program bound, the PCs'
+  loop) 13; every other method still asked at the PCs under 10 in all.
+  So the methods left are small, and `Inline` and the gathers are what
+  remains, both of which go with the callees' snapshots gathered from
+  the walk and the targets gathered of the register code. Tried and
+  dropped: `Inline` asked at calls alone (192 host operations over the
+  corpus were no calls); the copies taken of chunks a compile allocates
+  (18 MB more garbage over Typescript than the 5.5 they saved, the run
+  2 to 5% slower; sized to their first ask, 8.4 against 5.5); the
+  no-argument questions asked once a compile, of which 6 of 13 are the
+  compile's whole (about 2 µs, a later option).
 - **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
   was run beside mir's scan on every compile, given the same function: an
   instruction for each value and the block's end, the frame states' uses

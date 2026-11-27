@@ -863,11 +863,24 @@ cache remembered when it filled, or is shared, so the worker reads its
 fields as they are (`jitPropSrc`, live on the spot and copied in the
 snapshot). `Accessor` and `StringProperty`, whose answers read the heap --
 the accessors' pairs, a getter's code and its lowering, the primitives'
-prototypes -- are asked on the goroutine still, but by the family's gather
-and only at the PCs the copy says may answer (`jitSnapAskedAtGather`): an
-accessor's site whose cache, its earlier entries or what the code learned
-holds an accessor, a method's read that learned primitives or knows nothing;
-every other PC's answer is none, as the asking gave it. The methods that
+prototypes -- are asked on the goroutine still, but by the family's gather,
+by register pc, and only at the sites the copy says may answer
+(`jitSnapAskedAtGather`): an accessor's site whose cache, its earlier
+entries or what the code learned holds an accessor, a method's read that
+learned primitives or knows nothing; every other PC's answer is none, as the
+asking gave it. They are asked after the gather's takes of the heap -- the
+caches the feedback makes of its own, the additions' facts -- since a
+getter's case reads prototypes' shapes those takes may change. A gather
+reads the register code and the copies, never the program (`jitSnapshot`'s
+`rc`, not its `p` or `ops`), which is bound to the snapshot after
+(`bindProgram`): what a gather asked of the heap it keeps by register pc,
+and the family's binding (`jitSnapBinders`) puts it at each PC lowered of
+that pc whose op asks the method, so that a callee's state may be gathered
+before anything lowers it. The constants a program reads, the typed arrays
+its captured bindings hold and `RawMath` are derived so too
+(`jit_snapconst.go`): of the closure's constants, whose slice is never
+written, of what each captured binding held when the gather read it, and of
+the code alone. The methods that
 answer from what the code learned at its exits and from what the interpreter
 marks of its code (`jit_snapnative.go`: `Generic`, the BigInt and
 element-read methods, `CallShape`, `Frequency`, `Operands`, `InlineExit`,
