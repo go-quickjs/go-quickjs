@@ -521,10 +521,10 @@ var jitSnapAsks = func() (t [ir.LastOp + 1]uint64) {
 // jitSnapPools adds to pools every pool an answer's result x names, a
 // pointer to the result: a literal's, a closure's, an inline site's, a
 // call's -- an accessor's and a loop's among them.
-func jitSnapPools(x any, pools map[uintptr]bool) {
+func jitSnapPools(x any, pools *[]uintptr) {
 	add := func(p uintptr) {
 		if p != 0 {
-			pools[p] = true
+			*pools = append(*pools, p)
 		}
 	}
 	switch v := x.(type) {

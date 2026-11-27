@@ -240,7 +240,7 @@ func registerSnapshot(b *bytes.Buffer, ms, regs []method) error {
 	for _, m := range regs {
 		fmt.Fprintf(b, " +\n\t\ta.%s.answered()", m.name)
 	}
-	b.WriteString("\n}\n\n// pools adds to pools every pool an answer names (jitSnapPools).\nfunc (a *jitSnapAnswers) pools(pools map[uintptr]bool) {\n")
+	b.WriteString("\n}\n\n// pools adds to pools every pool an answer names (jitSnapPools).\nfunc (a *jitSnapAnswers) pools(pools *[]uintptr) {\n")
 	for _, m := range regs {
 		var named []int
 		for i, t := range m.results {

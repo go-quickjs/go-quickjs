@@ -571,7 +571,7 @@ func (a *jitSnapAnswers) answered() int {
 }
 
 // pools adds to pools every pool an answer names (jitSnapPools).
-func (a *jitSnapAnswers) pools(pools map[uintptr]bool) {
+func (a *jitSnapAnswers) pools(pools *[]uintptr) {
 	for i := range a.Accessor.e {
 		if e := &a.Accessor.e[i]; e.answered {
 			jitSnapPools(&e.v.r0, pools)

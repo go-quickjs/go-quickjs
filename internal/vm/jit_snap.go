@@ -4,6 +4,7 @@ package vm
 
 import (
 	"math/bits"
+	"slices"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -67,7 +68,10 @@ func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 	// The questions of other arguments, of what the answers name: the
 	// leaves' kinds, and how Go makes the pools' objects escape analysis
 	// may leave unmade.
-	fns, pools := map[uintptr]bool{}, map[uintptr]bool{}
+	// Each a list, sorted and made of distinct entries once filled: the
+	// questions are asked in the order of their arguments, which their
+	// tables keep them in.
+	var fns, pools []uintptr
 	// The compile's snapshots: the function's, its callees' the asking
 	// asked or the walk gathered (jitSnapData's nodes), and the callees'
 	// whose questions no site asks, in no other order than the nodes'.
@@ -80,35 +84,39 @@ func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 	for _, c := range all {
 		for i := range c.a.Leaf.e {
 			if e := &c.a.Leaf.e[i]; e.answered && e.v.r0 != 0 {
-				fns[e.v.r0] = true
+				fns = append(fns, e.v.r0)
 			}
 		}
 		for i := range c.a.ViaLeaf.e {
 			// G.call(x, ...)'s G, a leaf (ViaLeaf's fn).
 			if e := &c.a.ViaLeaf.e[i]; e.answered && e.v.r1 != 0 {
-				fns[e.v.r1] = true
+				fns = append(fns, e.v.r1)
 			}
 		}
-		c.a.pools(pools)
+		c.a.pools(&pools)
 	}
 	for _, fn := range s.d.leaves {
 		// The leaves a derivation's answers may name (jitSnapData's
 		// leaves).
-		fns[fn] = true
+		fns = append(fns, fn)
 	}
 	for _, pool := range s.d.pools {
 		// The pools a derivation's answers may name (jitSnapData's
 		// pools), which the worker answers after this.
-		pools[uintptr(unsafe.Pointer(pool))] = true
+		pools = append(pools, uintptr(unsafe.Pointer(pool)))
 	}
-	for pool := range pools {
+	slices.Sort(fns)
+	fns = slices.Compact(fns)
+	slices.Sort(pools)
+	pools = slices.Compact(pools)
+	for _, pool := range pools {
 		shape, proto, ok := fb.VirtualRoot(pool)
 		if h := fb.fb.r.jitTest.snapAsked; h != nil {
 			h(s, snapVirtualRoot, int64(pool), true, []any{shape, proto, ok})
 		}
 		s.a.VirtualRoot.put(int64(pool), 0, true, jitSnapAnsVirtualRoot{shape, proto, ok})
 	}
-	for fn := range fns {
+	for _, fn := range fns {
 		k := fb.LeafKind(fn)
 		h := fb.fb.r.jitTest.snapAsked
 		for _, c := range all {
