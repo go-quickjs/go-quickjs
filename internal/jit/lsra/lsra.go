@@ -230,6 +230,14 @@ type Config struct {
 	// keep the slots' keys from the first (slotsTree), for the tests that
 	// compare the two.
 	slots slotsMode
+	// oneByOne has the allocation visit one by one what a web lives
+	// across and what it has -- the calls for its holes over them
+	// (callHoles) and its reloads after them, the clobbers for the
+	// registers it avoids, its holes where one is punched or planned --
+	// for the tests that compare it with finding them from the web's uses,
+	// its ranges and the clobbers' sums, and with a hole cut out of its
+	// ranges.
+	oneByOne bool
 	// mutateHoles has the allocation punch holes that leave a position
 	// where the webs meet out, for the test that the checks find it.
 	mutateHoles bool

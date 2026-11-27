@@ -375,12 +375,33 @@ func (al *Allocator) plan(a, cur *web) hole {
 	// The holes it has before and after the span, and its last use or
 	// definition before the span and its first after.
 	hp, hn := int32(-1), al.maxPos
-	for _, h := range sp.holes {
-		if h.to <= c0 {
-			hp = h.to
-		} else if h.from >= c1 {
-			hn = h.from
-			break
+	if al.oneByOne {
+		for _, h := range sp.holes {
+			if h.to <= c0 {
+				hp = h.to
+			} else if h.from >= c1 {
+				hn = h.from
+				break
+			}
+		}
+	} else if holes := sp.holes; len(holes) > 0 {
+		// The last that ends by c0 and the first that begins at or past
+		// c1, by searches: they are in order and apart.
+		i := endsAfter(holes, 0, c0)
+		if i > 0 {
+			hp = holes[i-1].to
+		}
+		lo, hi := i, len(holes)
+		for lo < hi {
+			m := int(uint(lo+hi) >> 1)
+			if holes[m].from < c1 {
+				lo = m + 1
+			} else {
+				hi = m
+			}
+		}
+		if lo < len(holes) {
+			hn = holes[lo].from
 		}
 	}
 	al.webEvents(a)
@@ -482,7 +503,96 @@ func (al *Allocator) plan(a, cur *web) hole {
 // calls, and loaded once before the first use after a run of calls, which
 // may be past a loop that makes them, rather than after each call. It
 // returns the weight of the reloads after the calls left out of its holes.
+//
+// The runs are found from its uses and definitions, not from the calls:
+// the calls after one at its position or past it and before the next are
+// the clobbers from clobIdx at the one to clobIdx at the next, and those
+// it lives across are where its ranges' clobbers meet them, each stretch
+// counted and weighed by the sums before its ends (callsTo, weightTo,
+// whole numbers, exactly, whatever the order they are added in). Its work
+// is its events and ranges, whatever the calls it lives across.
 func (al *Allocator) callHoles(w *web) float64 {
+	al.events()
+	al.webEvents(w)
+	sp := w.sp
+	ev := sp.ev
+	clobIdx, callsTo, weightTo := al.clobIdx, al.callsTo, al.weightTo
+	// Its ranges before it is punched, which punching keeps (sp.full).
+	rs := w.ranges
+	left := 0.0
+	ri := 0
+	for i := 0; i <= len(ev); i++ {
+		// The run between event i-1 and event i: the clobbers from ka to
+		// kb.
+		ka, kb := int32(0), int32(len(al.clobbers))
+		if i > 0 {
+			ka = clobIdx[evPos(ev[i-1])]
+		}
+		if i < len(ev) {
+			kb = clobIdx[evPos(ev[i])]
+		}
+		if callsTo[kb] == callsTo[ka] {
+			continue
+		}
+		// The bounds: past the use or definition before, and up to the
+		// one after. A call before the first bound -- one that reads w,
+		// whose read is that use -- is left out: it reloads w after it,
+		// as before. ks is the first clobber past the bound.
+		s, ks := int32(0), ka
+		if i > 0 {
+			s = al.ceilBound(evPos(ev[i-1]) + 1)
+			ks = clobIdx[s]
+		}
+		for ri < len(rs) && clobIdx[rs[ri].to-1] <= ka {
+			ri++
+		}
+		// The calls it lives across in the run: those past ks, their
+		// number and weight, the weight of those before it, and the
+		// last.
+		n, weight, before, last := int32(0), 0.0, 0.0, int32(-1)
+		for j := ri; j < len(rs) && clobIdx[rs[j].from] < kb; j++ {
+			lo, hi := max(clobIdx[rs[j].from], ka), min(clobIdx[rs[j].to-1], kb)
+			if lo >= hi || callsTo[hi] == callsTo[lo] {
+				continue
+			}
+			last = al.callK[callsTo[hi]-1]
+			mid := min(max(lo, ks), hi)
+			before += weightTo[mid] - weightTo[lo]
+			n += callsTo[hi] - callsTo[mid]
+			weight += weightTo[hi] - weightTo[mid]
+		}
+		if last < 0 {
+			continue
+		}
+		left += before
+		if i == 0 {
+			left += weight
+			continue
+		}
+		e := al.maxPos
+		if i < len(ev) {
+			e = al.floorBound(evPos(ev[i]))
+		}
+		if n == 0 || e < al.clobAt[last]+2 || s >= e {
+			left += weight
+			continue
+		}
+		full := w.ranges
+		if sp.full != nil {
+			full = sp.full
+		}
+		if cost := al.holeCost(w, full, s, e); cost < weight || al.stress {
+			al.punch(w, hole{s: s, e: e, cost: cost})
+		} else {
+			left += weight
+		}
+	}
+	return left
+}
+
+// callHolesEach is callHoles by each call w lives across, one by one, for
+// the tests that compare the two (Config.oneByOne).
+func (al *Allocator) callHolesEach(w *web) float64 {
 	al.events()
 	al.webEvents(w)
 	sp := w.sp
@@ -540,6 +650,43 @@ func (al *Allocator) callHoles(w *web) float64 {
 	return left
 }
 
+// reloads appends to across the calls that reload register m, whose
+// ranges are rs, after them: those its ranges live across outside its
+// web's holes, at a position p of a range, outside the holes, where the
+// range covers p+1 too. Its work is its ranges, the holes and the calls
+// it finds.
+func (al *Allocator) reloads(across []acrossEntry, m VReg, rs, holes []rng) []acrossEntry {
+	clobIdx, callsTo, callK := al.clobIdx, al.callsTo, al.callK
+	if len(callK) == 0 {
+		return across
+	}
+	h := 0
+	for _, r := range rs {
+		end := clobIdx[r.to-1]
+		// Each stretch of r from a up to b, the next hole's start, then
+		// on past the hole.
+		for a := r.from; ; {
+			for h < len(holes) && holes[h].to <= a {
+				h++
+			}
+			b := r.to
+			if h < len(holes) && holes[h].from < b {
+				b = max(holes[h].from, a)
+			}
+			for x, y := callsTo[clobIdx[a]], callsTo[min(clobIdx[b], end)]; x < y; x++ {
+				across = append(across, acrossEntry{callK[x], m})
+			}
+			if b == r.to {
+				break
+			}
+			if a = holes[h].to; a >= r.to {
+				break
+			}
+		}
+	}
+	return across
+}
+
 // punch punches hole h in a's register.
 func (al *Allocator) punch(a *web, h hole) {
 	sp := a.sp
@@ -548,21 +695,30 @@ func (al *Allocator) punch(a *web, h hole) {
 		full = sp.full
 	}
 	evW := al.eventWeight(a, h.s, h.e)
-	// A web punched before owns its holes and its ranges, which change in
-	// their arrays where those have room.
-	var holes, out []rng
-	if sp.full == nil {
-		holes = al.rngs.take(len(sp.holes) + 1)
-		holes = append(holes, sp.holes...)
-	} else {
-		holes, out = sp.holes, a.ranges
-	}
-	holes = unionInto(&al.rngs, holes, []rng{{h.s, h.e}})
-	if cap(out) < len(full)+len(holes) {
-		out = al.rngs.take(len(full) + len(holes))
-	}
 	was := a.start()
-	sp.full, sp.holes, a.ranges = full, holes, subtractInto(out[:0], full, holes)
+	if sp.full == nil || al.oneByOne {
+		// A web punched before owns its holes and its ranges, which
+		// change in their arrays where those have room.
+		var holes, out []rng
+		if sp.full == nil {
+			holes = al.rngs.take(len(sp.holes) + 1)
+			holes = append(holes, sp.holes...)
+		} else {
+			holes, out = sp.holes, a.ranges
+		}
+		holes = unionInto(&al.rngs, holes, []rng{{h.s, h.e}})
+		if cap(out) < len(full)+len(holes) {
+			out = al.rngs.take(len(full) + len(holes))
+		}
+		sp.full, sp.holes, a.ranges = full, holes, subtractInto(out[:0], full, holes)
+	} else {
+		// Its ranges are full less its holes: less this one too, what
+		// they are with it, cut where it meets them. Its work is what
+		// moves in the arrays, none for a hole past the others, as
+		// callHoles punches them.
+		sp.holes = unionInto(&al.rngs, sp.holes, []rng{{h.s, h.e}})
+		a.ranges = cutInto(&al.rngs, a.ranges, h.s, h.e)
+	}
 	if len(a.ranges) == 0 || a.start() != was {
 		al.moved = true
 	}
@@ -571,16 +727,63 @@ func (al *Allocator) punch(a *web, h hole) {
 	a.dense = 0
 }
 
+// cutInto takes [s, e) out of rs, sorted and apart, in its array where it
+// has room, else in one of the arena's.
+func cutInto(ar *arena[rng], rs []rng, s, e int32) []rng {
+	// The ranges from i to j meet [s, e): what is left of them is the
+	// first's part before s and the last's past e.
+	i := endsAfter(rs, 0, s)
+	j := i
+	for j < len(rs) && rs[j].from < e {
+		j++
+	}
+	if i == j {
+		return rs
+	}
+	var left [2]rng
+	n := 0
+	if rs[i].from < s {
+		left[n] = rng{rs[i].from, s}
+		n++
+	}
+	if rs[j-1].to > e {
+		left[n] = rng{e, rs[j-1].to}
+		n++
+	}
+	switch k := len(rs); {
+	case n > j-i:
+		// One range cut in two.
+		if k == cap(rs) {
+			rs = append(ar.take(2*k+1), rs...)
+		}
+		rs = rs[:k+1]
+		copy(rs[j+1:], rs[j:k])
+	case n < j-i:
+		copy(rs[i+n:], rs[j:])
+		rs = rs[:k-(j-i-n)]
+	}
+	copy(rs[i:], left[:n])
+	return rs
+}
+
 // eventWeight is the weight of a's uses and definitions in [s, e) but in
 // its holes.
 func (al *Allocator) eventWeight(a *web, s, e int32) float64 {
 	sp := a.sp
 	sum := func(s, e int32) float64 { return sp.evW[firstEvent(sp.ev, e)] - sp.evW[firstEvent(sp.ev, s)] }
 	w := sum(s, e)
-	for _, h := range sp.holes {
-		if h.from < e && h.to > s {
-			w -= sum(max(h.from, s), min(h.to, e))
+	if al.oneByOne {
+		for _, h := range sp.holes {
+			if h.from < e && h.to > s {
+				w -= sum(max(h.from, s), min(h.to, e))
+			}
 		}
+		return w
+	}
+	// The holes that meet [s, e), found by a search.
+	for k := endsAfter(sp.holes, 0, s); k < len(sp.holes) && sp.holes[k].from < e; k++ {
+		h := sp.holes[k]
+		w -= sum(max(h.from, s), min(h.to, e))
 	}
 	return w
 }

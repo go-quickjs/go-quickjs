@@ -517,6 +517,91 @@ func TestSlotScanMethods(t *testing.T) {
 	}
 }
 
+// TestOneByOneMethods allocates random functions, small ones and ones of
+// many blocks, half of them with a call at a third of their instructions
+// and a clobber of one of fewer kinds at a third of the rest, and
+// manyCallsFunc's, with what a web lives across and its holes found from
+// its uses, its ranges and the clobbers' sums, a hole cut out of its
+// ranges, and by visiting each, one by one, the hole subtracted from its
+// ranges anew (Config.oneByOne), which must give the same allocation.
+func TestOneByOneMethods(t *testing.T) {
+	rng := rand.New(rand.NewPCG(41, 43))
+	classes := [][][]int{{{3, 1, 0, 2}, {0, 1, 2}}, {{0, 1}, {2, 1, 0}}}
+	var al, each Allocator
+	split := 0
+	for iter := range 20000 {
+		var f *Func
+		if iter%2 == 0 {
+			f = randomFunc(rng)
+		} else {
+			f = randomFuncOf(rng, 24, 40)
+		}
+		if iter/2%2 == 0 {
+			nk := 1 + rng.IntN(len(randomClobbers))
+			f.Clobbers = randomClobbers[:nk]
+			for i := range f.Blocks {
+				for j := range f.Blocks[i].Insts {
+					in := &f.Blocks[i].Insts[j]
+					switch {
+					case in.Call:
+					case len(in.Temps()) == 0 && rng.IntN(3) == 0:
+						in.Call, in.Clobber = true, 0
+					case in.Clobber != 0 || rng.IntN(3) == 0:
+						in.Clobber = int8(1 + rng.IntN(nk))
+					}
+				}
+			}
+		}
+		cfg := Config{Classes: classes[iter%len(classes)], NumSlots: 1 << 16}
+		switch iter / 4 % 3 {
+		case 1:
+			cfg.Displace = true
+		case 2:
+			cfg.StressSplit = true
+		}
+		res, err := al.Allocate(f, &cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if iter%100 == 0 {
+			checkAllocation(t, iter, f, &cfg, res)
+		}
+		if res.Splits() {
+			split++
+		}
+		ecfg := cfg
+		ecfg.oneByOne = true
+		b, err := each.Allocate(f, &ecfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sameResult(f, res, b) {
+			t.Fatalf("iteration %d: the methods by the uses and one by one allocate differently\n%s\n%s", iter, dump(f, res), dump(f, b))
+		}
+	}
+	t.Logf("%d of 20000 functions split", split)
+	for _, c := range []struct {
+		long, calls, every int
+		blocks             bool
+	}{{300, 300, 0, false}, {300, 300, 0, true}, {6, 600, 2, false}, {6, 600, 3, true}} {
+		f := manyCallsFunc(c.long, c.calls, c.every, c.blocks)
+		cfg := Config{Classes: [][]int{{0, 1, 2, 3}}, NumSlots: 1 << 20}
+		ecfg := cfg
+		ecfg.oneByOne = true
+		a, err := al.Allocate(f, &cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := each.Allocate(f, &ecfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sameResult(f, a, b) {
+			t.Fatalf("%+v: the methods by the uses and one by one allocate differently", c)
+		}
+	}
+}
+
 // TestCheckCatchesMutations checks that checkResult finds allocations
 // made wrong on purpose: holes that leave out a position where their web
 // meets the one they are punched for, a split value's load into its

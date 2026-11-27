@@ -146,9 +146,11 @@ func (w *web) covers(p int32) bool {
 }
 
 type clobber struct {
-	at     int32
-	masks  []uint64
-	call   bool
+	at    int32
+	masks []uint64
+	call  bool
+	// kind is the instruction's Clobber, which masks are.
+	kind   int8
 	key    [2]int32
 	weight float64
 }
@@ -210,7 +212,11 @@ type Allocator struct {
 	sortTmp  []*web
 	callsTo  []int32
 	weightTo []float64
+	callK    []int32
 	masked   []int32
+	maskedTo []int32
+	kindOff  []int32
+	kindIdx  []int32
 	stale    []bool
 	vacross  []vacross
 	sorted   []pair
@@ -219,7 +225,7 @@ type Allocator struct {
 	victims []*web
 	holes   []hole
 	// callRun is the calls a web lives across, each with the index of its
-	// first event after it (callHoles).
+	// first event after it (callHolesEach).
 	callRun []int32
 	// The split registers' moves as found (keyed, entries), and their uses and
 	// definitions by position (events): ev from evOff[v] to evOff[v+1] are
@@ -246,9 +252,11 @@ type Allocator struct {
 	displace    bool
 	stress      bool
 	mutateHoles bool
+	oneByOne    bool
 	maxPos      int32
 	evKnown     bool
 	blocksKnown bool
+	kindsKnown  bool
 
 	rngs  arena[rng]
 	vregs arena[VReg]
@@ -308,9 +316,9 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.spPool.reset()
 	// Splitting needs a place for each edge's moves (Result.Edge): a
 	// function with a critical edge is allocated without.
-	al.f, al.evKnown, al.blocksKnown = f, false, false
+	al.f, al.evKnown, al.blocksKnown, al.kindsKnown = f, false, false, false
 	al.split, al.stress = !cfg.NoSplit, cfg.StressSplit && !cfg.NoSplit
-	al.displace, al.mutateHoles = cfg.Displace, cfg.mutateHoles
+	al.displace, al.mutateHoles, al.oneByOne = cfg.Displace, cfg.mutateHoles, cfg.oneByOne
 	for i := range f.Blocks {
 		if len(f.Blocks[i].Succs) < 2 {
 			continue
@@ -528,7 +536,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 				}
 			}
 			if in.Call || in.Clobber != 0 {
-				clobbers = append(clobbers, clobber{at: u, masks: f.ClobberOf(in), call: in.Call, key: [2]int32{int32(i), int32(j)}, weight: w})
+				clobbers = append(clobbers, clobber{at: u, masks: f.ClobberOf(in), call: in.Call, kind: in.Clobber, key: [2]int32{int32(i), int32(j)}, weight: w})
 			}
 		}
 		for _, p := range b.Phis {
@@ -564,25 +572,32 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		ranges[v] = out
 	}
 	// clobAt is each clobber's position, in order; callsTo and weightTo
-	// the number and weight of the calls before each clobber, and masked
-	// the clobbers that write registers of their own, by index.
+	// the number and weight of the calls before each clobber, callK the
+	// calls' indices among the clobbers -- those from lo to hi are
+	// callK[callsTo[lo]:callsTo[hi]] -- masked the clobbers that write
+	// registers of their own, by index, and maskedTo the number of them
+	// before each clobber.
 	clobAt := al.clobAt[:0]
 	callsTo := append(al.callsTo[:0], 0)
 	weightTo := append(al.weightTo[:0], 0)
+	callK := al.callK[:0]
 	masked := al.masked[:0]
+	maskedTo := append(al.maskedTo[:0], 0)
 	for k := range clobbers {
 		c := &clobbers[k]
 		clobAt = append(clobAt, c.at)
 		n, w := callsTo[k], weightTo[k]
 		if c.call {
 			n, w = n+1, w+c.weight
+			callK = append(callK, int32(k))
 		}
 		callsTo, weightTo = append(callsTo, n), append(weightTo, w)
 		if len(c.masks) > 0 {
 			masked = append(masked, int32(k))
 		}
+		maskedTo = append(maskedTo, int32(len(masked)))
 	}
-	al.clobAt, al.callsTo, al.weightTo, al.masked = clobAt, callsTo, weightTo, masked
+	al.clobAt, al.callsTo, al.weightTo, al.callK, al.masked, al.maskedTo = clobAt, callsTo, weightTo, callK, masked, maskedTo
 	// clobIdx is, at each position p, the number of clobbers before it:
 	// the first at or past p.
 	clobIdx := al.clobIdx[:0]
@@ -660,13 +675,19 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 						a.calls = true
 						a.weight += weightTo[hi] - weightTo[lo]
 					}
-					for mi < len(masked) && int(masked[mi]) < lo {
-						mi++
-					}
-					for ; mi < len(masked) && int(masked[mi]) < hi; mi++ {
-						if c := &clobbers[masked[mi]]; cls < len(c.masks) {
-							a.avoid |= c.masks[cls]
+					if al.oneByOne {
+						for mi < len(masked) && int(masked[mi]) < lo {
+							mi++
 						}
+						for ; mi < len(masked) && int(masked[mi]) < hi; mi++ {
+							if c := &clobbers[masked[mi]]; cls < len(c.masks) {
+								a.avoid |= c.masks[cls]
+							}
+						}
+						continue
+					}
+					if i, j := maskedTo[lo], maskedTo[hi]; j > i {
+						a.avoid |= al.maskOf(cls, i, j)
 					}
 				}
 			}
@@ -862,7 +883,11 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 				// still would, it lives in its slot.
 				cost := cur.callWeight
 				if al.split && (cost >= cur.weight || al.stress) {
-					cost = al.callHoles(cur)
+					if al.oneByOne {
+						cost = al.callHolesEach(cur)
+					} else {
+						cost = al.callHoles(cur)
+					}
 				}
 				if sp := cur.sp; sp != nil {
 					cost += sp.holeW + sp.moveW
@@ -1127,11 +1152,15 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		// The calls each of its registers lives across in it, which
 		// reload it.
 		for _, m := range w.members {
-			crossed(ranges[m], func(k int) {
-				if clobbers[k].call && !inHoles(w.holesOf(), clobAt[k]) {
-					across = append(across, acrossEntry{int32(k), m})
-				}
-			})
+			if al.oneByOne {
+				crossed(ranges[m], func(k int) {
+					if clobbers[k].call && !inHoles(w.holesOf(), clobAt[k]) {
+						across = append(across, acrossEntry{int32(k), m})
+					}
+				})
+				continue
+			}
+			across = al.reloads(across, m, ranges[m], w.holesOf())
 		}
 	}
 	if res.splits > 0 {
@@ -1167,6 +1196,72 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.list = list[:0]
 	lap(PhaseSlots)
 	return res, nil
+}
+
+// kinds makes, the first time maskOf searches in an allocation, kindIdx:
+// the masked clobbers' indices among al.masked by their kind, in order
+// within each, those of kind q from kindOff[q] to kindOff[q+1].
+// Most functions never need it: a range rarely crosses more masked
+// clobbers than there are kinds.
+func (al *Allocator) kinds() {
+	if al.kindsKnown {
+		return
+	}
+	al.kindsKnown = true
+	clobbers, masked := al.clobbers, al.masked
+	kindOff := grown(al.kindOff, len(al.f.Clobbers)+2)
+	clear(kindOff)
+	kindIdx := grown(al.kindIdx, len(masked))
+	for _, k := range masked {
+		kindOff[clobbers[k].kind+1]++
+	}
+	for q := 1; q < len(kindOff); q++ {
+		kindOff[q] += kindOff[q-1]
+	}
+	for i, k := range masked {
+		q := clobbers[k].kind
+		kindIdx[kindOff[q]] = int32(i)
+		kindOff[q]++
+	}
+	// Each kind's start, moved to its end by the walk: back.
+	copy(kindOff[1:], kindOff[:len(kindOff)-1])
+	kindOff[0] = 0
+	al.kindOff, al.kindIdx = kindOff, kindIdx
+}
+
+// maskOf is the registers of class cls the masked clobbers from i to j
+// (their indices among al.masked) write: each visited where they are no
+// more than the kinds of clobbers (Func.Clobbers), else each kind's first
+// at or past i found by a search, a kind's clobbers all writing the same.
+func (al *Allocator) maskOf(cls int, i, j int32) uint64 {
+	avoid := uint64(0)
+	if int(j-i) <= len(al.f.Clobbers) {
+		for _, k := range al.masked[i:j] {
+			if c := &al.clobbers[k]; cls < len(c.masks) {
+				avoid |= c.masks[cls]
+			}
+		}
+		return avoid
+	}
+	al.kinds()
+	for q := 1; q+1 < len(al.kindOff); q++ {
+		idx := al.kindIdx[al.kindOff[q]:al.kindOff[q+1]]
+		lo, hi := 0, len(idx)
+		for lo < hi {
+			m := int(uint(lo+hi) >> 1)
+			if idx[m] < i {
+				lo = m + 1
+			} else {
+				hi = m
+			}
+		}
+		if lo < len(idx) && idx[lo] < j {
+			if ms := al.f.Clobbers[q-1]; cls < len(ms) {
+				avoid |= ms[cls]
+			}
+		}
+	}
+	return avoid
 }
 
 // widthOf is the slots v takes in memory (Func.Width).
