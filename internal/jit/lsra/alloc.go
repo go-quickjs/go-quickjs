@@ -342,6 +342,15 @@ type Allocator struct {
 	outFrom   []int32
 	outBlocks []int32
 	outAt     []int32
+	// exploreWords's.
+	wIn, wOut, wKill, wPend []uint64
+	wMark                   []bool
+	wTouched                []int32
+	outWords                []outWord
+	// byWords says the registers live out of each block are words
+	// (exploreWords): block i's outByBlock from outOff[i] to outOff[i+1].
+	byWords    bool
+	outByBlock []outWord
 
 	// The function being allocated, where splitting is allowed (split),
 	// its positions' end (maxPos), and whether its events and blockOf's
@@ -359,6 +368,7 @@ type Allocator struct {
 	blockByBlock bool
 	plainLists   bool
 	walkLists    bool
+	exploreOne   bool
 	mutateHoles  bool
 	oneByOne     bool
 	searchPreds  bool
@@ -503,7 +513,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.hintPass, al.blockByBlock, al.mergeAll, al.regByReg, al.phiWalks = cfg.hintPass, cfg.blockByBlock, cfg.mergeAll, cfg.regByReg, cfg.phiWalks
 	al.searchPreds, al.rangeLists, al.sortList, al.alwaysTest, al.webHeap = cfg.searchPreds, cfg.rangeLists, cfg.sortList, cfg.alwaysTest, cfg.webHeap
 	al.partHints, al.eagerWebs, al.forceLazy = cfg.partHints, cfg.eagerWebs, cfg.lazyWebs
-	al.liveSets, al.walkLists = cfg.liveSets, cfg.walkLists
+	al.liveSets, al.walkLists, al.exploreOne = cfg.liveSets, cfg.walkLists, cfg.exploreOne
 
 	// Liveness, of the registers that may be live across a block's
 	// boundary -- a phi's, a phi's argument, one used in a block other
@@ -631,8 +641,9 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	// each block listed, without the sets; else, and with the walks that
 	// read the sets (Config.liveSets, markPass, phiWalks, rangeLists), the
 	// sets.
-	al.byReg = once && !al.liveSets && !al.markPass && !al.phiWalks && !al.rangeLists && int64(stride)*int64(nb)*int64(words)*8 >= byRegMin
+	al.byReg = once && !al.liveSets && !al.markPass && !al.phiWalks && !al.rangeLists && (int64(stride)*int64(nb)*int64(words)*8 >= byRegMin || cfg.byRegs)
 	var liveOut func(int) []uint64
+	al.byWords = false
 	if al.byReg {
 		al.exploreRegs(f, defBlock, paths)
 	} else {
@@ -1932,6 +1943,9 @@ func (al *Allocator) defineWalk(f *Func) (globals []VReg, paths, later []useAt, 
 				}
 				defBlock[d], defInst[d] = int32(i), -1
 				if global[d] == 0 {
+					if len(globals) == cap(globals) {
+						globals = doubled(globals)
+					}
 					globals = append(globals, d)
 					global[d] = int32(len(globals))
 				}
@@ -1939,6 +1953,9 @@ func (al *Allocator) defineWalk(f *Func) (globals []VReg, paths, later []useAt, 
 			nargs += len(p.Args)
 			for _, a := range p.Args {
 				if a >= 0 && cls[a] != NoClass && global[a] == 0 {
+					if len(globals) == cap(globals) {
+						globals = doubled(globals)
+					}
 					globals = append(globals, a)
 					global[a] = int32(len(globals))
 				}
@@ -1960,8 +1977,14 @@ func (al *Allocator) defineWalk(f *Func) (globals []VReg, paths, later []useAt, 
 						later = append(later, useAt{u, int32(i), int32(j)})
 					case db != int32(i):
 						if global[u] == 0 {
+							if len(globals) == cap(globals) {
+								globals = doubled(globals)
+							}
 							globals = append(globals, u)
 							global[u] = int32(len(globals))
+						}
+						if len(paths) == cap(paths) {
+							paths = doubled(paths)
 						}
 						paths = append(paths, useAt{u, int32(i), int32(j)})
 					}
@@ -2021,7 +2044,29 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 		b := &f.Blocks[i]
 		start, end := starts[i], ends[i]
 		w := depthWeight(b.Depth)
-		if al.byReg {
+		if al.byWords {
+			// The registers live out of the block, in words.
+			for _, x := range al.outByBlock[outOff[i]:outOff[i+1]] {
+				for word := x.bits; word != 0; word &= word - 1 {
+					v := globals[int(x.g0)+bits.TrailingZeros64(word)]
+					l := &last[v]
+					switch {
+					case l.from == end+2:
+						// Live into the next block too: its range, the last
+						// found, runs from here.
+						l.from = start
+					case l.to == 0:
+						*l = rng{start, end + 1}
+						seen[nregs] = v
+						nregs++
+					default:
+						nodes = append(nodes, rnode{*l, before[v]})
+						before[v] = int32(len(nodes))
+						*l = rng{start, end + 1}
+					}
+				}
+			}
+		} else if al.byReg {
 			// The registers live out of the block, listed.
 			for _, v := range outRegs[outOff[i]:outOff[i+1]] {
 				l := &last[v]
@@ -2602,6 +2647,10 @@ func (al *Allocator) exploreRegs(f *Func, defBlock []int32, paths []useAt) {
 	}
 	predAt[nb] = int32(len(preds))
 	al.predAt2, al.preds2 = predAt, preds
+	if !al.exploreOne {
+		al.exploreWords(nb, ev, off, defBlock, predAt, preds)
+		return
+	}
 	for g, v := range globals {
 		outFrom[g] = int32(len(outBlocks))
 		mark := int32(g + 1)
@@ -2665,6 +2714,126 @@ func (al *Allocator) exploreRegs(f *Func, defBlock []int32, paths []useAt) {
 	al.inMark, al.outMark, al.outFrom, al.outOff, al.outBlocks, al.outRegs, al.outAt, al.work = inMark, outMark, outFrom, outOff, outBlocks, outRegs, at, work[:0]
 	// No sets: the ranges' walk reads the lists.
 	al.outSum, al.outSumW = al.outSum[:0], 0
+}
+
+// exploreWords is exploreRegs's exploration of the paths, of the registers
+// of 64 global numbers at once, from g0 on, each a bit of a word: what of
+// them is live into and out of each block (wIn, wOut), defined there
+// (wKill), and live into it from where the walk has yet to visit its
+// predecessors (wPend, the blocks with any on work). A word a block is
+// what one register's walk marks a block with, and a block's word takes
+// the 64 in one visit where their paths cross it together, as those of
+// registers numbered one after another, which the walk that defines met
+// one after another, mostly do. The blocks the words of each 64 touch are
+// listed (wTouched, wMark), and cleared for the next: the tables are clear
+// between explorations. ev and off are each register's starts
+// (exploreRegs). The registers live out of each block are kept as words
+// (outWords), each 64's in turn, then listed by block, each block's in
+// order of their global numbers.
+func (al *Allocator) exploreWords(nb int, ev, off, defBlock, predAt, preds []int32) {
+	globals := al.globals
+	ng := len(globals)
+	in, out := grown(al.wIn, nb), grown(al.wOut, nb)
+	kill, pend := grown(al.wKill, nb), grown(al.wPend, nb)
+	mark := grown(al.wMark, nb)
+	touched, work, words := al.wTouched[:0], al.work[:0], al.outWords[:0]
+	for g0 := 0; g0 < ng; g0 += 64 {
+		g1 := min(g0+64, ng)
+		for g := g0; g < g1; g++ {
+			if db := defBlock[globals[g]]; db >= 0 {
+				if !mark[db] {
+					mark[db] = true
+					touched = append(touched, db)
+				}
+				kill[db] |= 1 << (g - g0)
+			}
+		}
+		for g := g0; g < g1; g++ {
+			bit := uint64(1) << (g - g0)
+			db := defBlock[globals[g]]
+			for _, e := range ev[off[g]:off[g+1]] {
+				b := e >> 1
+				if !mark[b] {
+					mark[b] = true
+					touched = append(touched, b)
+				}
+				if e&1 != 0 {
+					out[b] |= bit
+					if b == db {
+						continue
+					}
+				}
+				if in[b]&bit != 0 {
+					continue
+				}
+				in[b] |= bit
+				if pend[b] == 0 {
+					work = append(work, b)
+				}
+				pend[b] |= bit
+			}
+		}
+		for len(work) > 0 {
+			c := work[len(work)-1]
+			work = work[:len(work)-1]
+			bits := pend[c]
+			pend[c] = 0
+			for _, p := range preds[predAt[c]:predAt[c+1]] {
+				if !mark[p] {
+					mark[p] = true
+					touched = append(touched, p)
+				}
+				out[p] |= bits
+				if add := bits &^ kill[p] &^ in[p]; add != 0 {
+					in[p] |= add
+					if pend[p] == 0 {
+						work = append(work, p)
+					}
+					pend[p] |= add
+				}
+			}
+		}
+		for _, b := range touched {
+			if out[b] != 0 {
+				if len(words) == cap(words) {
+					words = doubled(words)
+				}
+				words = append(words, outWord{b, int32(g0), out[b]})
+			}
+			in[b], out[b], kill[b], mark[b] = 0, 0, 0, false
+		}
+		touched = touched[:0]
+	}
+	// The words by block, each block's in order of their first registers,
+	// as they were found: block i's from outOff[i] to outOff[i+1] of
+	// outByBlock, which the ranges' walk reads (al.byWords).
+	outOff := grown(al.outOff, nb+1)
+	clear(outOff)
+	for _, w := range words {
+		outOff[w.b+1]++
+	}
+	for i := 1; i <= nb; i++ {
+		outOff[i] += outOff[i-1]
+	}
+	byBlock := grown(al.outByBlock, len(words))
+	at := grown(al.outAt, nb)
+	copy(at, outOff[:nb])
+	for _, w := range words {
+		byBlock[at[w.b]] = w
+		at[w.b]++
+	}
+	al.wIn, al.wOut, al.wKill, al.wPend, al.wMark, al.wTouched, al.work, al.outWords = in, out, kill, pend, mark, touched, work[:0], words[:0]
+	al.outOff, al.outByBlock, al.outAt, al.byWords = outOff, byBlock, at, true
+	// No sets: the ranges' walk reads the lists.
+	al.outSum, al.outSumW = al.outSum[:0], 0
+}
+
+// outWord is a word of registers live out of block b: bit k the register
+// of global number g0+k.
+type outWord struct {
+	b    int32
+	g0   int32
+	bits uint64
 }
 
 // dataflow finds the registers' liveness by sweeps of the blocks until

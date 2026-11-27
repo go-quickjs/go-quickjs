@@ -318,6 +318,12 @@ type Config struct {
 	// where the web starts before the least of the entries' ats -- none has
 	// changed -- or, for the inactive webs' meeting it, ends by it.
 	walkLists bool
+	// byRegs has liveness found register by register (exploreRegs)
+	// whatever the size of the sets it would take, which TestWalkMethods
+	// sets for every function; exploreOne has exploreRegs explore one
+	// register at a time, for the tests that compare it with exploring 64
+	// at once (exploreWords).
+	byRegs, exploreOne bool
 	// mutateHoles has the allocation punch holes that leave a position
 	// where the webs meet out, for the test that the checks find it.
 	mutateHoles bool

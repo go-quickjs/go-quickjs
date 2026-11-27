@@ -1222,6 +1222,7 @@ func TestWalkMethods(t *testing.T) {
 		{"slotHeap", func(c *Config) { c.slotHeap = true }},
 		{"liveSets", func(c *Config) { c.liveSets = true }},
 		{"walkLists", func(c *Config) { c.walkLists = true }},
+		{"exploreOne", func(c *Config) { c.exploreOne = true }},
 	}
 	var al, old Allocator
 	twice := 0
@@ -1265,9 +1266,10 @@ func TestWalkMethods(t *testing.T) {
 	check := func(name string, f *Func, cfg Config) {
 		t.Helper()
 		cfg.Lap = hints(&al, &hintsA)
-		// The webs of their own made where the coalescing joins them,
-		// whatever the function's size (Config.lazyWebs).
-		cfg.lazyWebs = true
+		// The webs of their own made where the coalescing joins them, and
+		// liveness found register by register, whatever the function's
+		// size (Config.lazyWebs, byRegs).
+		cfg.lazyWebs, cfg.byRegs = true, true
 		a, errA := al.Allocate(f, &cfg)
 		for _, o := range olds {
 			ocfg := cfg
