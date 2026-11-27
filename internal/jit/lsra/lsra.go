@@ -313,6 +313,11 @@ type Config struct {
 	// lists at every position, for the tests that compare it with reading
 	// each only where its entry says it may have changed.
 	plainLists bool
+	// walkLists has the scan walk its active and inactive lists at every
+	// web it scans, for the tests that compare it with skipping the walks
+	// where the web starts before the least of the entries' ats -- none has
+	// changed -- or, for the inactive webs' meeting it, ends by it.
+	walkLists bool
 	// mutateHoles has the allocation punch holes that leave a position
 	// where the webs meet out, for the test that the checks find it.
 	mutateHoles bool

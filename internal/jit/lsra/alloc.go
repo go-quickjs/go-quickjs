@@ -356,6 +356,7 @@ type Allocator struct {
 	mergeAll     bool
 	blockByBlock bool
 	plainLists   bool
+	walkLists    bool
 	mutateHoles  bool
 	oneByOne     bool
 	searchPreds  bool
@@ -500,7 +501,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.hintPass, al.blockByBlock, al.mergeAll, al.regByReg, al.phiWalks = cfg.hintPass, cfg.blockByBlock, cfg.mergeAll, cfg.regByReg, cfg.phiWalks
 	al.searchPreds, al.rangeLists, al.sortList, al.alwaysTest, al.webHeap = cfg.searchPreds, cfg.rangeLists, cfg.sortList, cfg.alwaysTest, cfg.webHeap
 	al.partHints, al.eagerWebs, al.forceLazy = cfg.partHints, cfg.eagerWebs, cfg.lazyWebs
-	al.liveSets = cfg.liveSets
+	al.liveSets, al.walkLists = cfg.liveSets, cfg.walkLists
 
 	// Liveness, of the registers that may be live across a block's
 	// boundary -- a phi's, a phi's argument, one used in a block other
@@ -1066,8 +1067,18 @@ func (al *Allocator) scan(classes [][]int, list []*web) {
 	al.moved = false
 	// costs is an eviction's weight of each register (below).
 	var costs [64]float64
+	// every reads the lists at every web scanned (Config.plainLists,
+	// walkLists).
+	every := al.plainLists || al.walkLists
 	for cls, regs := range classes {
 		active, inactive := al.active[:0], al.inactive[:0]
+		// actAt and inAt are at most the least at of the active and the
+		// inactive entries: where the web scanned starts before one, no
+		// entry of its list has changed, and the walk that reads them is
+		// skipped; where it ends by inAt, no inactive web meets it.
+		actAt, inAt := int32(math.MaxInt32), int32(math.MaxInt32)
+		// actRegs is the active webs' registers.
+		actRegs := uint64(0)
 		// The webs to scan: the class's, in order of their starts, and
 		// the parts of webs taken apart, which start at or after the web
 		// they were part of, in a heap. Each is next where it is the less.
@@ -1155,63 +1166,92 @@ func (al *Allocator) scan(classes [][]int, list []*web) {
 			// by its at.
 			p, end := cur.start(), cur.end()
 			back := al.back[:0]
-			keep := active[:0]
-			for _, e := range active {
-				if p < e.at && !al.plainLists {
-					keep = append(keep, e)
-					continue
-				}
-				switch a := e.w; {
-				case a.end() <= p:
-				case a.covers(p):
-					keep = append(keep, activeEntry(a))
-				default:
-					back = append(back, inactiveEntry(a))
-				}
-			}
-			active = keep
-			// Those it keeps where they are, written again only past the
-			// first it takes off.
-			kept := 0
-			for i := range inactive {
-				e := &inactive[i]
-				if p < e.at && !al.plainLists {
-					if kept != i {
-						inactive[kept] = *e
+			if p >= actAt || every {
+				keep := active[:0]
+				actAt, actRegs = math.MaxInt32, 0
+				for _, e := range active {
+					if p < e.at && !al.plainLists {
+						keep = append(keep, e)
+						actAt = min(actAt, e.at)
+						actRegs |= 1 << e.reg
+						continue
 					}
-					kept++
-					continue
+					switch a := e.w; {
+					case a.end() <= p:
+					case a.covers(p):
+						x := activeEntry(a)
+						keep = append(keep, x)
+						actAt = min(actAt, x.at)
+						actRegs |= 1 << x.reg
+					default:
+						back = append(back, inactiveEntry(a))
+					}
 				}
-				switch a := e.w; {
-				case a.end() <= p:
-				case a.covers(p):
-					active = append(active, activeEntry(a))
-				default:
-					inactive[kept] = inactiveEntry(a)
-					kept++
-				}
+				active = keep
 			}
-			inactive = inactive[:kept]
+			if p >= inAt || every {
+				// Those it keeps where they are, written again only past the
+				// first it takes off.
+				kept := 0
+				inAt = math.MaxInt32
+				for i := range inactive {
+					e := &inactive[i]
+					if p < e.at && !al.plainLists {
+						if kept != i {
+							inactive[kept] = *e
+						}
+						kept++
+						inAt = min(inAt, e.at)
+						continue
+					}
+					switch a := e.w; {
+					case a.end() <= p:
+					case a.covers(p):
+						x := activeEntry(a)
+						active = append(active, x)
+						actAt = min(actAt, x.at)
+						actRegs |= 1 << x.reg
+					default:
+						x := inactiveEntry(a)
+						inactive[kept] = x
+						kept++
+						inAt = min(inAt, x.at)
+					}
+				}
+				inactive = inactive[:kept]
+			}
 			if len(back) > 0 {
 				inactive = append(inactive, back...)
+				for _, e := range back {
+					inAt = min(inAt, e.at)
+				}
 			}
 			al.back = back
-			used := cur.avoid
-			for _, e := range active {
-				used |= 1 << e.reg
+			used := cur.avoid | actRegs
+			if al.walkLists {
+				used = cur.avoid
+				for _, e := range active {
+					used |= 1 << e.reg
+				}
 			}
 			// meets is, for each inactive web that may meet cur, whether it
 			// does, once a walk has tested it -- meetYes or meetNo, else 0 --
-			// for the walks after, which test the same.
-			meets := grown(al.meets, len(inactive))
-			clear(meets)
-			al.meets = meets
-			for i, e := range inactive {
-				if used&(1<<e.reg) == 0 && (e.at < end || al.plainLists) {
-					meets[i] = meetNo
-					if overlap(e.w.ranges[e.w.cur:], cur.ranges) {
-						meets[i] = meetYes
-						used |= 1 << e.reg
+			// for the walks after, which test the same. Where cur ends by
+			// inAt, none meets it, and the walks of the inactive webs that
+			// test it are skipped (meetsAny).
+			meets := al.meets
+			meetsAny := end > inAt || every
+			if meetsAny {
+				meets = grown(meets, len(inactive))
+				clear(meets)
+				al.meets = meets
+				for i, e := range inactive {
+					if used&(1<<e.reg) == 0 && (e.at < end || al.plainLists) {
+						meets[i] = meetNo
+						if overlap(e.w.ranges[e.w.cur:], cur.ranges) {
+							meets[i] = meetYes
+							used |= 1 << e.reg
+						}
 					}
 				}
 			}
@@ -1265,9 +1305,11 @@ func (al *Allocator) scan(classes [][]int, list []*web) {
 							costs[e.reg] = max(costs[e.reg], al.density(e.w))
 						}
 					}
-					for i, e := range inactive {
-						if cur.avoid&(1<<e.reg) == 0 && (e.at < end || al.plainLists) && al.meets1(meets, i, e, cur) {
-							costs[e.reg] = max(costs[e.reg], al.density(e.w))
+					if meetsAny {
+						for i, e := range inactive {
+							if cur.avoid&(1<<e.reg) == 0 && (e.at < end || al.plainLists) && al.meets1(meets, i, e, cur) {
+								costs[e.reg] = max(costs[e.reg], al.density(e.w))
+							}
 						}
 					}
 				}
@@ -1304,9 +1346,11 @@ func (al *Allocator) scan(classes [][]int, list []*web) {
 						victims = append(victims, e.w)
 					}
 				}
-				for i, e := range inactive {
-					if int(e.reg) == best && (e.at < end || al.plainLists) && al.meets1(meets, i, e, cur) {
-						victims = append(victims, e.w)
+				if meetsAny {
+					for i, e := range inactive {
+						if int(e.reg) == best && (e.at < end || al.plainLists) && al.meets1(meets, i, e, cur) {
+							victims = append(victims, e.w)
+						}
 					}
 				}
 				for _, a := range victims {
@@ -1337,7 +1381,9 @@ func (al *Allocator) scan(classes [][]int, list []*web) {
 						}
 					}
 				}
-				evicted := func(e scanEntry) bool { return slices.Contains(victims, e.w) }
+				// Every victim has the register taken, which cur takes: the
+				// active ones' bit stays in actRegs.
+				evicted := func(e scanEntry) bool { return int(e.reg) == best && slices.Contains(victims, e.w) }
 				active = slices.DeleteFunc(active, evicted)
 				inactive = slices.DeleteFunc(inactive, evicted)
 				for k, a := range victims {
@@ -1351,9 +1397,14 @@ func (al *Allocator) scan(classes [][]int, list []*web) {
 					switch {
 					case a.end() <= p:
 					case a.covers(p):
-						active = append(active, activeEntry(a))
+						x := activeEntry(a)
+						active = append(active, x)
+						actAt = min(actAt, x.at)
+						actRegs |= 1 << x.reg
 					default:
-						inactive = append(inactive, inactiveEntry(a))
+						x := inactiveEntry(a)
+						inactive = append(inactive, x)
+						inAt = min(inAt, x.at)
 					}
 				}
 				clear(victims)
@@ -1370,7 +1421,10 @@ func (al *Allocator) scan(classes [][]int, list []*web) {
 				}
 				g.held[k] = cur.gi
 			}
-			active = append(active, activeEntry(cur))
+			x := activeEntry(cur)
+			active = append(active, x)
+			actAt = min(actAt, x.at)
+			actRegs |= 1 << x.reg
 		}
 		clear(active)
 		clear(inactive)

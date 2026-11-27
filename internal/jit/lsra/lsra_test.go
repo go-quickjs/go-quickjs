@@ -1221,6 +1221,7 @@ func TestWalkMethods(t *testing.T) {
 		{"partHints", func(c *Config) { c.partHints = true }},
 		{"slotHeap", func(c *Config) { c.slotHeap = true }},
 		{"liveSets", func(c *Config) { c.liveSets = true }},
+		{"walkLists", func(c *Config) { c.walkLists = true }},
 	}
 	var al, old Allocator
 	twice := 0
