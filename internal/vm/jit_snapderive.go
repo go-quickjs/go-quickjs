@@ -62,6 +62,11 @@ type jitSnapData struct {
 	consts jitConstData
 	// leaf is the leaves' (jit_snapleaf.go).
 	leaf jitLeafData
+	// global is the globals' and the generators' steps'
+	// (jit_snapglobal.go).
+	global jitGlobalData
+	// closure is the closures' (jit_snapglobal.go).
+	closure jitClosureData
 	// native is the learning's methods' (jit_snapnative.go), calls the
 	// calls' (jit_snapcalls.go).
 	native jitNativeData

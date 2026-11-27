@@ -140,6 +140,21 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 					unbound[snapCreatePool]++
 				}
 			}
+			for _, a := range s.d.global.globals {
+				if !a.bound {
+					unbound[snapGlobal]++
+				}
+			}
+			for _, a := range s.d.global.steps {
+				if !a.bound {
+					unbound[snapGenSteps]++
+				}
+			}
+			for _, l := range s.d.closure.lits {
+				if !l.bound {
+					unbound[snapClosure]++
+				}
+			}
 			if s.d.native.unknownUnasked {
 				unbound[snapOperands]++
 			}
@@ -213,6 +228,7 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 		t.Fatalf("%d functions, %d answers compared", functions, compared)
 	}
 	t.Logf("leaves: CreatePool's pools made by register pc at no PC a Leaf answers: %d", unbound[snapCreatePool])
+	t.Logf("globals: asked by register pc at no PC: %d Global, %d GenSteps; closures' literals made by register pc unused: %d", unbound[snapGlobal], unbound[snapGenSteps], unbound[snapClosure])
 	t.Logf("%d functions, %d questions compared; asked by register pc at no PC: %d Accessor, %d StringProperty; made by register pc at no PC: %d NativeCalls, %d Operands",
 		functions, compared, unbound[snapAccessor], unbound[snapStringProperty], unbound[snapNativeCalls], unbound[snapOperands])
 }

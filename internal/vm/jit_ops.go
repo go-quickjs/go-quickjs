@@ -342,39 +342,65 @@ func (q *jitCallCtx) allocSite(rpc int, w bytecode.RInstr, argc int) (ssa.CallSi
 func (f *jitRegFeedback) Closure(pc int) (ssa.ClosureSite, bool) {
 	fb := f.fb
 	w, op, ok := f.at(pc)
-	if !ok || op != ir.Closure || w.Op() != bytecode.RClosureW || fb.e == nil || fb.root != nil || fb.cl == nil ||
-		fb.fn.Kind == bytecode.KindDerivedConstructor {
+	if !ok || op != ir.Closure || !jitClosureAsked(fb, w) {
 		return ssa.ClosureSite{}, false
+	}
+	return jitClosureOf(f.p, f.rc, fb.cl.consts, pc, func(rpc, k int) (*abi.ObjectPool, bool) {
+		l := fb.r.jitRegClosureLiteral(fb.e, fb.cl, rpc, k)
+		if l == nil {
+			return nil, false
+		}
+		fb.keep().pools = append(fb.keep().pools, l.pool)
+		return l.pool, true
+	})
+}
+
+// jitClosureAsked reports whether Closure may answer for closure_w, w, of
+// fb's function: its own code's, learned, not a derived constructor's,
+// the closure's template one that reads nothing of its maker.
+func jitClosureAsked(fb *jitFeedback, w bytecode.RInstr) bool {
+	if w.Op() != bytecode.RClosureW || fb.e == nil || fb.root != nil || fb.cl == nil || fb.fn.Kind == bytecode.KindDerivedConstructor {
+		return false
 	}
 	k := int(w.BC())
-	if k >= len(fb.cl.consts) || k >= len(f.rc.Caps) || jitNeedsMaker(fb.cl.consts[k]) {
+	return k < len(fb.cl.consts) && !jitNeedsMaker(fb.cl.consts[k]) && fb.cl.consts[k].template() != nil
+}
+
+// jitClosureOf is Closure's answer at the program's instruction pc of p,
+// rc's lowering, its closure's constants consts, the template's literal
+// and pool made by literal (jitRegClosureLiteral), of the register pc and
+// the constant: of the live state, or a snapshot's gather's, which made it
+// by register pc.
+func jitClosureOf(p *ir.Program, rc *bytecode.RegCode, consts []Value, pc int, literal func(rpc, k int) (*abi.ObjectPool, bool)) (ssa.ClosureSite, bool) {
+	w := rc.Code[p.Origin[pc]]
+	k := int(w.BC())
+	if k >= len(consts) || k >= len(rc.Caps) {
 		return ssa.ClosureSite{}, false
 	}
-	t := fb.cl.consts[k].template()
+	t := consts[k].template()
 	if t == nil {
 		return ssa.ClosureSite{}, false
 	}
-	regs := jitRegCapturedRegs(f.p.Captured)
+	regs := jitRegCapturedRegs(p.Captured)
 	caps := make([]int32, len(t.fn.Upvalues))
 	for i, desc := range t.fn.Upvalues {
 		if !desc.FromParent {
 			caps[i] = int32(desc.Index) << 1
 			continue
 		}
-		if i >= len(f.rc.Caps[k]) {
+		if i >= len(rc.Caps[k]) {
 			return ssa.ClosureSite{}, false
 		}
-		at := slices.Index(regs, int(f.rc.Caps[k][i]))
+		at := slices.Index(regs, int(rc.Caps[k][i]))
 		if at < 0 {
 			return ssa.ClosureSite{}, false
 		}
 		caps[i] = int32(at)<<1 | 1
 	}
-	l := fb.r.jitRegClosureLiteral(fb.e, fb.cl, int(f.p.Origin[pc]), k)
-	if l == nil {
+	pool, ok := literal(int(p.Origin[pc]), k)
+	if !ok {
 		return ssa.ClosureSite{}, false
 	}
-	fb.keep().pools = append(fb.keep().pools, l.pool)
 	// An arrow's this is the maker's register 1, as closure_w takes it
 	// (regClosure), not the context's This, which register code's frame
 	// does not hold (ssa.ClosureSite's LexThisReg). An arrow an arrow makes
@@ -384,7 +410,7 @@ func (f *jitRegFeedback) Closure(pc int) (ssa.ClosureSite, bool) {
 	// register 1 the value bound (jitRegThisBound), so that capturing the
 	// value is exact.
 	arrow := t.fn.Kind == bytecode.KindArrow
-	return ssa.ClosureSite{Pool: uintptr(unsafe.Pointer(l.pool)), Captures: caps, LexThis: arrow, LexThisReg: arrow}, true
+	return ssa.ClosureSite{Pool: uintptr(unsafe.Pointer(pool)), Captures: caps, LexThis: arrow, LexThisReg: arrow}, true
 }
 
 // jitRegClosureLiteral is the pool of closures of cl's constant k, its

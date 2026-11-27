@@ -547,31 +547,10 @@ func (f *jitRegFeedback) accessorInline(callee *Object, cl *closure, write bool)
 // the slot its cache, by the register instruction's C, remembers.
 func (f *jitRegFeedback) Global(pc int) (ssa.GlobalSite, bool) {
 	w, op, ok := f.at(pc)
-	if !ok || f.fb.cl == nil {
+	if !ok || f.fb.cl == nil || !jitGlobalOp(op) {
 		return ssa.GlobalSite{}, false
 	}
-	rpc := int(f.p.Origin[pc])
-	site, write, check := int(w.C()), false, false
-	switch w.Op() {
-	case bytecode.RGetGlobal, bytecode.RGetGlobalInstanceOf:
-	case bytecode.RSetGlobal:
-		write = true
-	case bytecode.RGetGlobalOpt:
-		// typeof's read, which has no site of its own.
-		site = -1
-	case bytecode.RCheckGlobalRef:
-		check = true
-	default:
-		return ssa.GlobalSite{}, false
-	}
-	if op != ir.BindingRead && op != ir.BindingWrite && op != ir.BindingCheck {
-		return ssa.GlobalSite{}, false
-	}
-	name, ok := f.name(rpc, w.B())
-	if !ok {
-		return ssa.GlobalSite{}, false
-	}
-	return f.fb.globalSite(name, site, write, check)
+	return f.globalAt(int(f.p.Origin[pc]), w)
 }
 
 // CallShape is ssa.CalledClosureFeedback's: the argument count of the call
