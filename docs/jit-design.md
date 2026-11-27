@@ -1497,7 +1497,12 @@ is under [The projection](#the-projection).
   1,532-1,638, median 1,564. Compiled sooner, a compile's timing moves
   its feedback more: compilediff native of background compiles at
   `-jitmem 512` found 43 of Octane's compiles different between two runs
-  of the change, against 10 and 27 between two of the base.
+  of the change, against 10 and 27 between two of the base. The learned
+  property sites are held by the snapshot, not copied, the exits making
+  the list anew at their next write while one holds it: the property
+  sites' gather 3.8 and 11.8 µs a compile to 3.3 and 10.5, about 0.7 µs
+  a compile moved onto the exits (some 770 lists made anew a run, 0.55 µs
+  each), so a net 0.45 µs of the goroutine's.
 - **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
   was run beside mir's scan on every compile, given the same function: an
   instruction for each value and the block's end, the frame states' uses

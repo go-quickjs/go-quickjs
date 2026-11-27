@@ -136,11 +136,14 @@ type jitPropData struct {
 	// lit and known are the caches of regexp_lit's reads and of known
 	// reads, by register pc, copied with their keys.
 	lit, known map[int32]jitPropCopied
-	poly       []jitPolySite
-	syms       map[Atom]*Symbol
-	unindex    map[*shape]bool
-	cells      []jitPropCellAdd
-	x          jitPropCtx
+	// poly is the learned sites as the gather found them, held, not
+	// copied: the runtime's goroutine makes its list anew before it
+	// writes a site again (jitPolyTake).
+	poly    []jitPolySite
+	syms    map[Atom]*Symbol
+	unindex map[*shape]bool
+	cells   []jitPropCellAdd
+	x       jitPropCtx
 	// accessors and strings are the answers of Accessor and
 	// StringProperty asked by register pc (askedAt).
 	accessors []jitPropAsked[jitSnapAnsAccessor]
@@ -254,9 +257,9 @@ func gatherProperty(s *jitSnapshot, fb *jitRegFeedback) {
 		return
 	}
 	d.ic = s.root.d.closureCopy(cl).ic
-	if e := f.e; e != nil {
-		d.poly = jitPolyCopy(e.poly)
-	}
+	// The learned sites as they are: the runtime's goroutine makes the list
+	// anew before it writes a site again (jitPolyTake).
+	d.poly = jitPolyTake(f.e)
 	rc := fb.rc
 	var poly []jitPolySite
 	if e := f.e; e != nil {
@@ -376,32 +379,6 @@ func (d *jitPropData) deep(live jitPropLive, a jitDeepAdd) {
 func (s *jitSnapshot) propCopyCache(c *propCache) *propCache {
 	out, _ := jitCopyCaches([]propCache{*c})
 	return &out[0]
-}
-
-// jitPolyCopy is a copy of poly, a learned entry's sites, of what a
-// property site's answer reads of them: their cases, which the runtime's
-// goroutine changes in place, their reads and additions, to which it only
-// appends.
-func jitPolyCopy(poly []jitPolySite) []jitPolySite {
-	if len(poly) == 0 {
-		return nil
-	}
-	out := make([]jitPolySite, len(poly))
-	for i := range poly {
-		p := &poly[i]
-		q := &out[i]
-		q.pc, q.mega, q.prim = p.pc, p.mega, p.prim
-		q.reads, q.adds = p.reads, p.adds
-		if len(p.cases) != 0 {
-			q.cases = make([]propCache, len(p.cases))
-			copy(q.cases, p.cases)
-			for j := range q.cases {
-				// A case's earlier entries no answer reads.
-				q.cases[j].poly = nil
-			}
-		}
-	}
-	return out
 }
 
 // deriveProperty puts s's Property answers, at every PC whose op asks it,

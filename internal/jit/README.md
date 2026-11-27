@@ -894,8 +894,13 @@ takes each list of the learning by its header, an O(1) copy that is the list
 as it was: a list of it only grows, appended past every header taken, or is
 made anew -- `ssaHostsLeft` at each install, `regCallsMade` at a pc's first
 call -- never written within a header's length
-(`TestJITLearnedListsPersist`); and copies whole what the interpreter writes
-in place, the operators' BigInt marks, the operands' lattice and the calls'
+(`TestJITLearnedListsPersist`). The learned property sites (`poly`), whose
+sites the exits write in place, are taken so too (`jitPolyTake`): taken, the
+list is made anew at the next write of a site, which every writer gets
+through one helper (`jitPolySiteAt`), and the one rewrite of a site's cases
+in place makes them anew, so that a list taken never changes under its
+header (`TestJITLearnedPolyPersists`). The gather copies whole what the
+interpreter writes in place, the operators' BigInt marks, the operands' lattice and the calls'
 counts. The methods that compare a call's callee, as its site's cache holds
 it, with the realm's built-ins (`jit_snapcalls.go`: `CharCode`, `Substring`,
 `FromCharCode`, `Intrinsic`, `IndexOf`, `ParseInt`, `BigString`) are derived

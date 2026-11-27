@@ -19,8 +19,12 @@ type jitLearned struct {
 	// regLink is the link native callers call its code through
 	// (jitState's regLinks, regLinkOf), nil until a caller asks for one,
 	// read without a key made.
-	reg     bool
-	regLink *jitLink
+	reg bool
+	// polyTaken marks poly as a snapshot holds it (jitPolyTake): the next
+	// write of a site makes the list anew (jitPolySiteAt). Of the
+	// runtime's goroutine alone, as the list is. In the padding after reg.
+	polyTaken bool
+	regLink   *jitLink
 	// failed and failedEntries are the sites, by slot IR PC, and the
 	// entries, by PC, whose speculation failed in the code (jitRegDeoptSeen).
 	failed        []int32

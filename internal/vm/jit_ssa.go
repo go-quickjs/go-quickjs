@@ -303,12 +303,7 @@ func (r *Runtime) jitDeepAddFrom(before, next *shape, proto *Object, key Atom) (
 // pc, its site's cache cache, of key where named, to o, of shape
 // before then.
 func (r *Runtime) jitPolyWriteSeenOp(e *jitEntry, pc int, cache *propCache, key Atom, named bool, o *Object, before *shape) {
-	i := slices.IndexFunc(e.poly, func(p jitPolySite) bool { return int(p.pc) == pc })
-	if i < 0 {
-		e.poly = append(e.poly, jitPolySite{pc: uint32(pc)})
-		i = len(e.poly) - 1
-	}
-	p := &e.poly[i]
+	p := jitPolySiteAt(e, pc)
 	if o != nil && named {
 		// A setter on the object's prototypes, as for a read's getter: of
 		// the shape the object had, which the setter may have changed.
@@ -340,6 +335,9 @@ func (r *Runtime) jitPolyWriteSeenOp(e *jitEntry, pc int, cache *propCache, key 
 	if slices.ContainsFunc(p.cases, func(k propCache) bool { return k.shape == c.shape }) {
 		return
 	}
+	// Not its earlier entries, which the interpreter changes in place and
+	// no case's reader reads: a snapshot shares the cases (jitPolyTake).
+	c.poly = nil
 	p.cases = append(p.cases, c)
 	e.polyReopt = true
 }
@@ -820,8 +818,18 @@ func jitNumberMissed(e *jitEntry, pc int) {
 	}
 }
 
-// jitPolySiteAt is e's site at pc (jitEntry.poly), made if it has none.
+// jitPolySiteAt is e's site at pc (jitEntry.poly), made if it has none,
+// for its writer: every write of a site gets it here. Where a snapshot
+// holds the list (polyTaken), the list is made anew first, its sites
+// copied, so that what the snapshot holds never changes under it: a
+// write then changes the new list's site, and an append to a site's
+// lists goes past the lengths the snapshot holds, which it never reads.
+// What would change an element of a site's list in place makes the list
+// anew itself (jitAddReadCase).
 func jitPolySiteAt(e *jitEntry, pc int) *jitPolySite {
+	if e.polyTaken {
+		e.poly, e.polyTaken = slices.Clone(e.poly), false
+	}
 	i := slices.IndexFunc(e.poly, func(p jitPolySite) bool { return int(p.pc) == pc })
 	if i < 0 {
 		e.poly = append(e.poly, jitPolySite{pc: uint32(pc)})
@@ -847,6 +855,8 @@ func jitPolySiteAt(e *jitEntry, pc int) *jitPolySite {
 // Typescript's Binder.bindSymbol, of symbols some of which are never given
 // a type, nine times.
 func jitAddReadCase(p *jitPolySite, c propCache, now *shape) bool {
+	// Not its earlier entries, as jitPolyWriteSeenOp keeps a case.
+	c.poly = nil
 	if slices.ContainsFunc(p.cases, func(k propCache) bool { return k.shape == c.shape }) {
 		return false
 	}
@@ -864,8 +874,21 @@ func jitAddReadCase(p *jitPolySite, c propCache, now *shape) bool {
 	if i < 0 {
 		return false
 	}
-	p.cases = append(slices.Delete(p.cases, i, i+1), c)
+	// A list of its own, which a snapshot's list's site does not share.
+	p.cases = append(slices.Delete(slices.Clone(p.cases), i, i+1), c)
 	return true
+}
+
+// jitPolyTake is e's property sites for a snapshot to read as they are
+// now, on the worker: the list cut to its length and marked taken, so that
+// the next write of a site makes the list anew (jitPolySiteAt) rather than
+// changing it under the snapshot.
+func jitPolyTake(e *jitEntry) []jitPolySite {
+	if e == nil || e.jitLearned == nil || len(e.poly) == 0 {
+		return nil
+	}
+	e.polyTaken = true
+	return slices.Clip(e.poly)
 }
 
 // jitSuperseded reports whether t came from s by adding properties: s is
@@ -1146,12 +1169,7 @@ func jitSeenSite(e *jitEntry, pc int, cache *propCache, write bool, key Atom, na
 	}
 	// The additions along chains deeper than a cache holds, as the chain
 	// is now; one that changed since is left to Go.
-	i := slices.IndexFunc(e.poly, func(p jitPolySite) bool { return int(p.pc) == pc })
-	if i < 0 {
-		e.poly = append(e.poly, jitPolySite{pc: uint32(pc)})
-		i = len(e.poly) - 1
-	}
-	p := &e.poly[i]
+	p := jitPolySiteAt(e, pc)
 	for _, d := range seen.deep {
 		if len(p.cases)+len(p.adds) >= jitPropertyCases || slices.ContainsFunc(p.adds, func(k jitDeepAdd) bool { return k.from == d.from }) {
 			continue
@@ -1168,12 +1186,7 @@ func jitSeenCase(e *jitEntry, pc int, c propCache, write bool, now *shape) {
 	if c.shape == nil || c.shape == noShape || c.getter || c.idx < 0 || write && (c.next == setterNext || c.next == nil && c.p1 != nil) {
 		return
 	}
-	i := slices.IndexFunc(e.poly, func(p jitPolySite) bool { return int(p.pc) == pc })
-	if i < 0 {
-		e.poly = append(e.poly, jitPolySite{pc: uint32(pc)})
-		i = len(e.poly) - 1
-	}
-	p := &e.poly[i]
+	p := jitPolySiteAt(e, pc)
 	if !write {
 		// What the site's objects were before they took the shape its
 		// cache remembers now (now) is a case while there is room.
@@ -1183,6 +1196,8 @@ func jitSeenCase(e *jitEntry, pc int, c propCache, write bool, now *shape) {
 	if len(p.cases)+len(p.adds) >= jitPropertyCases || slices.ContainsFunc(p.cases, func(k propCache) bool { return k.shape == c.shape }) {
 		return
 	}
+	// Not its earlier entries, as jitPolyWriteSeenOp keeps a case.
+	c.poly = nil
 	p.cases = append(p.cases, c)
 }
 
