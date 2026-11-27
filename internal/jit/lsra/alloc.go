@@ -200,6 +200,8 @@ type Allocator struct {
 	res Result
 
 	predIdx  []int32
+	argOff   []int32
+	edgeArgs []edgeArg
 	predOff  []int32
 	defBlock []int32
 	global   []int32
@@ -285,6 +287,7 @@ type Allocator struct {
 	twoPass      bool
 	markPass     bool
 	hintPass     bool
+	phiWalks     bool
 	regByReg     bool
 	mergeAll     bool
 	blockByBlock bool
@@ -311,6 +314,11 @@ type Allocator struct {
 type keyedMove struct {
 	key [2]int32
 	mv  Move
+}
+
+// edgeArg is an argument a, allocated, of phi def, read on an edge.
+type edgeArg struct {
+	a, def VReg
 }
 
 // hintAt is an instruction of block b whose first definition d would like
@@ -371,27 +379,37 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.f, al.evKnown, al.blocksKnown, al.kindsKnown = f, false, false, false
 	al.split, al.stress = !cfg.NoSplit, cfg.StressSplit && !cfg.NoSplit
 	al.displace, al.mutateHoles, al.oneByOne, al.twoPass, al.plainLists, al.markPass = cfg.Displace, cfg.mutateHoles, cfg.oneByOne, cfg.twoPass, cfg.plainLists, cfg.markPass
-	al.hintPass, al.blockByBlock, al.mergeAll, al.regByReg = cfg.hintPass, cfg.blockByBlock, cfg.mergeAll, cfg.regByReg
+	al.hintPass, al.blockByBlock, al.mergeAll, al.regByReg, al.phiWalks = cfg.hintPass, cfg.blockByBlock, cfg.mergeAll, cfg.regByReg, cfg.phiWalks
 
 	// predIdx is, for each block's successor k, the block's index among
 	// that successor's predecessors: predIdx[predOff[i]+k]. The walk that
 	// finds them finds the critical edges too: from a block of more than
-	// one successor to one of more than one predecessor.
+	// one successor to one of more than one predecessor. And edgeArgs
+	// are the arguments the successors' phis read at each block's end,
+	// those allocated, in the order of its successors and their phis:
+	// block i's from argOff[i] to argOff[i+1].
 	al.predOff = grown(al.predOff, nb+1)
-	predIdx := al.predIdx[:0]
+	argOff := grown(al.argOff, nb+1)
+	predIdx, edgeArgs := al.predIdx[:0], al.edgeArgs[:0]
 	for i := range f.Blocks {
-		al.predOff[i] = int32(len(predIdx))
+		al.predOff[i], argOff[i] = int32(len(predIdx)), int32(len(edgeArgs))
 		succs := f.Blocks[i].Succs
 		for _, s := range succs {
-			preds := f.Blocks[s].Preds
-			if len(succs) > 1 && len(preds) > 1 {
+			sb := &f.Blocks[s]
+			if len(succs) > 1 && len(sb.Preds) > 1 {
 				al.split = false
 			}
-			predIdx = append(predIdx, int32(slices.Index(preds, i)))
+			pi := slices.Index(sb.Preds, i)
+			predIdx = append(predIdx, int32(pi))
+			for k := range sb.Phis {
+				if a := sb.Phis[k].Args[pi]; alloc(a) {
+					edgeArgs = append(edgeArgs, edgeArg{a, sb.Phis[k].Def})
+				}
+			}
 		}
 	}
-	al.predOff[nb] = int32(len(predIdx))
-	al.predIdx = predIdx
+	al.predOff[nb], argOff[nb] = int32(len(predIdx)), int32(len(edgeArgs))
+	al.predIdx, al.argOff, al.edgeArgs = predIdx, argOff, edgeArgs
 	predOff := al.predOff
 
 	// Liveness, of the registers that may be live across a block's
@@ -603,12 +621,18 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 				opened = append(opened, v)
 			}
 		}
-		for k, s := range b.Succs {
-			pi := predIdx[int(predOff[i])+k]
-			for _, p := range f.Blocks[s].Phis {
-				if a := p.Args[pi]; alloc(a) {
-					weight[a] += w
+		if al.phiWalks {
+			for k, s := range b.Succs {
+				pi := predIdx[int(predOff[i])+k]
+				for _, p := range f.Blocks[s].Phis {
+					if a := p.Args[pi]; alloc(a) {
+						weight[a] += w
+					}
 				}
+			}
+		} else {
+			for _, x := range edgeArgs[argOff[i]:argOff[i+1]] {
+				weight[x.a] += w
 			}
 		}
 		for j := len(b.Insts) - 1; j >= 0; j-- {
@@ -1549,6 +1573,16 @@ func (al *Allocator) explore(f *Func, words, stride int, defBlock, defInst []int
 					up(u, x, i)
 				}
 			}
+		}
+		if !al.phiWalks {
+			for _, e := range al.edgeArgs[al.argOff[i]:al.argOff[i+1]] {
+				x := gi(e.a)
+				live[(stride*i+1)*words+x/64] |= 1 << (x % 64)
+				if defBlock[e.a] != int32(i) {
+					up(e.a, x, i)
+				}
+			}
+			continue
 		}
 		pk := al.predOff[i]
 		for k, sc := range b.Succs {

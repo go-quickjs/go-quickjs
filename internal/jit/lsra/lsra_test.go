@@ -1088,6 +1088,7 @@ func TestWalkMethods(t *testing.T) {
 		{"blockByBlock", func(c *Config) { c.blockByBlock = true }},
 		{"mergeAll", func(c *Config) { c.mergeAll = true }},
 		{"regByReg", func(c *Config) { c.regByReg = true }},
+		{"phiWalks", func(c *Config) { c.phiWalks = true }},
 	}
 	var al, old Allocator
 	twice := 0

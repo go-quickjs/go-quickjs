@@ -264,6 +264,10 @@ type Config struct {
 	// by a walk of the scan's lists for it, for the tests that compare it
 	// with one walk for all.
 	regByReg bool
+	// phiWalks has liveness, the ranges' walk and the events walk each
+	// block's successors' phis for the arguments they read at its end, for
+	// the tests that compare it with listing them once (edgeArgs).
+	phiWalks bool
 	// plainLists has the scan read every web on its active and inactive
 	// lists at every position, for the tests that compare it with reading
 	// each only where its entry says it may have changed.

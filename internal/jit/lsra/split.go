@@ -211,6 +211,16 @@ func (al *Allocator) eventPass(pairs []evPair) []evPair {
 				}
 			}
 		}
+		if !al.phiWalks {
+			for _, x := range al.edgeArgs[al.argOff[i]:al.argOff[i+1]] {
+				e := al.ends[i] << 2
+				if webs[x.a] != nil && webs[x.a] == webs[x.def] {
+					e |= evFree
+				}
+				pairs = append(pairs, evPair{x.a, e})
+			}
+			continue
+		}
 		for k, sc := range b.Succs {
 			pi := al.predIdx[int(al.predOff[i])+k]
 			for _, ph := range f.Blocks[sc].Phis {
@@ -392,7 +402,8 @@ func (al *Allocator) plan(a, cur *web) hole {
 	if sp.full != nil {
 		full = sp.full
 	}
-	c0, c1 := meetSpan(a.ranges, cur.ranges)
+	// a's ranges before the scan's index end before cur begins.
+	c0, c1 := meetSpan(a.ranges[a.cur:], cur.ranges)
 	if c0 >= c1 {
 		return hole{}
 	}
@@ -834,7 +845,13 @@ func (al *Allocator) holeCost(a *web, full []rng, s, e int32) float64 {
 	}
 	cost := al.eventWeight(a, s, e)
 	cross := func(x0, x1 int32, w float64) {
-		if liveAt(full, x0) && liveAt(full, x1) {
+		// Where a lives at the end outside the hole first: it most often
+		// does not, where the edge leaves the web's life.
+		y0, y1 := x0, x1
+		if in(y0) {
+			y0, y1 = y1, y0
+		}
+		if liveAt(full, y0) && liveAt(full, y1) {
 			cost += move(in(x0) || old(x0), in(x1) || old(x1), w) - move(old(x0), old(x1), w)
 		}
 	}
