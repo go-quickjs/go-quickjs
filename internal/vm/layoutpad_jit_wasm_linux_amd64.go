@@ -8,10 +8,10 @@ package vm
 // stores (the assembly pad's 32-byte slots), -1 for a pad left out, or a
 // data lever's variables.
 const (
-	layoutPadNA   = 488
+	layoutPadNA   = 141
 	layoutPadNGA  = -1
 	layoutPadNMA  = -1
-	layoutPadNI   = 223
+	layoutPadNI   = 205
 	layoutPadNGI  = -1
 	layoutPadNMI  = -1
 	layoutPadNE   = 616
@@ -47,7 +47,7 @@ const (
 	layoutPadNF   = 447
 	layoutPadNGF  = -1
 	layoutPadNMF  = -1
-	layoutPadNIN  = 456
+	layoutPadNIN  = 452
 	layoutPadNGIN = -1
 	layoutPadNMIN = -1
 	layoutPadNL   = 420
@@ -56,28 +56,28 @@ const (
 	layoutPadNB   = 488
 	layoutPadNGB  = -1
 	layoutPadNMB  = -1
-	layoutPadNJB  = 434
+	layoutPadNJB  = 360
 	layoutPadNGJB = -1
 	layoutPadNMJB = -1
-	layoutPadNJU  = 589
+	layoutPadNJU  = 4
 	layoutPadNGJU = -1
 	layoutPadNMJU = -1
-	layoutPadNJ   = 635
+	layoutPadNJ   = 392
 	layoutPadNGJ  = -1
 	layoutPadNMJ  = -1
-	layoutPadNJN  = 502
+	layoutPadNJN  = 950
 	layoutPadNGJN = -1
 	layoutPadNMJN = -1
-	layoutPadNJS  = 667
+	layoutPadNJS  = 516
 	layoutPadNGJS = -1
 	layoutPadNMJS = -1
-	layoutPadNKO  = 351
+	layoutPadNKO  = 708
 	layoutPadNGKO = -1
 	layoutPadNMKO = -1
 	layoutPadNCC  = 484
 	layoutPadNGCC = -1
 	layoutPadNMCC = -1
-	layoutPadNN   = 438
+	layoutPadNN   = 434
 	layoutPadNGN  = -1
 	layoutPadNMN  = -1
 	layoutPadNBU  = 571
@@ -89,7 +89,7 @@ const (
 	layoutPadNP   = 392
 	layoutPadNGP  = -1
 	layoutPadNMP  = -1
-	layoutPadNQ   = 237
+	layoutPadNQ   = 822
 	layoutPadNGQ  = -1
 	layoutPadNMQ  = -1
 	layoutPadNW   = 365
@@ -112,9 +112,9 @@ const (
 	layoutPadNMV  = -1
 	layoutPadNVT  = 548
 	layoutPadNGVT = -1
-	layoutPadNMVT = 498
-	layoutPadNK   = 103
-	layoutPadNGK  = 754
+	layoutPadNMVT = 799
+	layoutPadNK   = 688
+	layoutPadNGK  = 767
 	layoutPadNMK  = -1
 	layoutPadNVA  = 548
 	layoutPadNGVA = -1
@@ -122,7 +122,7 @@ const (
 	layoutPadNO   = 580
 	layoutPadNGO  = -1
 	layoutPadNMO  = -1
-	layoutPadNPR  = 4
+	layoutPadNPR  = 589
 	layoutPadNGPR = -1
 	layoutPadNMPR = -1
 	layoutPadNSH  = 589
@@ -137,12 +137,12 @@ const (
 	layoutPadNZ   = 868
 	layoutPadNGZ  = -1
 	layoutPadNMZ  = -1
-	layoutPadNCZ  = 1407
-	layoutPadNHJ  = 142
-	layoutPadNH   = 223
+	layoutPadNCZ  = 1279
+	layoutPadNHJ  = 157
+	layoutPadNH   = 95
 	layoutPadNHT  = 141
-	layoutPadNDH  = 0
-	layoutPadNDW  = 0
+	layoutPadNDH  = 4
+	layoutPadNDW  = 6
 	layoutPadNDG  = 0
 )
 
