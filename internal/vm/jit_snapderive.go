@@ -58,6 +58,8 @@ type jitSnapData struct {
 	asked func(s *jitSnapshot, m jitSnapMethod, arg int64, answered bool, results []any)
 	// prop is the property sites' (jit_snapprop.go).
 	prop jitPropData
+	// consts is the constants' and captured bindings' (jit_snapconst.go).
+	consts jitConstData
 	// native is the learning's methods' (jit_snapnative.go), calls the
 	// calls' (jit_snapcalls.go).
 	native jitNativeData

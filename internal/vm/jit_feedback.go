@@ -724,76 +724,25 @@ func (f *jitRegFeedback) callTarget(pc int) (*Object, *closure, bool) {
 	return f.callsData().callTarget(pc)
 }
 
-// constant is the constant a StringConst or a BigIntConst at the
-// program's instruction pc reads -- load_const's, a switch's case's, an
-// element of new_array_k's, or load_empty's empty string -- and whether it
-// is one of op's.
-func (f *jitRegFeedback) constant(pc int, op ir.Op) (Value, bool) {
-	w, iop, ok := f.at(pc)
-	if !ok || iop != op || f.fb.cl == nil {
-		return Value{}, false
-	}
-	if w.Op() == bytecode.RLoadEmpty {
-		return Str(emptyString), op == ir.StringConst
-	}
-	k := f.p.Code[pc].Key
-	if w.Op() != bytecode.RLoadConst && w.Op() != bytecode.RSwitch && w.Op() != bytecode.RNewArrayK || int(k) >= len(f.fb.cl.consts) {
-		return Value{}, false
-	}
-	v := f.fb.cl.consts[k]
-	if op == ir.StringConst && !v.IsString() || op == ir.BigIntConst && !v.IsBigInt() {
-		return Value{}, false
-	}
-	return v, true
-}
-
 // StringCell is ssa.ConstantFeedback's: a cell holding the string constant
 // the program's instruction pc reads, as jitFeedback's.
 func (f *jitRegFeedback) StringCell(pc int) (uintptr, bool) {
-	v, ok := f.constant(pc, ir.StringConst)
-	if !ok {
-		return 0, false
-	}
-	cell := new(Value)
-	*cell = v
-	k := f.fb.keep()
-	k.cells = append(k.cells, cell)
-	return uintptr(unsafe.Pointer(cell)), true
+	c := f.constSrc()
+	return jitStringCellOf(&c, pc, f.fb.keep())
 }
 
 // StringContent is ssa.StringContentFeedback's: the string the constant at
 // the program's instruction pc is, flat.
 func (f *jitRegFeedback) StringContent(pc int) (string, bool) {
-	v, ok := f.constant(pc, ir.StringConst)
-	if !ok {
-		return "", false
-	}
-	if s := v.String(); s.left == nil {
-		return s.s, true
-	}
-	return "", false
+	c := f.constSrc()
+	return jitStringContentOf(&c, pc)
 }
 
 // BigIntCell is ssa.BigIntConstFeedback's: the cell a copy of the BigInt
 // constant at the program's instruction pc is in, as jitFeedback's.
 func (f *jitRegFeedback) BigIntCell(pc int) (uintptr, uint64, int, bool) {
-	v, ok := f.constant(pc, ir.BigIntConst)
-	if !ok {
-		return 0, 0, ssa.BigConstHeap, false
-	}
-	cell := new(Value)
-	*cell = v
-	k := f.fb.keep()
-	k.cells = append(k.cells, cell)
-	if cell.isInt64Big() {
-		return uintptr(unsafe.Pointer(cell)), uint64(cell.int64Big()), ssa.BigConstInt64, true
-	}
-	if cell.isShortBig() {
-		if neg, mag := cell.shortBigParts(); !neg {
-			return uintptr(unsafe.Pointer(cell)), mag, ssa.BigConstUint64, true
-		}
-	}
-	return uintptr(unsafe.Pointer(cell)), 0, ssa.BigConstHeap, true
+	c := f.constSrc()
+	return jitBigIntCellOf(&c, pc, f.fb.keep())
 }
 
 // Generic is ssa.Feedback's: the register instruction of the program's

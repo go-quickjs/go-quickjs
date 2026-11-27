@@ -3,10 +3,12 @@
 package vm
 
 import (
+	"math"
 	"os"
 	"reflect"
 	"slices"
 	"testing"
+	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit"
 )
@@ -67,7 +69,7 @@ func jitSnapListsEqual(a, b jitSnapLists) bool {
 		}
 		add(0, len(l.shapes), func(j int) any { return l.shapes[j] })
 		add(1, len(l.holders), func(j int) any { return l.holders[j] })
-		add(2, len(l.cells), func(j int) any { return l.cells[j] })
+		add(2, len(l.cells), func(j int) any { return jitSnapCellOf(l.cells[j]) })
 		add(3, len(l.links), func(j int) any { return l.links[j] })
 		add(4, len(l.inlined), func(j int) any { return l.inlined[j] })
 		add(5, len(l.made), func(j int) any { return l.made[j] })
@@ -203,15 +205,21 @@ func TestJITSnapshotDerivesFromItsCopy(t *testing.T) {
 			}
 			used := len(snap.s.uses)
 			got := method.Call(in)
-			for i, g := range got {
-				if !reflect.DeepEqual(g.Interface(), want.results[i]) {
-					t.Errorf("%s, %d callees deep: %s(%d) result %d: derived %+v, asked %+v", cl.fn.Name, q.s.depth, jitSnapNames[q.m], q.arg, i, g.Interface(), want.results[i])
-				}
-			}
 			var own, kept jitSnapLists
 			if len(snap.s.uses) > used {
 				u := snap.s.uses[used]
 				own, kept = snap.s.lists(u.s.effects[u.eff-1])
+			}
+			for i, g := range got {
+				gv, wv := g.Interface(), want.results[i]
+				if i == 0 && jitSnapCellResults&(1<<q.m) != 0 {
+					// A cell made anew at each question, which its effect
+					// keeps: alike by what it holds.
+					gv, wv = jitSnapCellAt(gv.(uintptr), own, kept), jitSnapCellAt(wv.(uintptr), want.own, want.kept)
+				}
+				if !reflect.DeepEqual(gv, wv) {
+					t.Errorf("%s, %d callees deep: %s(%d) result %d: derived %+v, asked %+v", cl.fn.Name, q.s.depth, jitSnapNames[q.m], q.arg, i, g.Interface(), want.results[i])
+				}
 			}
 			if !jitSnapListsEqual(own, want.own) || !jitSnapListsEqual(kept, want.kept) {
 				t.Errorf("%s, %d callees deep: %s(%d): derived effect %+v, kept %+v; asked %+v, kept %+v", cl.fn.Name, q.s.depth, jitSnapNames[q.m], q.arg, own, kept, want.own, want.kept)
@@ -341,4 +349,31 @@ func TestJITSnapshotDeriveStages(t *testing.T) {
 	if len(ran) != 2*int(jitDeriveStages) {
 		t.Fatalf("%d derivations of %d ran", len(ran), 2*int(jitDeriveStages))
 	}
+}
+
+// jitSnapCellResults are the methods whose first result is a cell made
+// anew at each question (StringCell, BigIntCell), which a derivation's and
+// the feedback's answers hold alike by what it holds.
+const jitSnapCellResults uint64 = 1<<snapStringCell | 1<<snapBigIntCell
+
+// jitSnapCellOf is what the cell c holds, as words: two cells made anew
+// alike compare equal.
+func jitSnapCellOf(c *Value) [2]uintptr {
+	if c == nil {
+		return [2]uintptr{}
+	}
+	return [2]uintptr{uintptr(math.Float64bits(c.num)), uintptr(c.ref)}
+}
+
+// jitSnapCellAt is what the cell at address p, one of the effects' own and
+// kept keep, holds; p itself for a cell they do not keep.
+func jitSnapCellAt(p uintptr, own, kept jitSnapLists) any {
+	for _, l := range []jitSnapLists{own, kept} {
+		for _, c := range l.cells {
+			if uintptr(unsafe.Pointer(c)) == p {
+				return jitSnapCellOf(c)
+			}
+		}
+	}
+	return p
 }

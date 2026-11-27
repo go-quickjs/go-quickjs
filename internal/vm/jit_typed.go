@@ -156,10 +156,16 @@ func (f *jitRegFeedback) Heap() uintptr {
 // (ssa.RawMathFeedback): the intrinsic of a call of that function of the
 // realm's Math.
 func (f *jitRegFeedback) RawMath(pc int) (ssa.Intrinsic, bool) {
-	if f.rc == nil || !f.rc.Typed || pc < 0 || pc >= len(f.p.Code) {
+	return jitRawMathOf(f.rc, f.p, pc)
+}
+
+// jitRawMathOf is RawMath's answer at pc of p, rc's program: of the code
+// alone, which a snapshot's worker derives as the feedback does.
+func jitRawMathOf(rc *bytecode.RegCode, p *ir.Program, pc int) (ssa.Intrinsic, bool) {
+	if rc == nil || !rc.Typed || pc < 0 || pc >= len(p.Code) {
 		return ssa.Intrinsic{}, false
 	}
-	in := &f.p.Code[pc]
+	in := &p.Code[pc]
 	if in.Op != ir.Raw || in.Raw != ir.RawFMath || int(in.Key) >= len(bytecode.TMathNames) {
 		return ssa.Intrinsic{}, false
 	}

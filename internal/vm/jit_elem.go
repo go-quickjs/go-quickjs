@@ -625,19 +625,11 @@ func (f *jitRegFeedback) KeyedWrite(pc int) bool {
 // the read at the program's instruction pc reads (ir.UpvalueRead's Key)
 // holds a typed array in the closure the code is compiled for.
 func (f *jitRegFeedback) UpvalueTyped(pc int) (uint8, bool) {
-	cl := f.fb.cl
-	if cl == nil || pc < 0 || pc >= len(f.p.Code) || f.p.Code[pc].Op != ir.UpvalueRead {
+	k, ok := jitUpvalueReadAt(f.p, pc)
+	if !ok {
 		return 0, false
 	}
-	k := int(f.p.Code[pc].Key)
-	if k >= len(cl.upvalues) || cl.upvalues[k] == nil {
-		return 0, false
-	}
-	v := cl.upvalues[k].get()
-	if !jitTypedArray(v) {
-		return 0, false
-	}
-	return jitTypedKind(true, v), true
+	return jitUpvalueKind(f.fb.cl, k)
 }
 
 // jitRegCtxEntry is the register code a call of Go was made from, with ctx:
