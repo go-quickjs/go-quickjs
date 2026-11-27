@@ -114,7 +114,12 @@
 # jitHostCall 251 KB past J, the JIT's leaf stubs (jitLeafFast,
 # jitGoFast) 485 KB past Z, the array methods' callbacks 140 KB past JP
 # -- each anchored where its pad, at its least, left it; P holds regCall
-# with the JIT too. GK and MVT hold two groups of generics, the string
+# with the JIT too. JG, before jit_gostub.go, holds native code's calls
+# of Go by their stubs, jitAppendGo among them, at 656a4d22's layout: the
+# JIT's files before it grew between 656a4d22 and 6a1f1eeec and moved
+# them 1,792 bytes, 165 KB past JU, and typed_i64_read, typed_u64_read and
+# bigint64_pow were 5 to 9% slower with the JIT at every placement, their
+# native code the same. GK and MVT hold two groups of generics, the string
 # appends (strAppend) and the regular expression leaves
 # ((*regexpLeaf).match), where layoutpad -show -all -generics found a
 # generic pad landing right before them. JE and JO are positions after
@@ -257,6 +262,7 @@ anchor GK 0x004c0 @0x1408fb4c0 github.com/go-quickjs/go-quickjs/internal/vm.strA
 anchor MVT 0x008e0 @0x1409138e0 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
 anchor JB 0x00560 @0x14067e560 github.com/go-quickjs/go-quickjs/internal/vm.jitBigLeafMake
 anchor JU 0x009a0 @0x1406809a0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitAppend
+anchor JG 0x009c0 @0x1406a99c0 github.com/go-quickjs/go-quickjs/internal/vm.jitAppendGo
 anchor JN 0x009e0 @0x1406cb9e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitRegWhole
 anchor JS 0x00500 @0x140735500 github.com/go-quickjs/go-quickjs/internal/vm.jitHostCall
 anchor P  0x00580 @0x140772580 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
@@ -362,6 +368,7 @@ anchor GK 0x00700 @0xcc3700 github.com/go-quickjs/go-quickjs/internal/vm.strAppe
 anchor MVT 0x00b80 @0xcdbb80 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
 anchor JB 0x00420 @0xa46420 github.com/go-quickjs/go-quickjs/internal/vm.jitBigLeafMake
 anchor JU 0x00860 @0xa49860 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitAppend
+anchor JG 0x00880 @0xa72880 github.com/go-quickjs/go-quickjs/internal/vm.jitAppendGo
 anchor JN 0x008a0 @0xa938a0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitRegWhole
 anchor JS 0x003c0 @0xafd3c0 github.com/go-quickjs/go-quickjs/internal/vm.jitHostCall
 anchor P  0x007c0 @0xb3a7c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
@@ -467,6 +474,7 @@ anchor GK 0x004c0 @0x1409034c0 github.com/go-quickjs/go-quickjs/internal/vm.strA
 anchor MVT 0x008e0 @0x14091b8e0 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
 anchor JB 0x00560 @0x140686560 github.com/go-quickjs/go-quickjs/internal/vm.jitBigLeafMake
 anchor JU 0x009a0 @0x1406889a0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitAppend
+anchor JG 0x009c0 @0x1406b19c0 github.com/go-quickjs/go-quickjs/internal/vm.jitAppendGo
 anchor JN 0x009e0 @0x1406d39e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitRegWhole
 anchor JS 0x00500 @0x14073d500 github.com/go-quickjs/go-quickjs/internal/vm.jitHostCall
 anchor P  0x00580 @0x14077a580 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
@@ -572,6 +580,7 @@ anchor GK 0x00700 @0xccc700 github.com/go-quickjs/go-quickjs/internal/vm.strAppe
 anchor MVT 0x00b80 @0xce4b80 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
 anchor JB 0x00420 @0xa4f420 github.com/go-quickjs/go-quickjs/internal/vm.jitBigLeafMake
 anchor JU 0x00860 @0xa51860 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitAppend
+anchor JG 0x00880 @0xa7a880 github.com/go-quickjs/go-quickjs/internal/vm.jitAppendGo
 anchor JN 0x008a0 @0xa9c8a0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitRegWhole
 anchor JS 0x003c0 @0xb063c0 github.com/go-quickjs/go-quickjs/internal/vm.jitHostCall
 anchor P  0x007c0 @0xb437c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall

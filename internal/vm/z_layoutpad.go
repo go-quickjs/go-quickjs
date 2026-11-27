@@ -669,6 +669,9 @@ func init() {
 		if layoutPadNJU >= 0 {
 			layoutPadJU()
 		}
+		if layoutPadNJG >= 0 {
+			layoutPadJG()
+		}
 		if layoutPadNJ >= 0 {
 			layoutPadJ()
 		}

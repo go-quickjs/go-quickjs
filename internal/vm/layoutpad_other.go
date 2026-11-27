@@ -61,6 +61,9 @@ const (
 	layoutPadNJU  = -1
 	layoutPadNGJU = -1
 	layoutPadNMJU = -1
+	layoutPadNJG  = -1
+	layoutPadNGJG = -1
+	layoutPadNMJG = -1
 	layoutPadNJ   = -1
 	layoutPadNGJ  = -1
 	layoutPadNMJ  = -1

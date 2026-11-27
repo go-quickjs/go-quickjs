@@ -177,6 +177,7 @@ var positions = []position{
 	{"B", "vm_b_layoutpad.go", "after vm_amath.go, before vm_call.go: callObject, callDirect, runFD"},
 	{"JB", "jit_bi_layoutpad.go", "after jit_bg.go, before jit_bigint.go: the JIT's BigInt leaves, jitBigLeafMake"},
 	{"JU", "jit_bu_layoutpad.go", "after jit_bigtyped.go, before jit_builder.go: a string builder's appends, jitAppend"},
+	{"JG", "jit_gos_layoutpad.go", "after jit_goops.go, before jit_gostub.go: native code's calls of Go by their stubs, jitAppendGo among them"},
 	{"J", "jit_layoutpad.go", "after jit_keyedwrite.go, before jit_lazyframes.go and jit_leaffast.go: the JIT's leaf calls, jitLeafGo"},
 	{"JN", "jit_na_layoutpad.go", "after jit_loop.go, before jit_native.go: native code's entries and its calls of Go with a frame, jitRegWhole and jitRegGoCall"},
 	{"JS", "jit_ss_layoutpad.go", "after jit_snapshot_gen.go, before jit_ssa.go: native code's calls of host functions, jitHostCall"},
