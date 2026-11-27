@@ -32,9 +32,10 @@ var vals = [1, -1, 0, -0, 2147483647, 2147483648, -2147483648, -2147483649, 1.5,
 
 // TestJITLattice has the feedback dispatcher run each lattice form's
 // instruction on operands of every kind, the function never compiled, and
-// checks the instruction's byte of its lattice (jitRegOps) is the kinds of
-// what it met, as jitLatticeKind finds them -- a number's where the byte
-// had no number's bit (latticeAddForTest) -- natively on both of the
+// checks the instruction's byte of its lattice (jitRegOps), from each of
+// latticeFromForTest's, is that and the kinds of what it met, as
+// jitLatticeKind finds them -- a number's where the byte had no number's
+// bit (latticeAddForTest) -- natively on both of the
 // operands' sides: with the collector marking and not, since the handlers
 // keep the barrier's flag in the least tag's register they compare with.
 func TestJITLattice(t *testing.T) {
@@ -111,25 +112,36 @@ func TestJITLattice(t *testing.T) {
 				if c.binary {
 					seconds = vals
 				}
-				for i, x := range vals {
-					for j, y := range seconds {
-						cl.jitRegOps[rpc] = 0
-						r.Call(fv, Undefined, []Value{x, y})
-						want := latticeAddForTest(0, jitLatticeKind(x))
-						switch {
-						case c.binary:
-							want = latticeAddForTest(want, jitLatticeKind(y))
-						case c.imm:
-							want |= abi.OperandInt32
-						}
-						if got := abi.Operands(cl.jitRegOps[rpc]); got != want {
-							t.Errorf("%s(vals[%d], #%d): lattice %#x, want %#x", c.name, i, j, got, want)
+				for _, from := range latticeFromForTest {
+					for i, x := range vals {
+						for j, y := range seconds {
+							cl.jitRegOps[rpc] = uint8(from)
+							r.Call(fv, Undefined, []Value{x, y})
+							want := latticeAddForTest(from, jitLatticeKind(x))
+							switch {
+							case c.binary:
+								want = latticeAddForTest(want, jitLatticeKind(y))
+							case c.imm:
+								want |= abi.OperandInt32
+							}
+							if got := abi.Operands(cl.jitRegOps[rpc]); got != want {
+								t.Errorf("%s(vals[%d], #%d) from %#x: lattice %#x, want %#x", c.name, i, j, from, got, want)
+							}
 						}
 					}
 				}
 			}
 		})
 	}
+}
+
+// latticeFromForTest are the bytes TestJITLattice has a site's hold
+// before it runs: nothing, what the handlers find without learning --
+// numbers, of an int32 and not, BigInts of the int64 range, with an
+// immediate's int32 -- and others.
+var latticeFromForTest = []abi.Operands{
+	0, abi.OperandInt32, abi.OperandNumber, abi.OperandBigInt64, abi.OperandBigInt64 | abi.OperandInt32,
+	abi.OperandBigInt, abi.OperandString | abi.OperandOddball,
 }
 
 // latticeAddForTest is byte b with the kind k the feedback dispatcher's
@@ -168,6 +180,71 @@ func TestJITLatticeKind(t *testing.T) {
 		if got := jitLatticeKind(c.v); got != c.want {
 			t.Errorf("%v: %#x, want %#x", c.v, got, c.want)
 		}
+	}
+}
+
+// TestJITLatticeBigMarks has the feedback dispatcher run a compare of
+// two registers, the function never compiled, on a BigInt and a number
+// and then on two BigInts of the int64 range: the first teaches the
+// lattice BigInts and leaves the site unmarked, and the second, which
+// finds BigInts in the byte, learning nothing, still leaves the site to Go
+// once, which marks it as one that met BigInts (regBigSeen), as the
+// marks' handler does of a site whose byte had nothing.
+func TestJITLatticeBigMarks(t *testing.T) {
+	if !regNativeDefault {
+		t.Skip("no native handlers in this build")
+	}
+	t.Parallel()
+	for _, marking := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			r := newTestRuntime(t, Config{JIT: true})
+			t.Cleanup(r.Close)
+			r.jitStress = jitStressConfig{}
+			r.SetJITWarmUp(1<<16, 1<<16)
+			if _, err := r.Run(compileForTest(t, latticeSrc)); err != nil {
+				t.Fatal(err)
+			}
+			fv, err := r.GetProp(Obj(r.Global()), r.Intern("lt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cl := fv.Object().fn().closure
+			cl.jitRegRefused = true
+			call := func(x, y Value, want float64) {
+				t.Helper()
+				v, err := r.Call(fv, Undefined, []Value{x, y})
+				if err != nil || !v.IsNumber() || v.Number() != want {
+					t.Fatalf("lt: %v, %v, want %v", v, err, want)
+				}
+			}
+			call(shortBig(1), Float(2), 1)
+			rpc := -1
+			for pc, w := range cl.reg.rc.Code {
+				if w.Op() == bytecode.RJNLt {
+					rpc = pc
+				}
+			}
+			if rpc < 0 || rpc >= len(cl.jitRegOps) {
+				t.Fatal("lt has no jnlt with a lattice")
+			}
+			if got, want := abi.Operands(cl.jitRegOps[rpc]), abi.OperandBigInt64|abi.OperandInt32; got != want {
+				t.Fatalf("lattice after 1n < 2: %#x, want %#x", got, want)
+			}
+			if big, _, _ := regBigSeen(cl, cl.reg.rc, rpc); big {
+				t.Fatal("1n < 2 marked the site")
+			}
+			call(shortBig(1), shortBig(2), 1)
+			call(shortBig(3), shortBig(2), 2)
+			if got, want := abi.Operands(cl.jitRegOps[rpc]), abi.OperandBigInt64|abi.OperandInt32; got != want {
+				t.Fatalf("lattice after 1n < 2n: %#x, want %#x", got, want)
+			}
+			if big, wide, heap := regBigSeen(cl, cl.reg.rc, rpc); !big || wide || heap {
+				t.Fatalf("1n < 2n marked the site %v, wide %v, on the heap %v; want BigInts of the int64 range", big, wide, heap)
+			}
+		})
 	}
 }
 

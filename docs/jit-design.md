@@ -1194,8 +1194,8 @@ is under [The projection](#the-projection).
   site that met nothing counts only once the interpreter has run its
   function to a return 8 times before any compile, V8's feedback point.
   A handler tests the byte before it stores, as V8's feedback update
-  does (a stable site's compare-and-branch 30 instructions, not 12, no
-  store). Measured with the JIT against 9d14b87b: Octane -1.0%
+  does (a stable site's compare-and-branch of two int32s 26
+  instructions, not 12, no store). Measured with the JIT against 9d14b87b: Octane -1.0%
   (Mandreel -1.8%, EarleyBoyer -1.3%, PdfJS -1.2%, Typescript -1.0%;
   Ryzen 5 3600, -k 2); the micro-benchmarks' geometric mean +0.2%.
   Deopts (the tier trace): Octane 344 to 338, its compiles after deopts
@@ -1266,7 +1266,14 @@ is under [The projection](#the-projection).
   recording, the feedback handlers' test of each site's byte, in a loop
   that stayed interpreted because each await left native code. Native
   await (the architecture's open items) runs that loop natively: 20.35 to
-  4.70 ns.
+  4.70 ns. `typed_i64_sort` 5.6% slower with the JIT at all four: its
+  comparator, which Go's sort calls, runs interpreted, and each compare
+  of two BigInts classified both operands out of line and loaded them
+  again for the BigInt marks (77 instructions, the marks' alone 42).
+  The handlers now test numbers once for both operands and BigInts of
+  the int64 range by their words ANDed, the marks taking the words
+  loaded (54): 408.7 to 390.5 ns, -4.4% at -k 4, the micro-benchmarks'
+  geometric mean 0.999.
 
 ### Stage 2: compile speed
 

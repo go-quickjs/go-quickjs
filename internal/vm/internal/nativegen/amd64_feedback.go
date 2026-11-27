@@ -33,23 +33,24 @@ func feedbackAMD64(v *variant) (*block, error) {
 			feedbackEdgeAMD64(a, bc)
 		}
 		if latticeRecords(op) {
-			var numbers *Label
-			big, _ := feedbackMarksBig(op)
+			// The lattice, then, for an operator that marks BigInts, the
+			// marks, of the words the lattice loaded: numbers go on in
+			// plain's handler at once.
+			var x *latticeExitsAMD64
+			big, ab := feedbackMarksBig(op)
 			if big {
-				l := a.NewLabel()
-				numbers = &l
+				x = &latticeExitsAMD64{none: a.NewLabel(), known: a.NewLabel(), check: a.NewLabel()}
 			}
-			tail := latticeAMD64(a, op, numbers)
-			if big, ab := feedbackMarksBig(op); big {
-				feedbackBigAMD64(a, v, op, ab)
-				a.Bind(*numbers)
-			}
+			tail := latticeAMD64(a, op, x)
 			a.JmpMem(R13, 8*int32(v.slotPlain(op)))
+			if big {
+				feedbackBigAMD64(a, v, op, ab, x)
+			}
 			tail()
 			continue
 		}
 		if big, ab := feedbackMarksBig(op); big {
-			feedbackBigAMD64(a, v, op, ab)
+			feedbackBigAMD64(a, v, op, ab, nil)
 			continue
 		}
 		if jumps, _ := feedbackJumps(op); jumps {
@@ -129,10 +130,13 @@ func feedbackEdgeAMD64(a *Asm, bc bool) {
 // feedbackBigOps), of R[A] and R[B] where ab, else of R[B] and R[C]: where
 // both are such BigInts and the site's marks (regCode's bigSeen) have none
 // of its register pc, the exit stub, through the table, for Go to make
-// the operation and its mark; plain's handler of op otherwise. It uses
-// RSI, RDX, RCX, R8 and R9, which plain's handlers and the exit stub set
-// before they read them.
-func feedbackBigAMD64(a *Asm, v *variant, op bytecode.ROp, ab bool) {
+// the operation and its mark; plain's handler of op otherwise. Where x is
+// not nil, the lattice's code (latticeAMD64) comes in at its labels: at
+// x.none the operands' words are loaded into RDX and R8, as the lattice
+// loads them; at x.check, they are, and are looked at; at x.known, both
+// are such BigInts. It uses RSI, RDX, RCX, R8 and R9, which plain's
+// handlers and the exit stub set before they read them.
+func feedbackBigAMD64(a *Asm, v *variant, op bytecode.ROp, ab bool, x *latticeExitsAMD64) {
 	plainOp, exit := a.NewLabel(), a.NewLabel()
 	seen, kinds := feedbackBigSeen(), feedbackBigKinds()
 	// The operands' registers' offsets in the window, as decA, decB and
@@ -141,14 +145,25 @@ func feedbackBigAMD64(a *Asm, v *variant, op bytecode.ROp, ab bool) {
 	if ab {
 		shifts = [2]uint8{12, 28}
 	}
-	a.MovImm(RCX, shortBigBase)
-	for _, sh := range shifts {
+	if x != nil {
+		a.Bind(x.none)
+	}
+	for i, sh := range shifts {
 		a.MovRR(RSI, RAX)
 		a.ShiftImm(Shr, RSI, sh, true)
 		a.OpImm(And, RSI, 0xFFFF0, false)
-		a.LoadIdx(R8, R12, RSI, 1, 0)
-		a.Op(Cmp, R8, RCX, true)
+		a.LoadIdx(latticeWordsAMD64(2)[i], R12, RSI, 1, 0)
+	}
+	if x != nil {
+		a.Bind(x.check)
+	}
+	a.MovImm(RCX, shortBigBase)
+	for _, w := range latticeWordsAMD64(2) {
+		a.Op(Cmp, w, RCX, true)
 		a.Jcc(CondB, plainOp)
+	}
+	if x != nil {
+		a.Bind(x.known)
 	}
 	// Two BigInts held in their Values: the site's marks, none yet.
 	a.Load(R9, RDI, ncRC)

@@ -703,19 +703,28 @@ template's first run where the runtime runs the JIT on the native
 handlers: an int32's number (not -0), another number, an oddball, a
 BigInt in the int64 range, another BigInt, a string, anything else
 (`abi.Operands`), an immediate an int32's. As V8's feedback update, a
-handler tests the byte for each operand's kind and branches past the
-store where it has it, a kind it lacks learned out of line: a stable
-site costs a load, a test and a branch an operand, never a store
-(`feedback`'s `jnlt` on two int32s 30 instructions, plain's 12). A
-number is in the byte where it has any number's bit, so that only a
+handler tests the byte for what its operands are and branches past the
+store where it has it, a kind it lacks learned out of line, operand by
+operand: numbers, below the least tag, take one test of the byte for
+both operands, and BigInts in the int64 range, out of line, one compare
+of the two words ANDed and one test, so that a stable site costs a
+load and a compare an operand and a test, never a store (`feedback`'s
+`jnlt` on two int32s 26 instructions, plain's 12). An operator that
+marks BigInts looks at the words the lattice loaded, and at none where
+the lattice found two numbers: its `jnlt` on two BigInts of a marked
+site 54 instructions, the marks' alone 42 -- a comparator Go's sort runs
+in the interpreter, as `typed_i64_sort`'s, pays it at every comparison.
+A number is in the byte where it has any number's bit, so that only a
 site's first number is converted to tell an int32; an int32's site that
 meets a double later learns it at the deoptimization that follows
 (`jitLatticeWiden`, which classifies exactly). It is reached through the
 frame's cc, as the counts are, not a pinned register: the native
 context's `fv` and the register kept for it (amd64's R14, arm64's R15) stay
 for a vector pinned where no plain variant has to switch it, baseline
-code's. `TestJITLattice` runs every form on operands of every kind and
-checks each byte against `jitLatticeKind`.
+code's. `TestJITLattice` runs every form on operands of every kind, from
+bytes that hold nothing and what the handlers' tests find, and checks
+each byte against `jitLatticeKind`; `TestJITLatticeBigMarks` that a site
+whose byte has met BigInts is still marked at its first two.
 `TestRegNativeFeedbackSelected` checks a runtime picks its table, and
 `TestRegNativePlainSameWithJIT` that a build with the JIT makes plain's as a
 build without does.

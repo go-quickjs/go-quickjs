@@ -143,7 +143,7 @@ const (
 	layoutPadNCZ  = 644
 	layoutPadNHJ  = 138
 	layoutPadNH   = 95
-	layoutPadNHT  = 141
+	layoutPadNHT  = 100
 	layoutPadNDH  = 4
 	layoutPadNDW  = 6
 	layoutPadNDG  = 0
