@@ -407,42 +407,6 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.hintPass, al.blockByBlock, al.mergeAll, al.regByReg, al.phiWalks = cfg.hintPass, cfg.blockByBlock, cfg.mergeAll, cfg.regByReg, cfg.phiWalks
 	al.searchPreds, al.rangeLists, al.sortList = cfg.searchPreds, cfg.rangeLists, cfg.sortList
 
-	// predIdx is, for each block's successor k, the block's index among
-	// that successor's predecessors: predIdx[predOff[i]+k]. The walk that
-	// finds them finds the critical edges too: from a block of more than
-	// one successor to one of more than one predecessor. And edgeArgs
-	// are the arguments the successors' phis read at each block's end,
-	// those allocated, in the order of its successors and their phis:
-	// block i's from argOff[i] to argOff[i+1].
-	al.predOff = grown(al.predOff, nb+1)
-	argOff := grown(al.argOff, nb+1)
-	al.predsSorted = false
-	predIdx, edgeArgs := al.predIdx[:0], al.edgeArgs[:0]
-	for i := range f.Blocks {
-		al.predOff[i], argOff[i] = int32(len(predIdx)), int32(len(edgeArgs))
-		succs := f.Blocks[i].Succs
-		for _, s := range succs {
-			sb := &f.Blocks[s]
-			if len(succs) > 1 && len(sb.Preds) > 1 {
-				al.split = false
-			}
-			var pi int
-			if ps := sb.Preds; len(ps) <= manyPreds || al.searchPreds {
-				pi = slices.Index(ps, i)
-			} else {
-				pi = al.predIndex(s, i)
-			}
-			predIdx = append(predIdx, int32(pi))
-			for k := range sb.Phis {
-				if a := sb.Phis[k].Args[pi]; alloc(a) {
-					edgeArgs = append(edgeArgs, edgeArg{a, sb.Phis[k].Def})
-				}
-			}
-		}
-	}
-	al.predOff[nb], argOff[nb] = int32(len(predIdx)), int32(len(edgeArgs))
-	al.predIdx, al.argOff, al.edgeArgs = predIdx, argOff, edgeArgs
-	predOff := al.predOff
 
 	// Liveness, of the registers that may be live across a block's
 	// boundary -- a phi's, a phi's argument, one used in a block other
@@ -522,6 +486,42 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			}
 		}
 	}
+	// predIdx is, for each block's successor k, the block's index among
+	// that successor's predecessors: predIdx[predOff[i]+k]. The walk that
+	// finds them finds the critical edges too: from a block of more than
+	// one successor to one of more than one predecessor. And edgeArgs
+	// are the arguments the successors' phis read at each block's end,
+	// those allocated, in the order of its successors and their phis:
+	// block i's from argOff[i] to argOff[i+1].
+	al.predOff = grown(al.predOff, nb+1)
+	argOff := grown(al.argOff, nb+1)
+	al.predsSorted = false
+	predIdx, edgeArgs := al.predIdx[:0], al.edgeArgs[:0]
+	for i := range f.Blocks {
+		al.predOff[i], argOff[i] = int32(len(predIdx)), int32(len(edgeArgs))
+		succs := f.Blocks[i].Succs
+		for _, s := range succs {
+			sb := &f.Blocks[s]
+			if len(succs) > 1 && len(sb.Preds) > 1 {
+				al.split = false
+			}
+			var pi int
+			if ps := sb.Preds; len(ps) <= manyPreds || al.searchPreds {
+				pi = slices.Index(ps, i)
+			} else {
+				pi = al.predIndex(s, i)
+			}
+			predIdx = append(predIdx, int32(pi))
+			for k := range sb.Phis {
+				if a := sb.Phis[k].Args[pi]; alloc(a) {
+					edgeArgs = append(edgeArgs, edgeArg{a, sb.Phis[k].Def})
+				}
+			}
+		}
+	}
+	al.predOff[nb], argOff[nb] = int32(len(predIdx)), int32(len(edgeArgs))
+	al.predIdx, al.argOff, al.edgeArgs = predIdx, argOff, edgeArgs
+	predOff := al.predOff
 	for _, x := range later {
 		switch {
 		case defBlock[x.v] != x.b:
@@ -1886,6 +1886,8 @@ func (al *Allocator) explore(f *Func, words, stride int, defBlock, defInst []int
 	// up has register v, global x, live into block b.
 	up := func(v VReg, x int, b int) {
 		w, bit := x/64, uint64(1)<<(x%64)
+		// sx, sbit: its word's in the summary.
+		sx, sbit := w/64, uint64(1)<<(w%64)
 		in := live[stride*b*words:]
 		if in[w]&bit != 0 {
 			return
@@ -1897,7 +1899,7 @@ func (al *Allocator) explore(f *Func, words, stride int, defBlock, defInst []int
 			work = work[:len(work)-1]
 			for _, p := range f.Blocks[c].Preds {
 				live[(stride*p+1)*words+w] |= bit
-				sum[p*sw+w/64] |= 1 << (w % 64)
+				sum[p*sw+sx] |= sbit
 				if int32(p) == defBlock[v] {
 					continue
 				}
