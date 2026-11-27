@@ -163,12 +163,14 @@ func lowerRegKindsRecovered(rc *bytecode.RegCode, fn *bytecode.Function, ms []lo
 // function's first call (bytecode.RegLater) keeps its names, constants
 // and property sites -- the function's own and those it adds -- in rc
 // (RegCode.Names), and leaves the Function's, shared by then, as they
-// were.
+// were. The view's VMCode is nil, which the lowering never reads: a
+// callee a background compile inlines may be making its first run on the
+// runtime's goroutine, which stores fn's (bytecode's CopyWithoutVMCode).
 func regView(rc *bytecode.RegCode, fn *bytecode.Function) *bytecode.Function {
 	if rc == nil || fn == nil || rc.Names == nil && rc.Constants == nil && rc.PropSites == 0 {
 		return fn
 	}
-	view := *fn
+	view := fn.CopyWithoutVMCode()
 	if rc.Names != nil {
 		view.Names = rc.Names
 	}
@@ -178,7 +180,7 @@ func regView(rc *bytecode.RegCode, fn *bytecode.Function) *bytecode.Function {
 	if rc.PropSites != 0 {
 		view.PropSites = rc.PropSites
 	}
-	return &view
+	return view
 }
 
 // regLowering is one register function's lowering in progress.

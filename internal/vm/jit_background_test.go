@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 )
 
@@ -534,5 +537,51 @@ func TestJITBackgroundCompileWaitsForItsCallee(t *testing.T) {
 	inlined := re != nil && re.keep != nil && slices.Contains(re.keep.inlined, add)
 	if re == nil || re.code == nil || !inlined || len(re.unentered) == 0 {
 		t.Fatalf("once does not inline add, whose objects it would leave unmade: %+v", re)
+	}
+}
+
+// A compile in the background lowers a callee it inlines -- one made where
+// it is called, which may never have run -- on its worker while the
+// runtime's goroutine makes the callee's first call, which stores its
+// Function's VMCode (firstReg). The lowering's view of the callee
+// (regView) is a copy without VMCode (bytecode's CopyWithoutVMCode): the
+// plain copy it had been read VMCode as the first call stored it, a data
+// race, which the race detector reports here (CI's race job runs it): the
+// two goroutines below, the worker's lowering and the first call, are
+// ordered by nothing.
+func TestJITBackgroundLowersACalleeAtItsFirstRun(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	if _, err := r.Run(compileForTest(t, `function g(x) { let _k = 0; return { v: x * 2 + 1, k: _k } }`)); err != nil {
+		t.Fatal(err)
+	}
+	fn := jitGlobalClosureForTest(r, "g").fn
+	rc := fn.RegCode()
+	if rc == nil || rc.Names == nil || atomic.LoadPointer(&fn.VMCode) != nil {
+		t.Fatalf("g: register code %v, its names %v, VMCode %v: want g compiled at its first ask and never run", rc != nil, rc != nil && rc.Names != nil, atomic.LoadPointer(&fn.VMCode))
+	}
+	var wg sync.WaitGroup
+	var got jitLowered
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		got = jitRegLowerKinds(rc, fn, jitLowerInline, jitcompile.Hints{})
+	}()
+	go func() {
+		defer wg.Done()
+		firstReg(fn)
+	}()
+	wg.Wait()
+	if !got.done[jitLowerInline] || got.progs[jitLowerInline] == nil {
+		t.Fatalf("g not lowered for inlining: %v", got.errs[jitLowerInline])
+	}
+	if atomic.LoadPointer(&fn.VMCode) == nil {
+		t.Fatal("g's first call made no VM form")
+	}
+	// Node: g(4).v
+	if v, err := r.Run(compileForTest(t, `g(4).v`)); err != nil || v.Number() != 9 {
+		t.Fatalf("g(4).v = %v, %v; want 9", v, err)
 	}
 }
