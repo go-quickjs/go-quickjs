@@ -120,7 +120,7 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 		// The answers the worker derives, as it does before its build.
 		snap.s.derive()
 		functions++
-		// The register sites asked by register pc (gatherPropertyAsked)
+		// The register sites asked by register pc (jitPropData's askedAt)
 		// that no PC of the program asks the method at, by method: an ask
 		// the feedback's asking at the PCs had not made, which may have
 		// remembered a shape (primitiveSiteOf, accessorOf).

@@ -133,11 +133,21 @@ func (s *jitSnapshot) askReg(fb *jitRegFeedback, p *ir.Program) {
 func (s *jitSnapshot) bindProgram(p *ir.Program) {
 	s.p, s.codeLen = p, len(p.Code)
 	s.ops = make([]ir.Op, len(p.Code))
+	// The PCs of each op counted, the room of each method made of the
+	// counts of the ops that ask it: an increment a PC, not one a method a
+	// PC.
+	var counts [ir.LastOp + 1]int32
 	for pc := range p.Code {
 		op := p.Code[pc].Op
 		s.ops[pc] = op
+		counts[op]++
+	}
+	for op, n := range counts {
+		if n == 0 {
+			continue
+		}
 		for asks := jitSnapAsks[op] & jitRegSnapMethods &^ jitRegSnapStatePC; asks != 0; asks &= asks - 1 {
-			s.room[bits.TrailingZeros64(asks)]++
+			s.room[bits.TrailingZeros64(asks)] += n
 		}
 	}
 }

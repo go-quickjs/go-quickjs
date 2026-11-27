@@ -68,7 +68,9 @@ type jitSnapData struct {
 	// copies' (closureCopy).
 	rt *Runtime
 	// copies, the root's, are the closures' copies its compile's gathers
-	// made (closureCopy).
+	// made (closureCopy), found by a search of copied while they are few,
+	// by copies once they are many.
+	copied []jitCopied
 	copies map[*closure]*jitClosureCopy
 	// links, the root's, are the links its compile's gathers made
 	// (gatherLink): the only ones a derivation's effects may name.
@@ -113,30 +115,54 @@ type jitCopiedPoly struct {
 	s propSeen
 }
 
+// jitCopied is a closure's copy, by its closure (jitSnapData's copied).
+type jitCopied struct {
+	cl *closure
+	c  *jitClosureCopy
+}
+
 // closureCopy is cl's copy (jitClosureCopy), of d, the compile's root's
 // data: made at its first ask, its caches copied whole.
 func (d *jitSnapData) closureCopy(cl *closure) *jitClosureCopy {
-	if c := d.copies[cl]; c != nil {
-		return c
+	if d.copies != nil {
+		if c := d.copies[cl]; c != nil {
+			return c
+		}
+	} else {
+		for _, x := range d.copied {
+			if x.cl == cl {
+				return x.c
+			}
+		}
 	}
 	c := &jitClosureCopy{}
 	c.ic, c.polys = jitCopyCaches(cl.ic)
 	c.calls = jitCallsCopy(d.rt, cl)
 	c.sites = jitCallSiteFacts(d.rt, cl, c.calls)
-	if d.copies == nil {
-		d.copies = map[*closure]*jitClosureCopy{}
+	switch {
+	case d.copies != nil:
+		d.copies[cl] = c
+	case len(d.copied) < 8:
+		d.copied = append(d.copied, jitCopied{cl, c})
+	default:
+		// Many: found by a map from here.
+		d.copies = make(map[*closure]*jitClosureCopy, 2*len(d.copied)+1)
+		for _, x := range d.copied {
+			d.copies[x.cl] = x.c
+		}
+		d.copies[cl] = c
 	}
-	d.copies[cl] = c
 	return c
 }
 
-// jitCopyCaches is a copy of ic, each entry's earlier entries (propPoly) a
-// copy of its own, their earlier entries (propSeen) with them, of what an
-// answer or a callee's seen feedback (jitSeenFeedbackInto) reads of them:
-// the interpreter changes them in place. The copy is
-// ic's bulk; the earlier entries, which only polymorphic sites have, one
-// allocation more.
+// jitCopyCaches is a copy of ic, each entry's earlier entries
+// (propPoly) a copy of its own, their earlier entries (propSeen) with
+// them, of what an answer or a callee's seen feedback (jitSeenFeedbackInto)
+// reads of them: the interpreter changes them in place.
 func jitCopyCaches(ic []propCache) (out []propCache, polys []jitCopiedPoly) {
+	if len(ic) == 0 {
+		return nil, nil
+	}
 	out = append([]propCache(nil), ic...)
 	np := 0
 	for i := range out {

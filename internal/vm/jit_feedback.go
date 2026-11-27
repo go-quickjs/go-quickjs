@@ -452,7 +452,7 @@ func (f *jitRegFeedback) Accessor(pc int) (ssa.AccessorSite, bool) {
 
 // accessorAt is Accessor's answer for the read or write of key at register
 // pc rpc, its cache cache: of the register code, which a snapshot's
-// gather asks it by (gatherPropertyAsked).
+// gather asks it by (jitPropData's askedAt).
 func (f *jitRegFeedback) accessorAt(rpc int, key Atom, cache *propCache, write bool) (ssa.AccessorSite, bool) {
 	a, callee, cl, ok := f.fb.accessorOf(rpc, cache, key, write)
 	if !ok || cl == nil {

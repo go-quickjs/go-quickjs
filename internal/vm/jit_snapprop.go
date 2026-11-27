@@ -142,7 +142,7 @@ type jitPropData struct {
 	cells      []jitPropCellAdd
 	x          jitPropCtx
 	// accessors and strings are the answers of Accessor and
-	// StringProperty asked by register pc (gatherPropertyAsked).
+	// StringProperty asked by register pc (askedAt).
 	accessors []jitPropAsked[jitSnapAnsAccessor]
 	strings   []jitPropAsked[jitSnapAnsStringProperty]
 	// eager marks a forwarded callee's snapshot (forwardProperty), whose
@@ -211,7 +211,7 @@ func (d *jitPropData) ctx() jitPropCtx { return d.x }
 func init() {
 	jitSnapDerived |= 1<<snapProperty | 1<<snapAccessor | 1<<snapStringProperty
 	jitSnapAskedAtGather |= 1<<snapAccessor | 1<<snapStringProperty
-	jitSnapFuncGatherers = append(jitSnapFuncGatherers, gatherProperty, gatherPropertyAsked)
+	jitSnapFuncGatherers = append(jitSnapFuncGatherers, gatherProperty)
 	jitSnapBinders = append(jitSnapBinders, bindPropertyAsked)
 	jitSnapDerivers[jitDeriveCopies] = append(jitSnapDerivers[jitDeriveCopies], deriveProperty)
 }
@@ -233,6 +233,14 @@ func gatherProperty(s *jitSnapshot, fb *jitRegFeedback) {
 				jitRegSnapAskProperty(s, fb, pc)
 			}
 		}
+		for pc, op := range s.ops {
+			if jitSnapAsks[op]&(1<<snapAccessor) != 0 {
+				jitRegSnapAskAccessor(s, fb, pc)
+			}
+			if jitSnapAsks[op]&(1<<snapStringProperty) != 0 {
+				jitRegSnapAskStringProperty(s, fb, pc)
+			}
+		}
 		return
 	}
 	f, r := fb.fb, fb.fb.r
@@ -250,6 +258,11 @@ func gatherProperty(s *jitSnapshot, fb *jitRegFeedback) {
 		d.poly = jitPolyCopy(e.poly)
 	}
 	rc := fb.rc
+	var poly []jitPolySite
+	if e := f.e; e != nil {
+		poly = e.poly
+	}
+	live := jitPropLive{f: fb, r: r}
 	for rpc, w := range rc.Code {
 		switch w.Op() {
 		case bytecode.RLit:
@@ -257,7 +270,7 @@ func gatherProperty(s *jitSnapshot, fb *jitRegFeedback) {
 				if d.lit == nil {
 					d.lit = map[int32]jitPropCopied{}
 				}
-				d.lit[int32(rpc)] = jitPropCopied{key, jitPropCopyCache(c)}
+				d.lit[int32(rpc)] = jitPropCopied{key, s.propCopyCache(c)}
 			}
 		case bytecode.RGetPrivate, bytecode.RSetPrivate:
 			if rpc >= len(rc.Aux) {
@@ -286,7 +299,7 @@ func gatherProperty(s *jitSnapshot, fb *jitRegFeedback) {
 				if d.known == nil {
 					d.known = map[int32]jitPropCopied{}
 				}
-				d.known[int32(rpc)] = jitPropCopied{key, jitPropCopyCache(c)}
+				d.known[int32(rpc)] = jitPropCopied{key, s.propCopyCache(c)}
 			}
 		}
 	}
@@ -294,7 +307,6 @@ func gatherProperty(s *jitSnapshot, fb *jitRegFeedback) {
 	// next shapes want their index built, a chain's cell's addition, and
 	// the prototypes' shapes an addition along a chain is compiled for,
 	// remembered as the asking remembered them.
-	live := jitPropLive{f: fb, r: r}
 	add := func(c *propCache) {
 		next := c.next
 		if next == nil {
@@ -334,6 +346,13 @@ func gatherProperty(s *jitSnapshot, fb *jitRegFeedback) {
 			d.deep(live, a)
 		}
 	}
+	// Accessor and StringProperty where they may answer (askedAt), once
+	// the caches the feedback makes of its own and the additions are
+	// taken, which the answers read of the heap as the asking at the PCs
+	// had found them.
+	for rpc, w := range rc.Code {
+		d.askedAt(s, fb, rpc, w, live, poly)
+	}
 }
 
 // deep notes a, an addition along a chain: whether its next shape wants
@@ -352,9 +371,9 @@ func (d *jitPropData) deep(live jitPropLive, a jitDeepAdd) {
 	}
 }
 
-// jitPropCopyCache is a copy of c, as a closure's copy copies its caches
+// propCopyCache is a copy of c, as a closure's copy copies its caches
 // (jitCopyCaches).
-func jitPropCopyCache(c *propCache) *propCache {
+func (s *jitSnapshot) propCopyCache(c *propCache) *propCache {
 	out, _ := jitCopyCaches([]propCache{*c})
 	return &out[0]
 }
@@ -408,93 +427,69 @@ func deriveProperty(s *jitSnapshot) {
 	}
 }
 
-// gatherPropertyAsked asks fb, for s, Accessor and StringProperty by
-// register pc, at the sites whose caches, as gatherProperty copied them,
-// may answer: an accessor's read or write whose cache, an earlier entry of
-// it or what the code learned there holds an accessor (accessorOf's
-// cases); a method's read whose code learned the primitives it met there,
-// or whose cache and code know nothing of it (stringPropertyOf). Every
-// other site's answer is none, with no effect, as the feedback's asking
-// gives it: most of the reads and writes these methods are asked at,
-// which cost the goroutine the asking. Their answers read the heap -- the
-// accessors' pairs, a getter's register code and its lowering, the
-// primitives' prototypes -- and are asked so, on the goroutine, of the
-// register code: each kept with its register pc and whether it is a
-// write's, which bindPropertyAsked puts at the program's PCs lowered of it
-// (jitSnapBinders). A forwarded callee's are asked at every PC
-// (gatherProperty).
-func gatherPropertyAsked(s *jitSnapshot, fb *jitRegFeedback) {
-	d := &s.d.prop
-	if d.eager {
-		for pc, op := range s.ops {
-			if jitSnapAsks[op]&(1<<snapAccessor) != 0 {
-				jitRegSnapAskAccessor(s, fb, pc)
-			}
-			if jitSnapAsks[op]&(1<<snapStringProperty) != 0 {
-				jitRegSnapAskStringProperty(s, fb, pc)
-			}
+// askedAt asks fb, for s, Accessor and StringProperty by register pc, of
+// the register instruction w at rpc, where its site, as gatherProperty
+// copied it, may answer: an accessor's read or write whose cache, an
+// earlier entry of it or what the code learned there holds an accessor
+// (accessorOf's cases); a method's read whose code learned the primitives
+// it met there, or whose cache and code know nothing of it
+// (stringPropertyOf). Every other site's answer is none, with no effect,
+// as the feedback's asking gives it: most of the reads and writes these
+// methods are asked at, which cost the goroutine the asking. Their answers
+// read the heap -- the accessors' pairs, a getter's register code and its
+// lowering, the primitives' prototypes -- and are asked so, on the
+// goroutine, of the register code: each kept with its register pc and
+// whether it is a write's, which bindPropertyAsked puts at the program's
+// PCs lowered of it (jitSnapBinders).
+func (d *jitPropData) askedAt(s *jitSnapshot, fb *jitRegFeedback, rpc int, w bytecode.RInstr, live jitPropLive, poly []jitPolySite) {
+	e := fb.fb.e
+	var read, write, method, plain bool
+	switch w.Op() {
+	case bytecode.RGetProp, bytecode.RGetPropNext:
+		read, plain = true, true
+	case bytecode.RGetMethod, bytecode.RGetMethodW:
+		read, method = true, true
+	case bytecode.RSetProp:
+		write = true
+	case bytecode.RAddProp, bytecode.RAddPropI:
+		// Its read and its store share the store's site.
+		read, write = true, true
+	case bytecode.RLit:
+		// regexp_lit's read of its method, of a cache of the code's own
+		// (regLitCache): a method's, which only StringProperty asks of.
+		if e == nil {
+			return
 		}
-		return
-	}
-	cl, e := fb.fb.cl, fb.fb.e
-	if cl == nil {
-		return
-	}
-	var poly []jitPolySite
-	if e != nil {
-		poly = e.poly
-	}
-	live := jitPropLive{f: fb, r: fb.fb.r}
-	code := &d.code
-	for rpc, w := range code.rc.Code {
-		var read, write, method, plain bool
-		switch w.Op() {
-		case bytecode.RGetProp, bytecode.RGetPropNext:
-			read, plain = true, true
-		case bytecode.RGetMethod, bytecode.RGetMethodW:
-			read, method = true, true
-		case bytecode.RSetProp:
-			write = true
-		case bytecode.RAddProp, bytecode.RAddPropI:
-			// Its read and its store share the store's site.
-			read, write = true, true
-		case bytecode.RLit:
-			// regexp_lit's read of its method, of a cache of the code's own
-			// (regLitCache): a method's, which only StringProperty asks of.
-			if e == nil {
-				continue
-			}
-			if _, c, ok := d.litRead(rpc, w); !ok || !jitStringPropertyMaybe(e, rpc, c, poly) {
-				continue
-			}
-			if key, lc, ok := live.litRead(rpc, w); ok {
-				d.askString(s, fb, rpc, key, lc)
-			}
-			continue
-		default:
-			continue
+		if _, c, ok := d.litRead(rpc, w); !ok || !jitStringPropertyMaybe(e, rpc, c, poly) {
+			return
 		}
-		key, c, ok := code.siteAt(rpc, w, d)
-		if !ok || c == nil {
-			continue
-		}
-		p := jitPolyAt(poly, rpc)
-		lc := live.cache(int(w.C()))
-		if (plain || write) && jitAccessorMaybe(&d.x, c, p) {
-			if read && plain {
-				d.askAccessor(s, fb, rpc, key, lc, false)
-			}
-			if write {
-				d.askAccessor(s, fb, rpc, key, lc, true)
-			}
-		}
-		if read && method && e != nil && jitStringPropertyMaybe(e, rpc, c, poly) {
+		if key, lc, ok := live.litRead(rpc, w); ok {
 			d.askString(s, fb, rpc, key, lc)
 		}
+		return
+	default:
+		return
+	}
+	key, c, ok := d.code.siteAt(rpc, w, d)
+	if !ok || c == nil {
+		return
+	}
+	p := jitPolyAt(poly, rpc)
+	lc := live.cache(int(w.C()))
+	if (plain || write) && jitAccessorMaybe(&d.x, c, p) {
+		if read && plain {
+			d.askAccessor(s, fb, rpc, key, lc, false)
+		}
+		if write {
+			d.askAccessor(s, fb, rpc, key, lc, true)
+		}
+	}
+	if read && method && e != nil && jitStringPropertyMaybe(e, rpc, c, poly) {
+		d.askString(s, fb, rpc, key, lc)
 	}
 }
 
-// jitPropAsked is an answer gatherPropertyAsked asked of the feedback at a
+// jitPropAsked is an answer askedAt asked of the feedback at a
 // register pc, a write's where write says: its effect's index past 0, and
 // its results.
 type jitPropAsked[T any] struct {
@@ -534,7 +529,7 @@ func (d *jitPropData) askString(s *jitSnapshot, fb *jitRegFeedback, rpc int, key
 	}
 }
 
-// bindPropertyAsked puts the answers gatherPropertyAsked asked by register
+// bindPropertyAsked puts the answers askedAt asked by register
 // pc at each PC of s's program lowered of it whose op asks their method:
 // one of a read at a read's, a write's at a write's (propertyAt).
 func bindPropertyAsked(s *jitSnapshot) {
