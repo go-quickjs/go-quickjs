@@ -126,6 +126,13 @@ type jitTestConfig struct {
 	// goCallWork, if set, is called at each of native code's calls of Go
 	// but a leaf's, which it sends through jitHostCall's dispatch.
 	goCallWork func()
+	// levelFound, if set, is called at each level of a native call Go
+	// finds (jitRegLevelAt), with its context's index and the code it
+	// found the level running.
+	levelFound func(r *Runtime, i int, e *jitRegEntry)
+	// selfStrict has a context's Code that names no entry of its
+	// function's panic (jitRegCodeNamed): the package's tests' runtimes'.
+	selfStrict bool
 	// ssaOptimized, if set, is given each compile's SSA once optimized,
 	// and has the runtime compile on the spot.
 	ssaOptimized func(fn *bytecode.Function, f *ssa.Func)
@@ -1372,6 +1379,14 @@ type jitState struct {
 	// finds it (jitRegLevelAt), closed once none is (regClose,
 	// jitRegCloseRetired).
 	regRetired []*jitRegEntry
+	// regSelves are the entries that have code or are compiled, by their
+	// ids (jitRegSelf), which native calls' contexts name them by;
+	// regSelfIdle the ids given back, taken again first; regSelfStale how
+	// many times Go read a context's id that named no entry of its
+	// function's (jitRegCodeNamed).
+	regSelves    []*jitRegEntry
+	regSelfIdle  []uint32
+	regSelfStale int
 	// regJobs are the register compiles in the background, in the order
 	// they were handed over, and regPendingJobs each by its function's
 	// key (jit_bg.go).

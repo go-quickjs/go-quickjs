@@ -104,6 +104,9 @@ type jitRegEntry struct {
 	// that deoptimizes for a shape again in code compiled since it first
 	// did is megamorphic (jitDeoptSeenOp).
 	serial uint32
+	// self is its id while it has code or is compiled (jitRegSelf), 0 for
+	// none.
+	self uint32
 	// rc is the register code it was compiled from.
 	rc *bytecode.RegCode
 	// loopMean is its loops' mean length in the program's instructions,
@@ -418,6 +421,15 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 		return nil
 	}
 	e := &jitRegEntry{key: key, life: life, used: s.epoch()}
+	// Its id (jitRegSelf), taken for its compile, given back where the
+	// compile made no code -- a refusal, no room -- unless a compile in the
+	// background has it, whose install gives it back so (jitRegInstall).
+	handed := false
+	defer func() {
+		if !handed && e.code == nil {
+			s.regSelfFree(e)
+		}
+	}()
 	e.tier = jitTierReason(life, callee, osrAt != 0)
 	// Its state kept while the compile fills and counts it: the room made
 	// for the code would otherwise let go of the state of the very function
@@ -437,6 +449,7 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 	}
 	if background && !c.rc.Typed && r.jitRegHandOver(cl, c, key, e, callee, frameAt, osrAt) {
 		// Handed to the workers, its program lowered there (jit_bgroot.go).
+		handed = true
 		return nil
 	}
 	p, err := r.jitRegLower(cl, c.rc, jitLowerSSA)
@@ -484,6 +497,7 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 			j := r.jitRegJobOf(cl, c, key, e, rf, snap, callee, frameAt, osrAt)
 			j.p = p
 			r.jitRegSubmit(j)
+			handed = true
 			return nil
 		}
 		// What the questions took back cannot be put back: built here,
@@ -508,7 +522,7 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 		e.refusal = fmt.Sprintf("%v: %v", jitRefused, err)
 		return e
 	}
-	f.FrameAt = frameAt
+	f.FrameAt, f.Self = frameAt, s.regSelfTake(e)
 	looped := jitRegShape(f, p, cl, c)
 	jitRegLap(mir.PhaseBuild)
 	ssa.Optimize(f)
@@ -523,7 +537,7 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 		// build could not know: built again with no more than that, the
 		// calls past them left to Go.
 		keepLimit = abi.MaxKeeps
-		rf, f, looped, mc, err = r.jitRegBuild(w, cl, c, p, keepLimit, frameAt)
+		rf, f, looped, mc, err = r.jitRegBuild(w, cl, c, p, e, keepLimit, frameAt)
 	}
 	if err != nil {
 		e.refusal = fmt.Sprintf("%v: %v", jitRefused, err)
@@ -551,7 +565,7 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 // as snap, its program the job's to be given (jitRegJob's p, or lowerRoot).
 func (r *Runtime) jitRegJobOf(cl *closure, c *regCode, key jitKey, e *jitRegEntry, rf *jitRegFeedback, snap *jitRegSnapshot, callee bool, frameAt, osrAt int) *jitRegJob {
 	s := r.jit
-	j := &jitRegJob{cl: cl, c: c, key: key, realm: r.Realm, callee: callee, e: e, rf: rf, snap: snap, deopts: e.life.deopts, asks: e.life.reoptAsks, frameAt: frameAt,
+	j := &jitRegJob{cl: cl, c: c, key: key, realm: r.Realm, callee: callee, e: e, self: s.regSelfTake(e), rf: rf, snap: snap, deopts: e.life.deopts, asks: e.life.reoptAsks, frameAt: frameAt,
 		enc: s.enc, opts: s.opts, miss: r.jitStress.miss, arena: s.arena, backHook: r.jitTest.workspaceBack, replayHook: r.jitTest.bgReplayed,
 		links: slices.Clone(rf.fb.keep().links)}
 	if r.jitTest.placeAtInstall {
@@ -1655,6 +1669,8 @@ func (s *jitState) regClose(e *jitRegEntry) {
 	// and a function not called again had kept them -- holders, pools,
 	// closures -- for good.
 	e.code, e.keep, e.targets = nil, nil, nil
+	// No context names it now: none runs the code (regInUse).
+	s.regSelfFree(e)
 	if len(s.regRetired) != 0 {
 		if i := slices.Index(s.regRetired, e); i >= 0 {
 			s.regRetired = slices.Delete(s.regRetired, i, i+1)
@@ -4439,4 +4455,98 @@ func (r *Runtime) RegNativeCall(fnv Value, args []Value, osr bool) RegNativeResu
 		}
 	})
 	return res
+}
+
+// jitRegSelf is the word e's code names itself by in the context of a
+// native call that runs it (ssa.Func's Self, abi.Context's Code): e's id,
+// its index in the JIT's table of the entries that have code or are
+// compiled (regSelves), taken for the compile (regSelfTake) and given back
+// once its code is closed or the compile made none (regSelfFree). A small
+// number, which every entry stores as an immediate in one instruction on
+// amd64 -- an entry's address had been a load from the code's constants
+// and a store at every native call -- and which the collector need not
+// know of: the table holds the entry. What keeps the entry's code while a
+// context names it, its Live abi.LiveCall: the cache (regCache), until it
+// lets it go; then, the call under way, regRetired, where regClose keeps
+// code dropped while its function has a native call under way (regInUse,
+// regCalled: any context LiveCall of its function), until
+// jitRegCloseRetired finds none. A context whose Live is not LiveCall may
+// name an id given back, or taken again since: nothing reads its Code then
+// (jitRegCodeNamed).
+func jitRegSelf(e *jitRegEntry) uintptr {
+	return uintptr(e.self)
+}
+
+// regSelfTake gives e an id, if it has none, for the compile of its code:
+// one given back before, or the table's next (regSelves). The table is as
+// long as the most entries that had code at once, a word each.
+func (s *jitState) regSelfTake(e *jitRegEntry) uintptr {
+	if e.self != 0 {
+		return uintptr(e.self)
+	}
+	if len(s.regSelves) == 0 {
+		// Id 0 is no code's (abi.Context's Code where Go runs the callee).
+		s.regSelves = append(s.regSelves, nil)
+	}
+	if n := len(s.regSelfIdle); n != 0 {
+		e.self = s.regSelfIdle[n-1]
+		s.regSelfIdle = s.regSelfIdle[:n-1]
+	} else {
+		e.self = uint32(len(s.regSelves))
+		s.regSelves = append(s.regSelves, nil)
+	}
+	s.regSelves[e.self] = e
+	return uintptr(e.self)
+}
+
+// regSelfFree gives e's id back (regSelfTake), once no context running
+// its code can name it: its code closed (regClose), or none made. Given
+// back to s's table only if s's table holds it: code a released JIT left
+// running (releaseJIT, from a call of Go under it) is closed by the
+// runtime's next JIT state, whose table is another.
+func (s *jitState) regSelfFree(e *jitRegEntry) {
+	if e.self == 0 {
+		return
+	}
+	if int(e.self) < len(s.regSelves) && s.regSelves[e.self] == e {
+		s.regSelves[e.self] = nil
+		s.regSelfIdle = append(s.regSelfIdle, e.self)
+	}
+	e.self = 0
+}
+
+// jitRegCodeNamed is the code the native call in context c runs, as its
+// entry named it (abi.Context's Code), or nil for none: nil too where c runs
+// no native call (abi.LiveCall), whose Code nothing keeps. An id that names
+// no entry, or another function's, is a breach of the ids' lifetime
+// (jitRegSelf): counted (regSelfStale), and a panic in the package's tests
+// (jitTestConfig's selfStrict); the level is then found by its function's
+// code now (jitRegCodeNow).
+func (r *Runtime) jitRegCodeNamed(c *abi.Context) *jitRegEntry {
+	if c.Live != abi.LiveCall || c.Code == 0 {
+		return nil
+	}
+	s := r.jit
+	if c.Code < uint64(len(s.regSelves)) {
+		if e := s.regSelves[c.Code]; e != nil && e.key.Value() == (*closure)(c.Closure).fn {
+			return e
+		}
+	}
+	s.regSelfStale++
+	if r.jitTest.selfStrict {
+		panic(fmt.Sprintf("vm: a native call's context names code %d, which is no entry of its function's", c.Code))
+	}
+	return nil
+}
+
+// jitRegCodeNow is the code of cl's function now, for this realm, or nil:
+// for a native call Go runs the callee of (abi.ExitEnter), which runs no
+// code its context could name.
+func (r *Runtime) jitRegCodeNow(cl *closure) *jitRegEntry {
+	if cc := cl.closureCode; cc != nil {
+		if e := cc.jitReg; e != nil && e.cached && e.key.realm == r.jitRealmKey() {
+			return e
+		}
+	}
+	return r.jit.regCache[r.jitRegKeyOf(cl)]
 }

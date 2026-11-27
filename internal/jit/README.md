@@ -2850,7 +2850,7 @@ field at its offset (`abi.Off*`), never by the VM's types.
 | `Spill`, `SpillMore`, `SpillTemp`, `Keep`, `Regs`, `XRegs` | Spill slots (`abi.SpillSlots`, 256, and those past them, see Spill slots), the references the code keeps where the collector sees them (`abi.MaxKeeps`, 256), and the registers a shared routine saves. |
 | `BackEdges` | The interpreter's back-edge counter, which every back edge decrements. |
 | `GoOp`, `GoArgs` and the call's words | A call of Go: the operation, its arguments' count and kind (see [Calls of Go](#calls-of-go)). |
-| `Next`, `Prev`, `Live`, `Level`, `Base`, `Closure`, `Function`, `NewTarget`, `ReturnTo`, `Args` | Native calls: the callee's context, which runs a call's callee or describes an inlined frame (`LiveCall`, `LiveInline`), its window, closure and function object, where it returns to, the arguments its frame keeps. |
+| `Next`, `Prev`, `Live`, `Level`, `Base`, `Closure`, `Code`, `Function`, `NewTarget`, `ReturnTo`, `Args` | Native calls: the callee's context, which runs a call's callee or describes an inlined frame (`LiveCall`, `LiveInline`), its window, closure, the code it runs and its function object, where it returns to, the arguments its frame keeps. |
 | `StackBase`, `StackEnd`, `StackTop`, `StackHigh`, `HighSeen` | The VM's stack, for the room a callee's frame needs. |
 | `Global`, `GlobalLex`, `LexNames`, `GlobalEpoch` | A script's global and lexical bindings, and the count of changes to the global object's table. |
 | `AwaitJob`, `JobHead`, `JobCount` | Whether an async function's frame is one its await's job resumed, and the VM's job queue's next index and length, which an await that goes on in place reads (`ssa.OpAwaitReady`). |
@@ -3095,7 +3095,8 @@ scope's end -- Go makes from native code on the register frame
 (`ssa.GoHost`, `GoArgument`, `GoCells`, `GoClosure`, `GoClose`;
 `jit_frame.go`, `jitRegFrameOp`): the run's own frame, or a native
 callee's, which has none of the VM's -- a stand-in of its closure, function
-object and receiver, its window at its context's `Base`. Left to an exit: a
+object and receiver, its window at its context's `Base`, cleared only of
+what an earlier use left in it (`standIn`). Left to an exit: a
 mapped arguments object, which aliases the registers; a native callee's rest
 parameters and arguments, which its calls keep none of. A closure a
 native callee makes that captures by value shares the callee's closed cells
@@ -3326,8 +3327,29 @@ out, so that a native recursion meets the deadline and the memory limit.
 **Levels.** No frame of the VM's is made for a native call. Where Go runs
 while native callees are under way, it makes each level's frame as
 `regEnterW` would -- its function, its window, past the call it makes --
-from the context (`Closure`, `Base`) and the level's code, which it finds in
-the cache by the function's key, kept by its template (`jitRegKeyOf`):
+from the context (`Closure`, `Base`) and the level's code, which the
+context names (`Code`, `jitRegLevelAt`), as V8's frame says what runs in
+it: every entry of a function's code that makes a native call's frame --
+its call entry, its tail entry, where a call in tail position gives the
+frame to it, and a generator's resumption -- stores the word its compile
+was given for it (`ssa.Func`'s `Self`), so that Go reads a level's code in
+one load, the code the level runs whatever its function's code is now. The
+word is the VM's id of the code (`jitRegSelf`), an index into the JIT's
+table of the entries that have code or are compiled (`regSelves`): an
+immediate one store holds on amd64, where an entry's address had been a
+load from the code's constants and a store at every call. An id is taken
+for a compile and given back once the code is closed (`regClose`) or the
+compile made none, and taken again first, so that the table is as long as
+the most entries that had code at once. The cache holds the entry, and
+once it lets it go, the retired code does (`regRetired`) while any native
+call of its function is under way (`regInUse`, `regCalled`); Go reads the
+id only while the context's call is (`LiveCall`), and checks that it names
+an entry of the context's function (`jitRegCodeNamed`, a panic in the
+package's tests). `TestJITLevelCodeLetGo` lets the code go under its
+levels with the collector at work, and `TestJITSelfIdsGivenBack` holds the
+table to the entries with code. A call that leaves for Go to run its
+callee (`ExitEnter`) names none, and its level goes on in its function's
+code now (`jitRegCodeNow`):
 
 - a call of Go a native callee makes (`jitRegGoCallNested`) is made on its
   level's frame, the one level Go finds the code of for the call, whatever
@@ -3385,33 +3407,29 @@ the call no longer inlined, and the closures given to the callee made.
 While Go runs beside them, every level's code is held: the cache does not
 drop it until the level is done. A level Go found the code of pins it
 (`jitRegEntry`'s `levels`); one a call of Go put off holds it by its
-context, whose callee returns into it (`ReturnTo`, `SSACode.Contains`),
-which the cache counts only when it asks -- before it lets the code go
-(`regLevelsOf`) -- so that a call of Go pins nothing for the levels below
-it. The function is not compiled again while a native call of it has not
-returned -- a context a native call runs in (`abi.LiveCall`) is its
-function's (`regCalled`) -- since Go finds
-the code of such a call by its function's. A level Go unwinds is no such
-call: its context is cleared as Go takes it (`jitRegUnwind`), and it goes
-on in the code it holds, natively where its call returns to, kept until it
-is done. So a recursion's function is compiled again while Go finishes
-its levels, as V8 installs new code while older frames run the old: the
-new code's calls through the link enter it, and the levels finish in the
-old. Counted as levels instead, a recursion's outer levels would keep it
-from being compiled again for what it learned for good. Go finds a
-level's code by its closure (`closureCode`'s `jitReg`)
-while the cache holds it (`jitRegEntry`'s `cached`), the cache's key
-otherwise or where that is not code of this realm (`jitRegLevelAt`). The
-code stays the level's after the call of Go too, the level going on in it
-natively or unwound by Go at its exit: the call pins it to the run below
-(`jitRegPinLevel`, `goPinned`) until the run's native code leaves. While any
-run's native code runs (`ctxTop`), code native callers may call (its link)
-is in use (`regInUse`), the native calls of it Go knows nothing of until
-they leave: the cache's flush lets it be. Code let go of while in use -- for
-room, compiled again once invalid -- is kept, not closed (`regRetired`),
-where a level running it still finds it, and closed once nothing uses it
-(`jitRegCloseRetired`). A frame Go makes of an inlined callee a plain call
-called is given the receiver the interpreter's call gives it
+context, which names it (`Code`), which the cache counts only when it asks
+-- before it lets the code go (`regLevelsOf`) -- so that a call of Go pins
+nothing for the levels below it. The function is not compiled again while a
+native call of it has not returned -- a context a native call runs in
+(`abi.LiveCall`) is its function's (`regCalled`, a look at every context by
+the function). A level Go unwinds is no such call: its context is cleared
+as Go takes it (`jitRegUnwind`), and it goes on in the code it holds,
+natively where its call returns to, kept until it is done. So a recursion's
+function is compiled again while Go finishes its levels, as V8 installs new
+code while older frames run the old: the new code's calls through the link
+enter it, and the levels finish in the old. Counted as levels instead, a
+recursion's outer levels would keep it from being compiled again for what
+it learned for good. The code stays the level's after the call of Go too,
+the level going on in it natively or unwound by Go at its exit: the call
+pins it to the run below (`jitRegPinLevel`, `goPinned`) until the run's
+native code leaves. While any run's native code runs (`ctxTop`), code
+native callers may call (its link) is in use (`regInUse`), the native calls
+of it Go knows nothing of until they leave: the cache's flush lets it be.
+Code let go of while in use -- for room, compiled again once invalid -- is
+kept, not closed (`regRetired`), where a level running it still finds it,
+and closed once nothing uses it (`jitRegCloseRetired`). A frame Go makes
+of an inlined callee a plain call called is given the receiver the
+interpreter's call gives it
 (`jitRegPlainReceiver`), which the inlined frame holds only for a callee that
 reads it and a stack trace reads. A frame Go makes of a native level keeps
 the receiver in its window's register 1 (`jitRegConstructs`): the plain

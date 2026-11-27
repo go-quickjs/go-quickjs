@@ -53,8 +53,7 @@ func (r *Runtime) jitRegFrameRun(ctx *abi.Context) (run jitRegRun, level bool, o
 		l.e.levels--
 		// A stand-in for the callee's frame, which has none of the VM's:
 		// its closure, function object and receiver, its window.
-		f := &s.calleeFrame
-		*f = frame{}
+		f := s.standIn()
 		f.cl, f.base, f.this, f.newTarget = l.cl, l.wb+int(l.c.locals), r.stack[l.wb+1], Undefined
 		f.callee = r.jitRegLevelCallee(&l)
 		if isClassConstructorKind(l.cl.fn.Kind) && ctx.NewTarget != 0 {
@@ -65,6 +64,22 @@ func (r *Runtime) jitRegFrameRun(ctx *abi.Context) (run jitRegRun, level bool, o
 		return jitRegRun{f: f, c: l.c, e: l.e, wb: l.wb}, true, true
 	}
 	return jitRegRun{}, false, false
+}
+
+// standIn is the frame a native callee's context stands for while Go
+// makes a call of Go on its level (calleeFrame), every field but those the
+// caller sets -- its closure, base, receiver, new.target and function
+// object -- zero, as a frame of its own: cleared whole only where a use
+// left another set. A call of Go on a native callee's frame, at every
+// read of arguments in Earley's variadic functions, had cleared all of it,
+// its pointers with the write barrier, each time.
+func (s *jitState) standIn() *frame {
+	f := &s.calleeFrame
+	if f.locals != nil || f.pc != 0 || f.regKind != 0 || f.args != nil || f.openUpvalues != nil || f.handlers != nil ||
+		f.thisRef != nil || f.evalVars != nil || f.withScopes != nil || f.native != "" || f.savedSP != 0 || f.paramsOnly {
+		*f = frame{}
+	}
+	return f
 }
 
 // jitRegIsFrameOp reports whether ctx, making a call of Go on the frame,

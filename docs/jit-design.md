@@ -492,17 +492,26 @@ for it.
 
 Native code makes every closure, captured cell and arguments object that
 its frame or an inlined frame creates, from the pools `ClosureSite` and
-`CellsPool` already use. The level a native callee runs at is in its
-context, found in constant time, which replaces `jitRegFrameOp` and
-`jitRegLevelAt`'s walk.
+`CellsPool` already use, and reads `arguments[k]` and `arguments.length`
+from its context, where its caller wrote them. The code a native callee
+runs is named in its context (`abi.Context`'s `Code`), which Go reads a
+level's code from in one load, rather than asking the function for its
+code now (`jitRegLevelAt`).
 
-**Why.** Earley spends 52% in `jitGoFast` and `jitRegFrameOp`; the levels
-found number 7,854,694 for 987 calls, and are why the JIT runs Earley
-slower than the interpreter (5.11 ms a run against 4.45; Node 0.21). It
+**Why.** Earley spends 52% in `jitGoFast` and `jitRegFrameOp`: Go finds
+the native callee's level, through its function's template, the realm
+and the cache, and builds a stand-in frame, at every call of Go on a
+native callee's frame -- 19.7k a run of Earley, one constant-time find
+each, not a walk (of an earlier count, "7,854,694 levels for 987 calls",
+the 987 were the calls of Go nested below native callees, not what the
+levels were found for). 87% of those calls are Scheme's variadic
+functions reading `arguments[k]` and `arguments.length` (2.6M in 200
+runs), 12.5% cells Go makes. They are why the JIT runs Earley slower
+than the interpreter (5.11 ms a run against 4.45; Node 0.21). It
 is EarleyBoyer's 12x gap to Node, the widest after DeltaBlue's, and V8
-makes the closure and its context inline. Caching the walk alone was
-rejected: it removes `jitRegLevelAt`'s 7% and leaves Go making the
-objects.
+makes the closure and its context inline. A faster find alone would not
+do: `jitRegLevelAt` is 5.8% of Earley's samples, and Go would still read
+the arguments and make the objects.
 
 ### Allocation in the Go heap
 
@@ -1726,7 +1735,24 @@ is under [The projection](#the-projection).
 - **Gate:** no `jitRegFrameOp` in Earley's profile; a test that the JIT
   is not slower than the interpreter on Earley; the marking rule's tests
   for the new stores (`jitMarkingForTest`, `TestJITSameWorkWhileMarking`).
-- **Status:** not started.
+- **Status:** in progress.
+- **Status, the level in the context:** done: every native entry names its
+  code in the context (`abi.Context`'s `Code`: the call entry, the tail
+  entry, a generator's resumption, an id stored as an immediate; none
+  where Go runs the callee), and `jitRegLevelAt` reads it in one load --
+  its search of the function's code now (template, realm, cache, the
+  retired code by where its callee returns), `regLevelsIn`'s
+  return-address test and the stand-in frame's clearing at each call of Go
+  gone. Measured on the Ryzen 5 3600, at four placements against the cells
+  and arguments made natively: no gain on Earley after those steps; a
+  simplification, the level found exactly in one load; the tail-call
+  entry's one store costs tail_mutual +2.5% at 2 of 4 placements, the call
+  micros' geometric mean 1.001, the V8 suite +0.6%, within its range.
+  Follow-up, after this stage: with the context naming its code, a
+  function may be compiled again while native calls of it run its old
+  code, as V8 installs new code under older frames, the old kept until no
+  context names it, which retires `regCalled`'s look at every context by
+  the function.
 - **Status, closures, cells and arguments:** what native code makes was
   counted first: closures and cells were taken from their pools already,
   and Earley's calls of Go on a native frame were 86% reads of a native

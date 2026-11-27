@@ -382,11 +382,21 @@ type Context struct {
 	RetValue Slot
 	// BackEdges is the interpreter's back-edge counter, which every native
 	// back-edge decrements; at zero or below native code polls.
-	BackEdges  *int
-	Live       uint64
-	Closure    unsafe.Pointer
-	Base       uint64
-	Level      uint64
+	BackEdges *int
+	Live      uint64
+	Closure   unsafe.Pointer
+	Base      uint64
+	Level     uint64
+	// Code names the code a native call runs in the context, while Live
+	// is LiveCall: the word the compile was given for it (ssa.Func's
+	// Self), which the code's every entry that makes a native call's
+	// frame stores -- its call entry, its tail entry, a generator's
+	// resumption -- as V8's frame says what runs in it, so that Go reads
+	// a level's code here rather than asking its function for its code
+	// now. The VM's id of the code, a small number stored as an
+	// immediate; 0 where Go is to run the callee (ExitEnter). Read only
+	// while Live is LiveCall.
+	Code       uint64
 	Bounds     *Bounds
 	StackBase  unsafe.Pointer
 	StackEnd   uint64
@@ -1225,6 +1235,7 @@ var (
 	OffClosure     = int32(unsafe.Offsetof(Context{}.Closure))
 	OffBase        = int32(unsafe.Offsetof(Context{}.Base))
 	OffLevel       = int32(unsafe.Offsetof(Context{}.Level))
+	OffCode        = int32(unsafe.Offsetof(Context{}.Code))
 	OffBounds      = int32(unsafe.Offsetof(Context{}.Bounds))
 	OffTailFrame   = int32(unsafe.Offsetof(Context{}.TailFrame))
 	OffFrameThis   = int32(unsafe.Offsetof(Context{}.FrameThis))

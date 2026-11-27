@@ -821,6 +821,8 @@ func (c *a64Compiler) enterExit() {
 	c.a.Store(a64Ctx, abi.OffStack, at)
 	c.a.Store(a64Ctx, abi.OffOpen, arm64.ZR)
 	c.a.Store(a64Ctx, abi.OffCells, arm64.ZR)
+	// No code runs the call: Go runs its callee (abi.Context's Code).
+	c.a.Store(a64Ctx, abi.OffCode, arm64.ZR)
 	c.a.MovImm(at, abi.LiveCall)
 	c.a.Store(a64Ctx, abi.OffLive, at)
 	c.a.Load(at, a64CallLink, c.enc.LinkIn)
@@ -834,6 +836,18 @@ func (c *a64Compiler) enterExit() {
 	c.movImm(a64A, abi.ExitEnter)
 	c.a.Store(a64Ctx, abi.OffExitKind, a64A)
 	c.a.Ret()
+}
+
+// storeCode names the code in ctx, the context of the native call that
+// runs it (abi.Context's Code, ssa.Func's Self), by way of scratch, as
+// amd64's entries do.
+func (c *a64Compiler) storeCode(ctx, scratch arm64.Reg) {
+	if c.f.Self == 0 {
+		c.a.Store(ctx, abi.OffCode, arm64.ZR)
+		return
+	}
+	c.a.MovImm(scratch, uint64(c.f.Self))
+	c.a.Store(ctx, abi.OffCode, scratch)
 }
 
 // movImm sets dst to the word v: a load of the context's copy where v is
@@ -1327,6 +1341,7 @@ func (c *a64Compiler) callEntry() {
 	if c.f.Loops {
 		c.a.Store(a64Ctx, abi.OffLoop, arm64.ZR)
 	}
+	c.storeCode(a64Ctx, at)
 	c.a.MovImm(at, abi.LiveCall)
 	c.a.Store(a64Ctx, abi.OffLive, at)
 	c.a.Load(at, a64CallLink, c.enc.LinkIn)
@@ -3912,6 +3927,7 @@ func (c *a64Compiler) genFrame(gr ssa.GenResume, blk *ssa.Block) {
 	if c.f.Loops {
 		c.a.Store(next, abi.OffLoop, arm64.ZR)
 	}
+	c.storeCode(next, a64A)
 	c.a.MovImm(a64A, abi.LiveCall)
 	c.a.Store(next, abi.OffLive, a64A)
 	c.a.MovImm(a64A, uint64(c.enc.GenExecuting))
@@ -8438,6 +8454,7 @@ func (c *a64Compiler) tailDeep(v *ssa.Value, guard a64Guard) {
 // undefined, then the start.
 func (c *a64Compiler) tailEntry() {
 	vs := int32(c.enc.ValueSize)
+	c.storeCode(a64Ctx, a64B)
 	c.a.AddImm(a64Stack, a64Locals, int64(c.f.FrameLocals+c.f.Scratch)*int64(vs), true)
 	c.a.Store(a64Ctx, abi.OffStack, a64Stack)
 	c.a.Load(a64B, a64Ctx, abi.OffBase)

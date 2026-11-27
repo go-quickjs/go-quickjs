@@ -82,7 +82,10 @@ type jitRegJob struct {
 	// build on the runtime's goroutine asks, snap that feedback asked ahead,
 	// which the worker's build asks.
 	e *jitRegEntry
-	p *ir.Program
+	// self is e's id (jitRegSelf), taken when the job was made: what its
+	// worker builds the code to name itself by.
+	self uintptr
+	p    *ir.Program
 	// root, where not nil, is what the worker lowers p of (lowerRoot): a
 	// compile handed over with its program not lowered (jitRegHandOver).
 	root *jitRegRoot
@@ -295,6 +298,8 @@ func (r *Runtime) jitRegDropStale() {
 			j.finishSnap()
 		}
 		j.snap = nil
+		// No code made: its id given back (jitRegSelf).
+		s.regSelfFree(j.e)
 		if j.unstarted {
 			j.letGo()
 			close(j.done)
@@ -403,7 +408,7 @@ func (j *jitRegJob) workRecovering() {
 		j.buildErr = err
 		return
 	}
-	f.FrameAt = j.frameAt
+	f.FrameAt, f.Self = j.frameAt, j.self
 	j.f = f
 	// What the build's questions appended to the feedback's lists, taken
 	// back, put back here as the build from the feedback would have left
@@ -605,6 +610,11 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 		// Nor the snapshot, its copies and its answers, done with: a job
 		// a runtime's state keeps past its install keeps no more of it.
 		j.snap = nil
+		if j.e.code == nil {
+			// No code installed -- thrown away, refused, no room: its id
+			// given back (jitRegSelf).
+			s.regSelfFree(j.e)
+		}
 	}()
 	e := j.e
 	e.took += j.took
@@ -675,7 +685,7 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 		if err != nil {
 			e.refusal = fmt.Sprintf("%v: %v", jitRefused, err)
 		} else {
-			f.FrameAt = j.frameAt
+			f.FrameAt, f.Self = j.frameAt, s.regSelfTake(e)
 			j.looped = jitRegShape(f, j.p, j.cl, j.c)
 			ssa.Optimize(f)
 			j.f = f
@@ -689,7 +699,7 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 		// As on the spot (jitRegCompile): built again here, its keep cells
 		// limited to the context's.
 		s.compileBegin()
-		j.rf, j.f, j.looped, j.mc, j.err = r.jitRegBuild(j.w, j.cl, j.c, j.p, abi.MaxKeeps, j.frameAt)
+		j.rf, j.f, j.looped, j.mc, j.err = r.jitRegBuild(j.w, j.cl, j.c, j.p, e, abi.MaxKeeps, j.frameAt)
 		j.asks = e.life.reoptAsks
 		s.compileEnd()
 	}

@@ -1209,6 +1209,9 @@ func (c *compiler) callEntry() {
 	c.a.Load(regCtx, regCtx, abi.OffNext)
 	c.a.Store(regCtx, abi.OffReturnTo, callRet)
 	c.a.Store(regCtx, abi.OffClosure, callClosure)
+	// The code the call runs, named in its context (abi.Context's Code),
+	// callRet free once stored.
+	c.storeImm(regCtx, abi.OffCode, uint64(c.f.Self), scratchA)
 	c.a.Load(callClosure, callClosure, c.enc.ClosureUpvalues)
 	c.a.Store(regCtx, abi.OffUpvalues, callClosure)
 	c.a.Load(at, regCtx, abi.OffStackTop)
@@ -1402,6 +1405,7 @@ func (c *compiler) genFrame(gr ssa.GenResume, blk *ssa.Block) {
 	if c.f.Loops {
 		c.storeImm(next, abi.OffLoop, 0, scratchA)
 	}
+	c.storeImm(next, abi.OffCode, uint64(c.f.Self), scratchA)
 	c.a.StoreImm(next, abi.OffLive, abi.LiveCall)
 	c.a.MovImm(scratchA, uint64(c.enc.GenExecuting))
 	c.a.Store8(g, c.enc.GenState, scratchA)
@@ -6024,6 +6028,9 @@ func tailUnstaged(v *ssa.Value, args []*ssa.Value) (fn, this bool) {
 // link at every call in tail position.
 func (c *compiler) tailEntry() {
 	vs := int32(c.enc.ValueSize)
+	// The code the frame runs now, named in its context (abi.Context's
+	// Code), the caller's no more.
+	c.storeImm(regCtx, abi.OffCode, uint64(c.f.Self), scratchA)
 	c.a.Lea(regStack, regLocals, int32(c.f.FrameLocals+c.f.Scratch)*vs)
 	c.a.Store(regCtx, abi.OffStack, regStack)
 	c.a.Load(scratchB, regCtx, abi.OffBase)
@@ -7711,6 +7718,8 @@ func (c *compiler) enterExit() {
 	c.a.Store(regCtx, abi.OffStack, at)
 	c.a.StoreImm(regCtx, abi.OffOpen, 0)
 	c.a.StoreImm(regCtx, abi.OffCells, 0)
+	// No code runs the call: Go runs its callee (abi.Context's Code).
+	c.a.StoreImm(regCtx, abi.OffCode, 0)
 	c.a.StoreImm(regCtx, abi.OffLive, abi.LiveCall)
 	c.a.IncMem(callLink, c.enc.LinkIn)
 	c.movImm(scratchA, 0)

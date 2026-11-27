@@ -1302,7 +1302,12 @@ type Func struct {
 	// the function is called again. A function called once is compiled
 	// once, its loop entered at once, as its objects' being left unmade
 	// would have it wait and compile twice.
-	FrameAt   int
+	FrameAt int
+	// Self is the word the code names itself by in the context of a native
+	// call that runs it (abi.Context's Code), which every entry that makes
+	// a native call's frame stores: the VM's id of the code, opaque here
+	// but small -- an immediate the store holds -- 0 for none.
+	Self      uintptr
 	EntryKept []int
 	// Unsafe, where not empty, says why the code may not be compiled: a
 	// BigInt's box a value read from its cell was not kept from, the keep

@@ -2077,7 +2077,15 @@ func (r *Runtime) jitRegForwardReceiver(cl *closure, wb int, this Value) {
 
 // jitRegLevelAt is the level of the native call running in context i,
 // its code pinned (jitRegEntry's levels), or false where it is none of
-// register code's.
+// register code's. Its code is the one its context names (abi.Context's
+// Code, jitRegCodeNamed), which the code's entry stored as the call made
+// its frame: found in one load, exactly the code the level runs, as V8's
+// frame says what runs in it -- not its function's code now, asked of its
+// template, the realm and the cache, and, for code the cache had let go of
+// while the call ran it, guessed among the retired by where its callee
+// returns. A context names nothing where Go runs the callee
+// (abi.ExitEnter): its level goes on in its function's code now, if any
+// (jitRegCodeNow).
 func (r *Runtime) jitRegLevelAt(i int) (jitRegLevel, bool) {
 	s := r.jit
 	c := s.ssaCtxs[i]
@@ -2085,37 +2093,15 @@ func (r *Runtime) jitRegLevelAt(i int) (jitRegLevel, bool) {
 	if cl == nil || cl.reg == nil {
 		return jitRegLevel{}, false
 	}
-	// Its closure's code, while the cache holds it for this realm
-	// (jitRegEntry's cached): a key made and a map searched at each level
-	// of each call of Go from deep native recursion had cost EarleyBoyer
-	// most of its time once its recursion ran natively, and been a tenth
-	// of AWFY's Json.
-	var e *jitRegEntry
-	if cc := cl.closureCode; cc != nil {
-		e = cc.jitReg
-	}
-	if e == nil || !e.cached || e.key.realm != r.jitRealmKey() {
-		e = s.regCache[r.jitRegKeyOf(cl)]
-	}
-	if (e == nil || e.code == nil || e.p == nil) && len(s.regRetired) != 0 {
-		// Let go of by the cache while the call ran it -- compiled again,
-		// once Go found it invalid at a call of Go from the level -- and
-		// kept for it (regClose): the one its callee returns into, if the
-		// level made a call.
-		key := r.jitRegKeyOf(cl)
-		var ret uintptr
-		if i+1 < len(s.ssaCtxs) && s.ssaCtxs[i+1].Live == abi.LiveCall {
-			ret = s.ssaCtxs[i+1].ReturnTo
-		}
-		e = nil
-		for _, x := range s.regRetired {
-			if x.key == key && x.code != nil && x.p != nil && (e == nil || ret != 0 && x.code.Contains(ret)) {
-				e = x
-			}
-		}
+	e := r.jitRegCodeNamed(c)
+	if e == nil {
+		e = r.jitRegCodeNow(cl)
 	}
 	if e == nil || e.code == nil || e.p == nil {
 		return jitRegLevel{}, false
+	}
+	if h := r.jitTest.levelFound; h != nil {
+		h(r, i, e)
 	}
 	e.levels++
 	s.regLevelsFound++
@@ -2546,11 +2532,12 @@ func (s *jitState) regCalledBelow(e *jitRegEntry, limit int) bool {
 }
 
 // regLevelsIn counts the levels of the native calls in the contexts from
-// root+1 to idx-1 that run e's code: those whose callee returns to it.
+// root+1 to idx-1 that run e's code: those whose context names it
+// (abi.Context's Code).
 func (s *jitState) regLevelsIn(e *jitRegEntry, root, idx int) int {
 	n := 0
 	for i := root + 1; i < idx; i++ {
-		if e.code.Contains(s.ssaCtxs[i+1].ReturnTo) {
+		if c := s.ssaCtxs[i]; c.Live == abi.LiveCall && e.self != 0 && c.Code == uint64(e.self) {
 			n++
 		}
 	}
@@ -2934,10 +2921,11 @@ func (f *jitRegFeedback) KeepLimit() int { return f.fb.keepLimit }
 
 // jitRegBuild builds cl's register code c lowered to p, from its feedback
 // asked now, with its keep cells limited to keepLimit (KeepLimit), its
-// entry kept at frameAt (ssa.Func's FrameAt), into w's workspaces: its
+// entry kept at frameAt (ssa.Func's FrameAt), the code e's (ssa.Func's
+// Self), into w's workspaces: its
 // feedback, its SSA, its loops' headers and the backend's code, or why it
 // refused.
-func (r *Runtime) jitRegBuild(w *jit.Workspace, cl *closure, c *regCode, p *ir.Program, keepLimit, frameAt int) (*jitRegFeedback, *ssa.Func, map[uint32]bool, *mir.Code, error) {
+func (r *Runtime) jitRegBuild(w *jit.Workspace, cl *closure, c *regCode, p *ir.Program, e *jitRegEntry, keepLimit, frameAt int) (*jitRegFeedback, *ssa.Func, map[uint32]bool, *mir.Code, error) {
 	rf := r.jitRegFeedbackFor(cl, p)
 	rf.fb.keepLimit = keepLimit
 	if t := mir.Timing; t != nil {
@@ -2947,7 +2935,7 @@ func (r *Runtime) jitRegBuild(w *jit.Workspace, cl *closure, c *regCode, p *ir.P
 	if err != nil {
 		return rf, nil, nil, nil, err
 	}
-	f.FrameAt = frameAt
+	f.FrameAt, f.Self = frameAt, r.jit.regSelfTake(e)
 	looped := jitRegShape(f, p, cl, c)
 	jitRegLap(mir.PhaseBuild)
 	ssa.Optimize(f)
