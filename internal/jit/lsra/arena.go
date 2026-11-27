@@ -39,6 +39,18 @@ func appendA[T any](a *arena[T], s []T, xs ...T) []T {
 	return s
 }
 
+// doubled is s in an array of twice its capacity, at least 16, which the
+// allocator's long lists grow by where they are full: they grow to a large
+// function's sizes once, and the runtime's append, which grows a large
+// slice by a quarter of its capacity, makes and copies about five times
+// what the list ends at on the way, all of it new memory, which the first
+// compile of the function pays for.
+func doubled[T any](s []T) []T {
+	ns := make([]T, len(s), max(2*cap(s), 16))
+	copy(ns, s)
+	return ns
+}
+
 // chunks hands out values of a type one at a time from chunks it keeps,
 // which an allocation empties for the next: their addresses stay put.
 type chunks[T any] struct {

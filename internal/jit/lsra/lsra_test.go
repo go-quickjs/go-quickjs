@@ -477,7 +477,7 @@ func TestRangesThroughBlocks(t *testing.T) {
 			t.Fatal(err)
 		}
 		checkAllocation(t, 0, tc.f, cfg, res)
-		if got, want := al.ranges[tc.v], tc.want(al.starts, al.ends); !slices.Equal(got, want) {
+		if got, want := al.rangesOf(tc.v), tc.want(al.starts, al.ends); !slices.Equal(got, want) {
 			t.Errorf("v%d's ranges %v, want %v", tc.v, got, want)
 		}
 	}
@@ -1217,8 +1217,10 @@ func TestWalkMethods(t *testing.T) {
 		{"sortList", func(c *Config) { c.sortList = true }},
 		{"alwaysTest", func(c *Config) { c.alwaysTest = true }},
 		{"webHeap", func(c *Config) { c.webHeap = true }},
+		{"eagerWebs", func(c *Config) { c.eagerWebs = true }},
 		{"partHints", func(c *Config) { c.partHints = true }},
 		{"slotHeap", func(c *Config) { c.slotHeap = true }},
+		{"liveSets", func(c *Config) { c.liveSets = true }},
 	}
 	var al, old Allocator
 	twice := 0
@@ -1230,7 +1232,8 @@ func TestWalkMethods(t *testing.T) {
 				// And each register's ranges, as the ranges' phase leaves
 				// them, with the weights.
 				*out = (*out)[:0]
-				for v, rs := range al.ranges {
+				for v := range al.rref {
+					rs := al.rangesOf(VReg(v))
 					*out = append(*out, VReg(v), VReg(len(rs)), VReg(math.Float64bits(al.weight[v])), VReg(math.Float64bits(al.weight[v])>>32), VReg(al.defAt[v]))
 					for _, r := range rs {
 						*out = append(*out, VReg(r.from), VReg(r.to))
@@ -1261,6 +1264,9 @@ func TestWalkMethods(t *testing.T) {
 	check := func(name string, f *Func, cfg Config) {
 		t.Helper()
 		cfg.Lap = hints(&al, &hintsA)
+		// The webs of their own made where the coalescing joins them,
+		// whatever the function's size (Config.lazyWebs).
+		cfg.lazyWebs = true
 		a, errA := al.Allocate(f, &cfg)
 		for _, o := range olds {
 			ocfg := cfg

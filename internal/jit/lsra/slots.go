@@ -313,6 +313,9 @@ func (sc *slotScan) find(lo int, x int32) int {
 // which pop takes the first end of.
 func (sc *slotScan) push(e slotEnd) {
 	if !sc.heap {
+		if len(sc.byPos) == cap(sc.byPos) {
+			sc.byPos = doubled(sc.byPos)
+		}
 		sc.byPos = append(sc.byPos, slotAt{e.s, sc.at[e.to]})
 		sc.at[e.to] = int32(len(sc.byPos))
 		sc.full[e.to>>6] |= 1 << (e.to & 63)

@@ -961,9 +961,9 @@ func (al *Allocator) slotRanges(w *web) []rng {
 }
 
 // splitMoves makes the split registers' moves (Result.Moves, Entry and
-// Edge) from the webs with holes in list, of registers whose ranges are
-// ranges.
-func (al *Allocator) splitMoves(res *Result, list []*web, ranges [][]rng) {
+// Edge) from the webs with holes in list, its registers' ranges those the
+// ranges' phase laid out (rangesOf).
+func (al *Allocator) splitMoves(res *Result, list []*web) {
 	f := al.f
 	nb := len(f.Blocks)
 	keyed := al.keyed[:0]
@@ -981,7 +981,7 @@ func (al *Allocator) splitMoves(res *Result, list []*web, ranges [][]rng) {
 				return None
 			}
 			for _, m := range w.members {
-				if rs := ranges[m]; liveAt(rs, x-1) && liveAt(rs, x) {
+				if rs := al.rangesOf(m); liveAt(rs, x-1) && liveAt(rs, x) {
 					return m
 				}
 			}
@@ -1022,7 +1022,7 @@ func (al *Allocator) splitMoves(res *Result, list []*web, ranges [][]rng) {
 			continue
 		}
 		for _, m := range w.members {
-			rs := ranges[m]
+			rs := al.rangesOf(m)
 			for _, r := range rs {
 				for b, last := al.blockOf(r.from), al.blockOf(r.to-1); b <= last; b++ {
 					if x := al.starts[b]; x >= r.from {

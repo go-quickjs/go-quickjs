@@ -291,6 +291,11 @@ type Config struct {
 	// the webs, which compares two by going to each, for the tests that
 	// compare it with keeping them by their starts (partQueue).
 	webHeap bool
+	// eagerWebs has the ranges' phase make every register's web of its
+	// own, for the tests that compare it with making those the coalescing
+	// reads only where it joins them, which lazyWebs has a function of any
+	// size do (past lazyWebsMin registers, it does).
+	eagerWebs, lazyWebs bool
 	// partHints has each part of a web taken apart hinted to the web's hints
 	// and all its parts in one list, walked whole, for the tests that
 	// compare it with walking only the parts that have had a register.
@@ -299,6 +304,11 @@ type Config struct {
 	// slots their keys in a heap, for the tests that compare it with
 	// keeping them by position.
 	slotHeap bool
+	// liveSets has liveness, where every register is defined once, explore
+	// the paths into each block's sets of the registers live into and out
+	// of it, and the ranges' walk read those, for the tests that compare it
+	// with exploring them register by register into lists (exploreRegs).
+	liveSets bool
 	// plainLists has the scan read every web on its active and inactive
 	// lists at every position, for the tests that compare it with reading
 	// each only where its entry says it may have changed.

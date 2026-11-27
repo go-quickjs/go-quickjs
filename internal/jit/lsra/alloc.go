@@ -72,8 +72,8 @@ type web struct {
 	ranges []rng
 	// cur is the scan's index into ranges: of the first range that does
 	// not end before the scan's position.
-	cur int
-	reg int
+	cur int32
+	reg int32
 	// dense is its density, once known.
 	dense   float64
 	members []VReg
@@ -153,10 +153,10 @@ func (w *web) end() int32   { return w.ranges[len(w.ranges)-1].to }
 // covers reports whether w is live at p, at or past the scan's last
 // position.
 func (w *web) covers(p int32) bool {
-	for w.cur < len(w.ranges) && w.ranges[w.cur].to <= p {
+	for int(w.cur) < len(w.ranges) && w.ranges[w.cur].to <= p {
 		w.cur++
 	}
-	return w.cur < len(w.ranges) && w.ranges[w.cur].from <= p
+	return int(w.cur) < len(w.ranges) && w.ranges[w.cur].from <= p
 }
 
 // scanEntry is a web on the scan's active or inactive list, with what the
@@ -175,11 +175,11 @@ type scanEntry struct {
 // activeEntry is the entry of a web that covers the scan's position at
 // its range cur; inactiveEntry that of one whose range cur begins past it.
 func activeEntry(w *web) scanEntry {
-	return scanEntry{w, w.ranges[w.cur].to, int32(w.reg)}
+	return scanEntry{w, w.ranges[w.cur].to, w.reg}
 }
 
 func inactiveEntry(w *web) scanEntry {
-	return scanEntry{w, w.ranges[w.cur].from, int32(w.reg)}
+	return scanEntry{w, w.ranges[w.cur].from, w.reg}
 }
 
 type clobber struct {
@@ -196,7 +196,7 @@ type clobber struct {
 // their edge's depth's weight.
 type pair struct {
 	a, b  VReg
-	class int
+	class int8
 }
 
 // vacross is what a register lives across: whether calls, their weight,
@@ -221,7 +221,9 @@ type Allocator struct {
 	global   []int32
 	globals  []VReg
 	live     []uint64
-	ranges   [][]rng
+	rref     []rngRef
+	rflat    []rng
+	rlists   [][]rng
 	weight   []float64
 	defW     []float64
 	defAt    []int32
@@ -260,6 +262,9 @@ type Allocator struct {
 	stale    []bool
 	vacross  []vacross
 	sorted   []pair
+	// meets is the scan's answers of whether each inactive web meets the
+	// web scanned.
+	meets []int8
 	// merged is the coalescing's merge of two webs' ranges, at where the
 	// few of them go among the many (apartAt).
 	merged []rng
@@ -313,6 +318,28 @@ type Allocator struct {
 	// one, outSumW words a block: explore's, or the dataflow's.
 	outSum  []uint64
 	outSumW int
+	// owns are the registers with ranges, whose webs of their own the
+	// coalescing makes where it needs them (layoutRanges).
+	owns []VReg
+	// noAcross says the function has no clobbers, and vacross is not
+	// made: every register lives across nothing.
+	noAcross bool
+	// byReg says liveness was found register by register (exploreRegs),
+	// which lists the registers live out of each block: outRegs from
+	// outOff[i] to outOff[i+1] block i's. The rest are its work.
+	byReg     bool
+	outOff    []int32
+	outRegs   []VReg
+	regEv     []int32
+	predAt2   []int32
+	preds2    []int32
+	pathG     []int32
+	regEvOff  []int32
+	inMark    []int32
+	outMark   []int32
+	outFrom   []int32
+	outBlocks []int32
+	outAt     []int32
 
 	// The function being allocated, where splitting is allowed (split),
 	// its positions' end (maxPos), and whether its events and blockOf's
@@ -336,7 +363,11 @@ type Allocator struct {
 	sortList     bool
 	alwaysTest   bool
 	webHeap      bool
+	eagerWebs    bool
+	forceLazy    bool
+	lazyWebs     bool
 	partHints    bool
+	liveSets     bool
 	maxPos       int32
 	evKnown      bool
 	blocksKnown  bool
@@ -377,6 +408,47 @@ type hintAt struct {
 type useAt struct {
 	v    VReg
 	b, j int32
+}
+
+// What the scan knows of whether an inactive web meets the web scanned
+// (Allocator.meets): not yet tested (0), it does, it does not.
+const (
+	meetYes int8 = 1 + iota
+	meetNo
+)
+
+// meets1 reports whether e, inactive entry i, meets cur: the answer of an
+// earlier walk of the scan's (meets), or tested now and kept.
+func (al *Allocator) meets1(meets []int8, i int, e scanEntry, cur *web) bool {
+	m := meets[i]
+	if m == 0 {
+		m = meetNo
+		if overlap(e.w.ranges[e.w.cur:], cur.ranges) {
+			m = meetYes
+		}
+		meets[i] = m
+	}
+	return m == meetYes
+}
+
+// lazyWebsMin is the least registers with ranges past which the webs of
+// their own are made where the coalescing joins them, and after it
+// (layoutRanges): a function of fewer joins few, and the webs made at
+// once cost less.
+const lazyWebsMin = 16384
+
+// byRegMin is the least bytes of a function's liveness sets past which
+// its liveness is found register by register (exploreRegs): below it, the
+// sets take less, and the ranges' walk reads them where they are.
+const byRegMin = 1 << 20
+
+// acrossAt is what v lives across (vacross): nothing, where the function
+// has no clobbers and the table is not made.
+func (al *Allocator) acrossAt(v VReg) vacross {
+	if al.noAcross {
+		return vacross{}
+	}
+	return al.vacross[v]
 }
 
 // acrossEntry is a register a call, by its index among the clobbers,
@@ -427,7 +499,8 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.displace, al.mutateHoles, al.oneByOne, al.twoPass, al.plainLists, al.markPass = cfg.Displace, cfg.mutateHoles, cfg.oneByOne, cfg.twoPass, cfg.plainLists, cfg.markPass
 	al.hintPass, al.blockByBlock, al.mergeAll, al.regByReg, al.phiWalks = cfg.hintPass, cfg.blockByBlock, cfg.mergeAll, cfg.regByReg, cfg.phiWalks
 	al.searchPreds, al.rangeLists, al.sortList, al.alwaysTest, al.webHeap = cfg.searchPreds, cfg.rangeLists, cfg.sortList, cfg.alwaysTest, cfg.webHeap
-	al.partHints = cfg.partHints
+	al.partHints, al.eagerWebs, al.forceLazy = cfg.partHints, cfg.eagerWebs, cfg.lazyWebs
+	al.liveSets = cfg.liveSets
 
 	// Liveness, of the registers that may be live across a block's
 	// boundary -- a phi's, a phi's argument, one used in a block other
@@ -443,15 +516,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	}
 	clear(global)
 	al.defBlock, al.defInst, al.global = defBlock, defInst, global
-	// once says every register is defined once at most.
-	once := true
-	define := func(d VReg, i, j int) {
-		if defBlock[d] >= 0 {
-			once = false
-		}
-		defBlock[d], defInst[d] = int32(i), int32(j)
-	}
-	globals := al.globals[:0]
+	var globals []VReg
 	mark := func(v VReg) {
 		if alloc(v) && global[v] == 0 {
 			globals = append(globals, v)
@@ -464,49 +529,11 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	// has not met yet waits (later) for the walk's end, which knows it.
 	// Where a register is defined more than once (once false), the uses
 	// are marked again by a walk of their own, as with Config.markPass,
-	// which the definitions' last block decides.
-	paths, later := al.paths[:0], al.later[:0]
-	// hinted are the instructions with hints (Inst.Hint), for the webs'
-	// hints, which the walk lists in order.
-	hinted := al.hinted[:0]
-	for i := range f.Blocks {
-		b := &f.Blocks[i]
-		for _, p := range b.Phis {
-			if alloc(p.Def) {
-				define(p.Def, i, -1)
-				mark(p.Def)
-			}
-			for _, a := range p.Args {
-				mark(a)
-			}
-		}
-		for j := range b.Insts {
-			in := &b.Insts[j]
-			regs, nu := in.Regs, int(in.NUses)
-			if in.Hint != None && in.NDefs > 0 && !al.hintPass {
-				hinted = append(hinted, hintAt{int32(i), regs[nu], in.Hint})
-			}
-			if !al.markPass {
-				for _, u := range regs[:nu] {
-					if !alloc(u) {
-						continue
-					}
-					switch db := defBlock[u]; {
-					case db < 0:
-						later = append(later, useAt{u, int32(i), int32(j)})
-					case db != int32(i):
-						mark(u)
-						paths = append(paths, useAt{u, int32(i), int32(j)})
-					}
-				}
-			}
-			for _, d := range regs[nu : nu+int(in.NDefs)] {
-				if alloc(d) {
-					define(d, i, j)
-				}
-			}
-		}
-	}
+	// which the definitions' last block decides. nargs is the phis'
+	// arguments' number, which bounds the lists of those read on edges
+	// (edgeArgs) and of the pairs to coalesce: each made once with room for
+	// them all.
+	globals, paths, later, hinted, nargs, once := al.defineWalk(f)
 	// predIdx is, for each block's successor k, the block's index among
 	// that successor's predecessors: predIdx[predOff[i]+k]. The walk that
 	// finds them finds the critical edges too: from a block of more than
@@ -518,6 +545,9 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	argOff := grown(al.argOff, nb+1)
 	al.predsSorted = false
 	predIdx, edgeArgs := al.predIdx[:0], al.edgeArgs[:0]
+	if cap(edgeArgs) < nargs {
+		edgeArgs = make([]edgeArg, 0, nargs+nargs/4)
+	}
 	for i := range f.Blocks {
 		al.predOff[i], argOff[i] = int32(len(predIdx)), int32(len(edgeArgs))
 		succs := f.Blocks[i].Succs
@@ -593,14 +623,25 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	if need := int64(stride) * int64(nb) * int64(words) * 8; cfg.MaxLiveBytes > 0 && need > cfg.MaxLiveBytes {
 		return nil, &LiveSetsError{Need: need}
 	}
-	live := grown(al.live, stride*nb*words)
-	clear(live)
-	al.live = live
-	liveOut := func(i int) []uint64 { return live[(stride*i+1)*words : (stride*i+2)*words] }
-	if once {
-		al.explore(f, words, stride, defBlock, defInst, gi, paths)
+	// Where every register is defined once, the paths are explored
+	// register by register (exploreRegs), and the registers live out of
+	// each block listed, without the sets; else, and with the walks that
+	// read the sets (Config.liveSets, markPass, phiWalks, rangeLists), the
+	// sets.
+	al.byReg = once && !al.liveSets && !al.markPass && !al.phiWalks && !al.rangeLists && int64(stride)*int64(nb)*int64(words)*8 >= byRegMin
+	var liveOut func(int) []uint64
+	if al.byReg {
+		al.exploreRegs(f, defBlock, paths)
 	} else {
-		al.dataflow(f, words, gi)
+		live := grown(al.live, stride*nb*words)
+		clear(live)
+		al.live = live
+		liveOut = func(i int) []uint64 { return live[(stride*i+1)*words : (stride*i+2)*words] }
+		if once {
+			al.explore(f, words, stride, defBlock, defInst, gi, paths)
+		} else {
+			al.dataflow(f, words, gi)
+		}
 	}
 	lap(PhaseLiveness)
 
@@ -616,9 +657,20 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	// no use, definition, clobber, move or bound -- so that one live
 	// through blocks one after another has one range there, not one a
 	// block, for the walks of its lists that follow.
-	ranges := grown(al.ranges, n)
-	clear(ranges)
-	al.ranges = ranges
+	//
+	// Each register's ranges are rflat's from rref[v] (rangesOf): a word a
+	// register, the lists laid out in one array. With Config.rangeLists,
+	// the lists are each register's own as the walk finds them (ranges),
+	// laid out after.
+	rref := grown(al.rref, n)
+	clear(rref)
+	al.rref = rref
+	var ranges [][]rng
+	if al.rangeLists {
+		ranges = grown(al.rlists, n)
+		clear(ranges)
+		al.rlists = ranges
+	}
 	weight := grown(al.weight, n)
 	clear(weight)
 	al.weight = weight
@@ -757,6 +809,16 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			}
 			ranges[v] = out
 		}
+		total := 0
+		for _, r := range ranges {
+			total += len(r)
+		}
+		flat := rngs.take(total)
+		for v, r := range ranges {
+			rref[v] = rngRef{int32(len(flat)), int32(len(r))}
+			flat = append(flat, r...)
+		}
+		al.rflat = flat
 	} else {
 		clobbers = al.walkRanges(f, liveOut, clobbers)
 	}
@@ -822,41 +884,546 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 	}
 
-	vacr := grown(al.vacross, n)
-	al.vacross = vacr
+	// What each register lives across, where the function has clobbers:
+	// where it has none, nothing, and the table is not made.
+	al.noAcross = len(clobAt) == 0 && !al.rangeLists
+	var vacr []vacross
+	if !al.noAcross {
+		vacr = grown(al.vacross, n)
+		al.vacross = vacr
+	}
 	webs := grown(al.webs, n)
 	clear(webs)
 	al.webs = webs
+	al.owns = al.owns[:0]
 	if !al.rangeLists {
 		// The ranges laid out, and each register's web of its own made, in
-		// one visit of each register.
+		// one visit of each register (but where the coalescing makes them,
+		// lazyWebs: listed).
 		al.layoutRanges()
 	}
 	lap(PhaseRanges)
 
+	// Webs: each register its own, joined with others (websOf).
+	list := al.websOf(f, nargs, hinted, pos)
+	lap(PhaseWebs)
+
+	// Registers: a linear scan of each class's webs (scan).
+	al.scan(cfg.Classes, list)
+	lap(PhaseScan)
+
+	// The webs as the scan left them, some taken apart, in order of their
+	// starts: as they were where it took none apart and a hole moved no
+	// web's start.
+	if al.moved {
+		list = list[:0]
+		for v, w := range webs {
+			if w != nil && w.members[0] == VReg(v) {
+				list = append(list, w)
+			}
+		}
+		al.sortByStart(list, pos)
+	}
+	al.list = list
+
+	// Slots: for the webs spilled, and those in registers that live across
+	// a call. A web with a parameter has the slot the parameter arrives in,
+	// which holds nothing else from the function's start until then.
+	slots := al.slots[:0]
+	al.slotScan.reset(cfg.slots, cfg.slotHeap, pos)
+	take := func(s int32, rs []rng) {
+		for int(s) >= len(slots) {
+			slots = append(slots, nil)
+		}
+		slots[s] = unionInto(rngs, slots[s], rs)
+	}
+	for _, w := range list {
+		if w.fixed < 0 {
+			continue
+		}
+		rs := append(rngs.take(1), rng{0, w.arrive + 1})
+		if w.spilled || w.calls || len(w.holesOf()) > 0 {
+			rs = unionInto(rngs, rs, al.slotRanges(w))
+			w.slot = w.fixed
+		}
+		for k := range w.width {
+			take(w.fixed+k, rs)
+		}
+	}
+	for _, w := range list {
+		if !(w.spilled || w.calls || len(w.holesOf()) > 0) || w.slot >= 0 {
+			continue
+		}
+		rs := al.slotRanges(w)
+		// The first slot from which width are free.
+		s := al.slotScan.first(slots, rs, w.width)
+		if int(s+w.width) > cfg.NumSlots {
+			clear(slots)
+			al.slots = slots[:0]
+			return nil, ErrSlots
+		}
+		w.slot = s
+		for k := range w.width {
+			take(s+k, rs)
+			al.slotScan.taken(slots, s+k)
+		}
+	}
+	nslots := len(slots)
+	clear(slots)
+	al.slots = slots[:0]
+
+	res := &al.res
+	res.Reg = grown(res.Reg, n)
+	res.Slot = grown(res.Slot, n)
+	res.flags = grown(res.flags, n)
+	res.NumSlots = nslots
+	for i := range res.Reg {
+		res.Reg[i] = -1
+		res.Slot[i] = -1
+	}
+	clear(res.flags)
+	res.splits = 0
+	across := al.across[:0]
+	for _, w := range list {
+		var fl uint8
+		if w.calls && w.reg >= 0 {
+			fl = flagStored
+		}
+		if len(w.holesOf()) > 0 {
+			fl |= flagSplit
+			res.splits += len(w.members)
+		}
+		for _, m := range w.members {
+			res.Reg[m] = int16(w.reg)
+			res.Slot[m] = w.slot
+			res.flags[m] = fl
+		}
+		if !w.calls || w.reg < 0 {
+			continue
+		}
+		// The calls each of its registers lives across in it, which
+		// reload it.
+		for _, m := range w.members {
+			if al.oneByOne {
+				crossed(al.rangesOf(m), func(k int) {
+					if clobbers[k].call && !inHoles(w.holesOf(), clobAt[k]) {
+						across = append(across, acrossEntry{int32(k), m})
+					}
+				})
+				continue
+			}
+			across = al.reloads(across, m, al.rangesOf(m), w.holesOf())
+		}
+	}
+	if res.splits > 0 {
+		al.splitMoves(res, list)
+	}
+	al.across = across
+	// Each call's registers, in the order found, by the call's index
+	// among the clobbers.
+	res.acrossOff = grown(res.acrossOff, len(clobbers)+1)
+	clear(res.acrossOff)
+	for _, e := range across {
+		res.acrossOff[e.call+1]++
+	}
+	for k := range clobbers {
+		res.acrossOff[k+1] += res.acrossOff[k]
+	}
+	res.acrossV = grown(res.acrossV, len(across))
+	next := al.next[:0]
+	for k := range clobbers {
+		next = append(next, res.acrossOff[k])
+	}
+	for _, e := range across {
+		res.acrossV[next[e.call]] = e.v
+		next[e.call]++
+	}
+	al.next = next[:0]
+	res.acrossKey = res.acrossKey[:0]
+	for k := range clobbers {
+		res.acrossKey = append(res.acrossKey, clobbers[k].key)
+	}
+	clear(webs)
+	clear(list)
+	al.list = list[:0]
+	lap(PhaseSlots)
+	return res, nil
+}
+
+// scan is Allocate's linear scan (above its call), as a method of its own,
+// that its walks, which every allocation makes, are laid out as
+// themselves: of list, the webs in order of their starts, into the
+// registers of classes.
+func (al *Allocator) scan(classes [][]int, list []*web) {
+	webs, pos := al.webs, al.maxPos
+	// Registers: a linear scan of each class's webs, in order of their
+	// starts. The active webs are live at the scan's position, the
+	// inactive ones in a hole there: a web takes a register no active web
+	// has and no inactive one meeting it has.
+	// A web it would spill of more than one register is taken apart
+	// instead, its registers scanned again each on its own, each hinted to
+	// the others' registers: they may find registers in its holes.
+	al.moved = false
+	// costs is an eviction's weight of each register (below).
+	var costs [64]float64
+	for cls, regs := range classes {
+		active, inactive := al.active[:0], al.inactive[:0]
+		// The webs to scan: the class's, in order of their starts, and
+		// the parts of webs taken apart, which start at or after the web
+		// they were part of, in a heap. Each is next where it is the less.
+		queue, parts, partBy := al.queue[:0], al.partQ[:0], &al.partBy
+		partBy.reset(pos)
+		for _, w := range list {
+			if int(w.cls) == cls {
+				queue = append(queue, w)
+			}
+		}
+		qi := 0
+		apart := func(w *web) bool {
+			if len(w.members) < 2 {
+				return false
+			}
+			al.moved = true
+			ps := al.parts[:0]
+			for _, m := range w.members {
+				p := al.single(m)
+				webs[m] = p
+				ps = append(ps, p)
+			}
+			// The parts share their hints, which nothing changes after: the
+			// web's, then the parts, which they are hinted to by the parts
+			// that have had a register (partGroup); with Config.partHints,
+			// in their one list.
+			hints := append(append(al.hints.take(len(w.hints)+len(ps)), w.hints...), ps...)
+			var g *partGroup
+			if !al.partHints {
+				g = al.groups.fill()
+				*g = partGroup{parts: hints[len(w.hints):]}
+				hints = hints[:len(w.hints)]
+			}
+			for k, p := range ps {
+				p.hints, p.group, p.gi = hints, g, int32(k)
+				if al.webHeap {
+					heap.Push(&parts, p)
+				} else {
+					partBy.push(p)
+				}
+			}
+			clear(ps)
+			al.parts = ps[:0]
+			return true
+		}
+		for qi < len(queue) || len(parts) > 0 || partBy.n > 0 {
+			var cur *web
+			switch {
+			case partBy.n > 0 && (qi == len(queue) || partBy.before(queue[qi])):
+				cur = partBy.pop()
+			case len(parts) > 0 && (qi == len(queue) || byStart(parts[0], queue[qi]) < 0):
+				cur = heap.Pop(&parts).(*web)
+			default:
+				cur = queue[qi]
+				qi++
+			}
+			if cur.calls {
+				// Where its reloads after the calls it lives across would
+				// cost as much as its uses gain, it gives its register up
+				// over the calls where holes there cost less than the
+				// reloads (callHoles; under StressSplit wherever it can).
+				// If its reloads after the other calls and its holes
+				// still would, it lives in its slot.
+				cost := cur.callWeight
+				if al.split && (cost >= cur.weight || al.stress) {
+					if al.oneByOne {
+						cost = al.callHolesEach(cur)
+					} else {
+						cost = al.callHoles(cur)
+					}
+				}
+				if sp := cur.sp; sp != nil {
+					cost += sp.holeW + sp.moveW
+				}
+				if cost >= cur.weight {
+					if !apart(cur) {
+						cur.spillWhole()
+					}
+					continue
+				}
+			}
+			// A web on the lists is read only where p has reached its
+			// entry's at: before it, an active web still covers p, and an
+			// inactive one is still in its hole and meets no web that ends
+			// by its at.
+			p, end := cur.start(), cur.end()
+			back := al.back[:0]
+			keep := active[:0]
+			for _, e := range active {
+				if p < e.at && !al.plainLists {
+					keep = append(keep, e)
+					continue
+				}
+				switch a := e.w; {
+				case a.end() <= p:
+				case a.covers(p):
+					keep = append(keep, activeEntry(a))
+				default:
+					back = append(back, inactiveEntry(a))
+				}
+			}
+			active = keep
+			// Those it keeps where they are, written again only past the
+			// first it takes off.
+			kept := 0
+			for i := range inactive {
+				e := &inactive[i]
+				if p < e.at && !al.plainLists {
+					if kept != i {
+						inactive[kept] = *e
+					}
+					kept++
+					continue
+				}
+				switch a := e.w; {
+				case a.end() <= p:
+				case a.covers(p):
+					active = append(active, activeEntry(a))
+				default:
+					inactive[kept] = inactiveEntry(a)
+					kept++
+				}
+			}
+			inactive = inactive[:kept]
+			if len(back) > 0 {
+				inactive = append(inactive, back...)
+			}
+			al.back = back
+			used := cur.avoid
+			for _, e := range active {
+				used |= 1 << e.reg
+			}
+			// meets is, for each inactive web that may meet cur, whether it
+			// does, once a walk has tested it -- meetYes or meetNo, else 0 --
+			// for the walks after, which test the same.
+			meets := grown(al.meets, len(inactive))
+			clear(meets)
+			al.meets = meets
+			for i, e := range inactive {
+				if used&(1<<e.reg) == 0 && (e.at < end || al.plainLists) {
+					meets[i] = meetNo
+					if overlap(e.w.ranges[e.w.cur:], cur.ranges) {
+						meets[i] = meetYes
+						used |= 1 << e.reg
+					}
+				}
+			}
+			reg := -1
+			for _, h := range cur.hints {
+				if h.reg >= 0 && used&(1<<h.reg) == 0 {
+					reg = int(h.reg)
+					break
+				}
+			}
+			if g := cur.group; reg < 0 && g != nil {
+				for _, k := range g.held {
+					if h := g.parts[k]; h.reg >= 0 && used&(1<<h.reg) == 0 {
+						reg = int(h.reg)
+						break
+					}
+				}
+			}
+			if reg < 0 {
+				for _, r := range regs {
+					if used&(1<<r) == 0 {
+						reg = r
+						break
+					}
+				}
+			}
+			if reg < 0 {
+				// No register: take the one whose webs in cur's way are
+				// the least dense -- their weight over the positions they
+				// cover -- if they are less dense than cur, spilling them
+				// whole, else spill cur. With splitting, they give the
+				// register up over holes instead where each would (plan)
+				// and the holes cost less than spilling cur, whatever
+				// their density; with Config.Displace, cur takes it
+				// wherever no temporary is in the way, each of them
+				// giving it up over a hole where that costs less than
+				// spilling it whole, and spilled whole otherwise.
+				best, bestCost := -1, al.density(cur)
+				if al.split {
+					bestCost = math.Inf(1)
+				}
+				// Each register's cost, the densest of its webs in cur's way:
+				// a walk of the lists for them all (with Config.regByReg, a
+				// walk of them for each register).
+				if !al.regByReg {
+					for _, r := range regs {
+						costs[r] = 0
+					}
+					for _, e := range active {
+						if cur.avoid&(1<<e.reg) == 0 {
+							costs[e.reg] = max(costs[e.reg], al.density(e.w))
+						}
+					}
+					for i, e := range inactive {
+						if cur.avoid&(1<<e.reg) == 0 && (e.at < end || al.plainLists) && al.meets1(meets, i, e, cur) {
+							costs[e.reg] = max(costs[e.reg], al.density(e.w))
+						}
+					}
+				}
+				for _, r := range regs {
+					if cur.avoid&(1<<r) != 0 {
+						continue
+					}
+					cost := costs[r]
+					if al.regByReg {
+						for _, e := range active {
+							if int(e.reg) == r {
+								cost = max(cost, al.density(e.w))
+							}
+						}
+						for _, e := range inactive {
+							if int(e.reg) == r && (e.at < end || al.plainLists) && overlap(e.w.ranges[e.w.cur:], cur.ranges) {
+								cost = max(cost, al.density(e.w))
+							}
+						}
+					}
+					if cost < bestCost {
+						best, bestCost = r, cost
+					}
+				}
+				if best < 0 {
+					if !apart(cur) {
+						cur.spillWhole()
+					}
+					continue
+				}
+				victims, holes := al.victims[:0], al.holes[:0]
+				for _, e := range active {
+					if int(e.reg) == best && overlap(e.w.ranges[e.w.cur:], cur.ranges) {
+						victims = append(victims, e.w)
+					}
+				}
+				for i, e := range inactive {
+					if int(e.reg) == best && (e.at < end || al.plainLists) && al.meets1(meets, i, e, cur) {
+						victims = append(victims, e.w)
+					}
+				}
+				for _, a := range victims {
+					var h hole
+					if al.split {
+						h = al.plan(a, cur)
+					}
+					holes = append(holes, h)
+				}
+				if al.split && !al.displace && !al.stress {
+					total := 0.0
+					for _, h := range holes {
+						if h.e <= h.s {
+							total = math.Inf(1)
+						}
+						total += h.cost
+					}
+					if total >= cur.weight {
+						// The rule without splitting.
+						clear(holes)
+						if !(bestCost < al.density(cur)) {
+							clear(victims)
+							al.victims, al.holes = victims[:0], holes[:0]
+							if !apart(cur) {
+								cur.spillWhole()
+							}
+							continue
+						}
+					}
+				}
+				evicted := func(e scanEntry) bool { return slices.Contains(victims, e.w) }
+				active = slices.DeleteFunc(active, evicted)
+				inactive = slices.DeleteFunc(inactive, evicted)
+				for k, a := range victims {
+					if h := holes[k]; h.e <= h.s {
+						a.spillWhole()
+						continue
+					}
+					al.punch(a, holes[k])
+					// It keeps its register outside its holes.
+					a.cur = 0
+					switch {
+					case a.end() <= p:
+					case a.covers(p):
+						active = append(active, activeEntry(a))
+					default:
+						inactive = append(inactive, inactiveEntry(a))
+					}
+				}
+				clear(victims)
+				al.victims, al.holes = victims[:0], holes[:0]
+				reg = best
+			}
+			cur.reg = int32(reg)
+			if g := cur.group; g != nil {
+				// Held, in the order of the parts.
+				k := len(g.held)
+				g.held = appendA(&al.i32s, g.held, cur.gi)
+				for ; k > 0 && g.held[k-1] > cur.gi; k-- {
+					g.held[k] = g.held[k-1]
+				}
+				g.held[k] = cur.gi
+			}
+			active = append(active, activeEntry(cur))
+		}
+		clear(active)
+		clear(inactive)
+		clear(queue)
+		al.active, al.inactive, al.queue, al.partQ = active[:0], inactive[:0], queue[:0], parts[:0]
+	}
+}
+
+// websOf is Allocate's webs (above its call), as a method of its own, that
+// its walks, which every allocation makes, are laid out as themselves: the
+// webs, in order of their starts, of f, whose phis have nargs arguments,
+// whose instructions with hints are hinted, and whose positions end by pos.
+func (al *Allocator) websOf(f *Func, nargs int, hinted []hintAt, pos int32) []*web {
+	n := len(f.Class)
+	cls := f.Class
+	alloc := func(v VReg) bool { return v >= 0 && cls[v] != NoClass }
+	webs, depthCls, defW, rngs := al.webs, al.depthCls, al.defW, &al.rngs
+	var vacr []vacross
+	if !al.noAcross {
+		vacr = al.vacross
+	}
 	// Webs: each register its own (single), then a phi's and an
 	// argument's joined where their lifetimes do not meet and their
 	// parameters' slots allow, the edges of the deepest blocks first.
 	// (With Config.rangeLists, the webs of their own made here.)
 	if al.rangeLists {
 		for v := range n {
-			if alloc(VReg(v)) && len(ranges[v]) > 0 {
-				vacr[v] = al.acrossOf(VReg(v), ranges[v])
+			if rs := al.rangesOf(VReg(v)); alloc(VReg(v)) && len(rs) > 0 {
+				vacr[v] = al.acrossOf(VReg(v), rs)
 				webs[v] = al.single(VReg(v))
 			}
 		}
 	}
 	pairs := al.pairs[:0]
+	if cap(pairs) < nargs {
+		pairs = make([]pair, 0, nargs+nargs/4)
+	}
+	// A register with ranges has a web, of its own until joined: made
+	// where the coalescing needs it (lazyWebs), else already.
+	lazy, rref := al.lazyWebs, al.rref
 	for i := range f.Blocks {
 		b := &f.Blocks[i]
 		for _, p := range b.Phis {
-			if webs[p.Def] == nil {
+			d := p.Def
+			if lazy && rref[d].n == 0 || !lazy && webs[d] == nil {
 				continue
 			}
+			dc, dw := cls[d], widthOf(f, d)
 			for k, a := range p.Args {
-				if a != p.Def && alloc(a) && webs[a] != nil && f.Class[a] == f.Class[p.Def] && widthOf(f, a) == widthOf(f, p.Def) {
-					pairs = append(pairs, pair{p.Def, a, int(depthCls[b.Preds[k]])})
+				if a == d || a < 0 || cls[a] != dc || lazy && rref[a].n == 0 || !lazy && webs[a] == nil || widthOf(f, a) != dw {
+					continue
 				}
+				pairs = append(pairs, pair{d, a, depthCls[b.Preds[k]]})
 			}
 		}
 	}
@@ -864,14 +1431,14 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	// within a weight: a counting sort by the weight's class.
 	var count [numWeightClasses + 1]int
 	for _, pr := range pairs {
-		count[numWeightClasses-pr.class]++
+		count[numWeightClasses-int(pr.class)]++
 	}
 	for c := 1; c <= numWeightClasses; c++ {
 		count[c] += count[c-1]
 	}
 	sorted := grown(al.sorted, len(pairs))
 	for _, pr := range pairs {
-		c := numWeightClasses - 1 - pr.class
+		c := numWeightClasses - 1 - int(pr.class)
 		sorted[count[c]] = pr
 		count[c]++
 	}
@@ -886,85 +1453,240 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	merged, at := al.merged, al.at
 	// merges is the number of webs joined with others.
 	merges := 0
-	for _, pr := range pairs {
-		x, y := webs[pr.a], webs[pr.b]
-		if x == y || (x.fixed >= 0 && y.fixed >= 0) {
-			continue
-		}
-		a, b := x.ranges, y.ranges
-		if len(a) < len(b) {
-			a, b = b, a
-		}
-		// One ends by where the other begins, as 43% of the corpus's pairs
-		// do: they are apart, and the ranges of the one go after the
-		// other's, without a test (joinApart).
-		lo, hi := a, b
-		if b[len(b)-1].to <= a[0].from {
-			lo, hi = b, a
-		}
-		apart := !al.alwaysTest && lo[len(lo)-1].to <= hi[0].from
-		walk := !al.twoPass && len(b)*8 >= len(a)
-		var ok bool
-		switch {
-		case apart:
-			ok = true
-		case walk:
-			merged, ok = mergeApart(merged, a, b)
-		case al.twoPass:
-			ok = !overlap(a, b)
-		default:
-			at, ok = apartAt(at, a, b)
-		}
-		if !ok {
-			continue
-		}
-		if len(y.members) > len(x.members) {
-			x, y = y, x
-		}
-		x.members = appendA(&al.vregs, x.members, y.members...)
-		merges++
-		switch {
-		case apart:
-			x.ranges, x.owned = joinApart(rngs, x, lo, hi), true
-		case !walk && !al.twoPass:
-			// The few put into the many where the searches found them: in
-			// its array, where it is its web's, else in one of its own
-			// with the room unionInto would take.
-			owner := x
-			if len(y.ranges) > len(x.ranges) {
-				owner = y
+	if !lazy {
+		for _, pr := range pairs {
+			x, y := webs[pr.a], webs[pr.b]
+			if x == y || (x.fixed >= 0 && y.fixed >= 0) {
+				continue
 			}
-			if !owner.owned {
-				a = append(rngs.take(max(2*len(a), len(a)+len(b))), a...)
+			a, b := x.ranges, y.ranges
+			if len(a) < len(b) {
+				a, b = b, a
 			}
-			x.ranges, x.owned = unionFew(rngs, a, b, at), true
-		case walk:
-			if !x.owned || cap(x.ranges) < len(merged) {
-				// Its own, with the room unionInto would take.
-				c := len(x.ranges)
-				if x.owned {
-					c = cap(x.ranges)
+			// One ends by where the other begins, as 43% of the corpus's pairs
+			// do: they are apart, and the ranges of the one go after the
+			// other's, without a test (joinApart).
+			lo, hi := a, b
+			if b[len(b)-1].to <= a[0].from {
+				lo, hi = b, a
+			}
+			apart := !al.alwaysTest && lo[len(lo)-1].to <= hi[0].from
+			walk := !al.twoPass && len(b)*8 >= len(a)
+			var ok bool
+			switch {
+			case apart:
+				ok = true
+			case walk:
+				merged, ok = mergeApart(merged, a, b)
+			case al.twoPass:
+				ok = !overlap(a, b)
+			default:
+				at, ok = apartAt(at, a, b)
+			}
+			if !ok {
+				continue
+			}
+			if len(y.members) > len(x.members) {
+				x, y = y, x
+			}
+			x.members = appendA(&al.vregs, x.members, y.members...)
+			merges++
+			switch {
+			case apart:
+				x.ranges, x.owned = joinApart(rngs, x, lo, hi), true
+			case !walk && !al.twoPass:
+				// The few put into the many where the searches found them: in
+				// its array, where it is its web's, else in one of its own
+				// with the room unionInto would take.
+				owner := x
+				if len(y.ranges) > len(x.ranges) {
+					owner = y
 				}
-				x.ranges, x.owned = rngs.take(max(2*c, len(x.ranges)+len(y.ranges))), true
+				if !owner.owned {
+					a = append(rngs.take(max(2*len(a), len(a)+len(b))), a...)
+				}
+				x.ranges, x.owned = unionFew(rngs, a, b, at), true
+			case walk:
+				if !x.owned || cap(x.ranges) < len(merged) {
+					// Its own, with the room unionInto would take.
+					c := len(x.ranges)
+					if x.owned {
+						c = cap(x.ranges)
+					}
+					x.ranges, x.owned = rngs.take(max(2*c, len(x.ranges)+len(y.ranges))), true
+				}
+				x.ranges = append(x.ranges[:0], merged...)
+			default:
+				if !x.owned {
+					// Its own, with the room unionInto would take for the merge.
+					x.ranges, x.owned = append(rngs.take(max(2*len(x.ranges), len(x.ranges)+len(y.ranges))), x.ranges...), true
+				}
+				x.ranges = unionInto(rngs, x.ranges, y.ranges)
 			}
-			x.ranges = append(x.ranges[:0], merged...)
-		default:
-			if !x.owned {
-				// Its own, with the room unionInto would take for the merge.
-				x.ranges, x.owned = append(rngs.take(max(2*len(x.ranges), len(x.ranges)+len(y.ranges))), x.ranges...), true
+			x.weight += y.weight
+			x.callWeight += y.callWeight
+			x.calls = x.calls || y.calls
+			x.avoid |= y.avoid
+			if y.fixed >= 0 {
+				x.fixed, x.arrive = y.fixed, y.arrive
 			}
-			x.ranges = unionInto(rngs, x.ranges, y.ranges)
+			for _, m := range y.members {
+				webs[m] = x
+			}
 		}
-		x.weight += y.weight
-		x.callWeight += y.callWeight
-		x.calls = x.calls || y.calls
-		x.avoid |= y.avoid
-		if y.fixed >= 0 {
-			x.fixed, x.arrive = y.fixed, y.arrive
+	} else {
+		// A register whose web of its own is not made (webs nil) is its web:
+		// its ranges and parameter's slot read where they are, and the web made
+		// where it is joined and is the larger, which the other joins.
+		fixed := f.FixedSlot
+		for _, pr := range pairs {
+			x, y := webs[pr.a], webs[pr.b]
+			xv, yv := pr.a, pr.b
+			var xr, yr []rng
+			var xf, yf int32
+			if x != nil {
+				xr, xf = x.ranges, x.fixed
+			} else {
+				xr, xf = al.rangesOf(xv), fixed[xv]
+			}
+			if y != nil {
+				yr, yf = y.ranges, y.fixed
+			} else {
+				yr, yf = al.rangesOf(yv), fixed[yv]
+			}
+			if x != nil && x == y || xf >= 0 && yf >= 0 {
+				continue
+			}
+			a, b := xr, yr
+			if len(a) < len(b) {
+				a, b = b, a
+			}
+			// One ends by where the other begins, as 43% of the corpus's pairs
+			// do: they are apart, and the ranges of the one go after the
+			// other's, without a test (joinApart).
+			lo, hi := a, b
+			if b[len(b)-1].to <= a[0].from {
+				lo, hi = b, a
+			}
+			apart := !al.alwaysTest && lo[len(lo)-1].to <= hi[0].from
+			walk := !al.twoPass && len(b)*8 >= len(a)
+			var ok bool
+			switch {
+			case apart:
+				ok = true
+			case walk:
+				merged, ok = mergeApart(merged, a, b)
+			case al.twoPass:
+				ok = !overlap(a, b)
+			default:
+				at, ok = apartAt(at, a, b)
+			}
+			if !ok {
+				continue
+			}
+			xn, yn := 1, 1
+			if x != nil {
+				xn = len(x.members)
+			}
+			if y != nil {
+				yn = len(y.members)
+			}
+			if yn > xn {
+				x, y, xv, yv, yr, yf = y, x, yv, xv, xr, xf
+			}
+			if x == nil {
+				x = al.single(xv)
+				webs[xv] = x
+			}
+			if y != nil {
+				x.members = appendA(&al.vregs, x.members, y.members...)
+			} else {
+				x.members = appendA(&al.vregs, x.members, yv)
+			}
+			merges++
+			switch {
+			case apart:
+				x.ranges, x.owned = joinApart(rngs, x, lo, hi), true
+			case !walk && !al.twoPass:
+				// The few put into the many where the searches found them: in
+				// its array, where it is its web's, else in one of its own
+				// with the room unionInto would take.
+				owned := x.owned
+				if len(yr) > len(x.ranges) {
+					owned = y != nil && y.owned
+				}
+				if !owned {
+					a = append(rngs.take(max(2*len(a), len(a)+len(b))), a...)
+				}
+				x.ranges, x.owned = unionFew(rngs, a, b, at), true
+			case walk:
+				if !x.owned || cap(x.ranges) < len(merged) {
+					// Its own, with the room unionInto would take.
+					c := len(x.ranges)
+					if x.owned {
+						c = cap(x.ranges)
+					}
+					x.ranges, x.owned = rngs.take(max(2*c, len(x.ranges)+len(yr))), true
+				}
+				x.ranges = append(x.ranges[:0], merged...)
+			default:
+				if !x.owned {
+					// Its own, with the room unionInto would take for the merge.
+					x.ranges, x.owned = append(rngs.take(max(2*len(x.ranges), len(x.ranges)+len(yr))), x.ranges...), true
+				}
+				x.ranges = unionInto(rngs, x.ranges, yr)
+			}
+			if y != nil {
+				x.weight += y.weight
+				x.callWeight += y.callWeight
+				x.calls = x.calls || y.calls
+				x.avoid |= y.avoid
+				if y.fixed >= 0 {
+					x.fixed, x.arrive = y.fixed, y.arrive
+				}
+				for _, m := range y.members {
+					webs[m] = x
+				}
+				continue
+			}
+			// What y's web of its own would have been (setSingle).
+			ac := al.acrossAt(yv)
+			yw := al.weight[yv]
+			if ac.calls {
+				yw -= al.defW[yv]
+			}
+			x.weight += yw
+			x.callWeight += ac.weight
+			x.calls = x.calls || ac.calls
+			x.avoid |= ac.avoid
+			if yf >= 0 {
+				x.fixed, x.arrive = yf, al.defAt[yv]
+			}
+			webs[yv] = x
 		}
-		for _, m := range y.members {
-			webs[m] = x
+	}
+	// The webs of their own of the registers joined with none, from the
+	// pool's chunks a run at a time, their members from one array.
+	if owns := al.owns; len(owns) > 0 {
+		ws := al.pool.rest()
+		members := al.vregs.take(len(owns))[:len(owns)]
+		nm := 0
+		for _, v := range owns {
+			if webs[v] != nil {
+				continue
+			}
+			if len(ws) == 0 {
+				ws = al.pool.rest()
+			}
+			w := &ws[0]
+			ws = ws[1:]
+			ac := al.acrossAt(v)
+			members[nm] = v
+			al.setSingle(w, v, al.rangesOf(v), members[nm:nm+1:nm+1], &ac)
+			nm++
+			webs[v] = w
 		}
+		al.pool.unuse(len(ws))
 	}
 	al.merged, al.at = merged[:0], at[:0]
 	// What a web's register saves it is what weighs: a phi's argument of
@@ -1128,450 +1850,78 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			}
 		}
 	}
-	lap(PhaseWebs)
+	return list
+}
 
-	// Registers: a linear scan of each class's webs, in order of their
-	// starts. The active webs are live at the scan's position, the
-	// inactive ones in a hole there: a web takes a register no active web
-	// has and no inactive one meeting it has.
-	// A web it would spill of more than one register is taken apart
-	// instead, its registers scanned again each on its own, each hinted to
-	// the others' registers: they may find registers in its holes.
-	al.moved = false
-	// costs is an eviction's weight of each register (below).
-	var costs [64]float64
-	for cls, regs := range cfg.Classes {
-		active, inactive := al.active[:0], al.inactive[:0]
-		// The webs to scan: the class's, in order of their starts, and
-		// the parts of webs taken apart, which start at or after the web
-		// they were part of, in a heap. Each is next where it is the less.
-		queue, parts, partBy := al.queue[:0], al.partQ[:0], &al.partBy
-		partBy.reset(pos)
-		for _, w := range list {
-			if int(w.cls) == cls {
-				queue = append(queue, w)
+// defineWalk is Allocate's walk of every instruction for liveness (above
+// its call): with the registers' tables made, it defines each register,
+// marks those that may live across a block's boundary (globals), and lists
+// the uses liveness's paths start from (paths), those it waits on the
+// definitions of (later) and the instructions with hints (hinted); and
+// counts the phis' arguments (nargs). once says every register is defined
+// once at most. It is a method of its own, that the walk, which every
+// allocation makes over every instruction, is laid out as itself.
+func (al *Allocator) defineWalk(f *Func) (globals []VReg, paths, later []useAt, hinted []hintAt, nargs int, once bool) {
+	cls := f.Class
+	defBlock, defInst, global := al.defBlock, al.defInst, al.global
+	globals, paths, later, hinted = al.globals[:0], al.paths[:0], al.later[:0], al.hinted[:0]
+	once = true
+	markPass, hintPass := al.markPass, al.hintPass
+	for i := range f.Blocks {
+		b := &f.Blocks[i]
+		for _, p := range b.Phis {
+			if d := p.Def; d >= 0 && cls[d] != NoClass {
+				if defBlock[d] >= 0 {
+					once = false
+				}
+				defBlock[d], defInst[d] = int32(i), -1
+				if global[d] == 0 {
+					globals = append(globals, d)
+					global[d] = int32(len(globals))
+				}
+			}
+			nargs += len(p.Args)
+			for _, a := range p.Args {
+				if a >= 0 && cls[a] != NoClass && global[a] == 0 {
+					globals = append(globals, a)
+					global[a] = int32(len(globals))
+				}
 			}
 		}
-		qi := 0
-		apart := func(w *web) bool {
-			if len(w.members) < 2 {
-				return false
+		for j := range b.Insts {
+			in := &b.Insts[j]
+			regs, nu := in.Regs, int(in.NUses)
+			if in.Hint != None && in.NDefs > 0 && !hintPass {
+				hinted = append(hinted, hintAt{int32(i), regs[nu], in.Hint})
 			}
-			al.moved = true
-			ps := al.parts[:0]
-			for _, m := range w.members {
-				p := al.single(m)
-				webs[m] = p
-				ps = append(ps, p)
-			}
-			// The parts share their hints, which nothing changes after: the
-			// web's, then the parts, which they are hinted to by the parts
-			// that have had a register (partGroup); with Config.partHints,
-			// in their one list.
-			hints := append(append(al.hints.take(len(w.hints)+len(ps)), w.hints...), ps...)
-			var g *partGroup
-			if !al.partHints {
-				g = al.groups.fill()
-				*g = partGroup{parts: hints[len(w.hints):]}
-				hints = hints[:len(w.hints)]
-			}
-			for k, p := range ps {
-				p.hints, p.group, p.gi = hints, g, int32(k)
-				if al.webHeap {
-					heap.Push(&parts, p)
-				} else {
-					partBy.push(p)
-				}
-			}
-			clear(ps)
-			al.parts = ps[:0]
-			return true
-		}
-		for qi < len(queue) || len(parts) > 0 || partBy.n > 0 {
-			var cur *web
-			switch {
-			case partBy.n > 0 && (qi == len(queue) || partBy.before(queue[qi])):
-				cur = partBy.pop()
-			case len(parts) > 0 && (qi == len(queue) || byStart(parts[0], queue[qi]) < 0):
-				cur = heap.Pop(&parts).(*web)
-			default:
-				cur = queue[qi]
-				qi++
-			}
-			if cur.calls {
-				// Where its reloads after the calls it lives across would
-				// cost as much as its uses gain, it gives its register up
-				// over the calls where holes there cost less than the
-				// reloads (callHoles; under StressSplit wherever it can).
-				// If its reloads after the other calls and its holes
-				// still would, it lives in its slot.
-				cost := cur.callWeight
-				if al.split && (cost >= cur.weight || al.stress) {
-					if al.oneByOne {
-						cost = al.callHolesEach(cur)
-					} else {
-						cost = al.callHoles(cur)
-					}
-				}
-				if sp := cur.sp; sp != nil {
-					cost += sp.holeW + sp.moveW
-				}
-				if cost >= cur.weight {
-					if !apart(cur) {
-						cur.spillWhole()
-					}
-					continue
-				}
-			}
-			// A web on the lists is read only where p has reached its
-			// entry's at: before it, an active web still covers p, and an
-			// inactive one is still in its hole and meets no web that ends
-			// by its at.
-			p, end := cur.start(), cur.end()
-			back := al.back[:0]
-			keep := active[:0]
-			for _, e := range active {
-				if p < e.at && !al.plainLists {
-					keep = append(keep, e)
-					continue
-				}
-				switch a := e.w; {
-				case a.end() <= p:
-				case a.covers(p):
-					keep = append(keep, activeEntry(a))
-				default:
-					back = append(back, inactiveEntry(a))
-				}
-			}
-			active = keep
-			keepIn := inactive[:0]
-			for _, e := range inactive {
-				if p < e.at && !al.plainLists {
-					keepIn = append(keepIn, e)
-					continue
-				}
-				switch a := e.w; {
-				case a.end() <= p:
-				case a.covers(p):
-					active = append(active, activeEntry(a))
-				default:
-					keepIn = append(keepIn, inactiveEntry(a))
-				}
-			}
-			inactive = keepIn
-			if len(back) > 0 {
-				inactive = append(inactive, back...)
-			}
-			al.back = back
-			used := cur.avoid
-			for _, e := range active {
-				used |= 1 << e.reg
-			}
-			for _, e := range inactive {
-				if used&(1<<e.reg) == 0 && (e.at < end || al.plainLists) && overlap(e.w.ranges[e.w.cur:], cur.ranges) {
-					used |= 1 << e.reg
-				}
-			}
-			reg := -1
-			for _, h := range cur.hints {
-				if h.reg >= 0 && used&(1<<h.reg) == 0 {
-					reg = h.reg
-					break
-				}
-			}
-			if g := cur.group; reg < 0 && g != nil {
-				for _, k := range g.held {
-					if h := g.parts[k]; h.reg >= 0 && used&(1<<h.reg) == 0 {
-						reg = h.reg
-						break
-					}
-				}
-			}
-			if reg < 0 {
-				for _, r := range regs {
-					if used&(1<<r) == 0 {
-						reg = r
-						break
-					}
-				}
-			}
-			if reg < 0 {
-				// No register: take the one whose webs in cur's way are
-				// the least dense -- their weight over the positions they
-				// cover -- if they are less dense than cur, spilling them
-				// whole, else spill cur. With splitting, they give the
-				// register up over holes instead where each would (plan)
-				// and the holes cost less than spilling cur, whatever
-				// their density; with Config.Displace, cur takes it
-				// wherever no temporary is in the way, each of them
-				// giving it up over a hole where that costs less than
-				// spilling it whole, and spilled whole otherwise.
-				best, bestCost := -1, al.density(cur)
-				if al.split {
-					bestCost = math.Inf(1)
-				}
-				// Each register's cost, the densest of its webs in cur's way:
-				// a walk of the lists for them all (with Config.regByReg, a
-				// walk of them for each register).
-				if !al.regByReg {
-					for _, r := range regs {
-						costs[r] = 0
-					}
-					for _, e := range active {
-						if cur.avoid&(1<<e.reg) == 0 {
-							costs[e.reg] = max(costs[e.reg], al.density(e.w))
-						}
-					}
-					for _, e := range inactive {
-						if cur.avoid&(1<<e.reg) == 0 && (e.at < end || al.plainLists) && overlap(e.w.ranges[e.w.cur:], cur.ranges) {
-							costs[e.reg] = max(costs[e.reg], al.density(e.w))
-						}
-					}
-				}
-				for _, r := range regs {
-					if cur.avoid&(1<<r) != 0 {
+			if !markPass {
+				for _, u := range regs[:nu] {
+					if u < 0 || cls[u] == NoClass {
 						continue
 					}
-					cost := costs[r]
-					if al.regByReg {
-						for _, e := range active {
-							if int(e.reg) == r {
-								cost = max(cost, al.density(e.w))
-							}
+					switch db := defBlock[u]; {
+					case db < 0:
+						later = append(later, useAt{u, int32(i), int32(j)})
+					case db != int32(i):
+						if global[u] == 0 {
+							globals = append(globals, u)
+							global[u] = int32(len(globals))
 						}
-						for _, e := range inactive {
-							if int(e.reg) == r && (e.at < end || al.plainLists) && overlap(e.w.ranges[e.w.cur:], cur.ranges) {
-								cost = max(cost, al.density(e.w))
-							}
-						}
-					}
-					if cost < bestCost {
-						best, bestCost = r, cost
+						paths = append(paths, useAt{u, int32(i), int32(j)})
 					}
 				}
-				if best < 0 {
-					if !apart(cur) {
-						cur.spillWhole()
-					}
-					continue
-				}
-				victims, holes := al.victims[:0], al.holes[:0]
-				for _, e := range active {
-					if int(e.reg) == best && overlap(e.w.ranges[e.w.cur:], cur.ranges) {
-						victims = append(victims, e.w)
-					}
-				}
-				for _, e := range inactive {
-					if int(e.reg) == best && (e.at < end || al.plainLists) && overlap(e.w.ranges[e.w.cur:], cur.ranges) {
-						victims = append(victims, e.w)
-					}
-				}
-				for _, a := range victims {
-					var h hole
-					if al.split {
-						h = al.plan(a, cur)
-					}
-					holes = append(holes, h)
-				}
-				if al.split && !al.displace && !al.stress {
-					total := 0.0
-					for _, h := range holes {
-						if h.e <= h.s {
-							total = math.Inf(1)
-						}
-						total += h.cost
-					}
-					if total >= cur.weight {
-						// The rule without splitting.
-						clear(holes)
-						if !(bestCost < al.density(cur)) {
-							clear(victims)
-							al.victims, al.holes = victims[:0], holes[:0]
-							if !apart(cur) {
-								cur.spillWhole()
-							}
-							continue
-						}
-					}
-				}
-				evicted := func(e scanEntry) bool { return slices.Contains(victims, e.w) }
-				active = slices.DeleteFunc(active, evicted)
-				inactive = slices.DeleteFunc(inactive, evicted)
-				for k, a := range victims {
-					if h := holes[k]; h.e <= h.s {
-						a.spillWhole()
-						continue
-					}
-					al.punch(a, holes[k])
-					// It keeps its register outside its holes.
-					a.cur = 0
-					switch {
-					case a.end() <= p:
-					case a.covers(p):
-						active = append(active, activeEntry(a))
-					default:
-						inactive = append(inactive, inactiveEntry(a))
-					}
-				}
-				clear(victims)
-				al.victims, al.holes = victims[:0], holes[:0]
-				reg = best
 			}
-			cur.reg = reg
-			if g := cur.group; g != nil {
-				// Held, in the order of the parts.
-				k := len(g.held)
-				g.held = appendA(&al.i32s, g.held, cur.gi)
-				for ; k > 0 && g.held[k-1] > cur.gi; k-- {
-					g.held[k] = g.held[k-1]
+			for _, d := range regs[nu : nu+int(in.NDefs)] {
+				if d >= 0 && cls[d] != NoClass {
+					if defBlock[d] >= 0 {
+						once = false
+					}
+					defBlock[d], defInst[d] = int32(i), int32(j)
 				}
-				g.held[k] = cur.gi
-			}
-			active = append(active, activeEntry(cur))
-		}
-		clear(active)
-		clear(inactive)
-		clear(queue)
-		al.active, al.inactive, al.queue, al.partQ = active[:0], inactive[:0], queue[:0], parts[:0]
-	}
-	lap(PhaseScan)
-
-	// The webs as the scan left them, some taken apart, in order of their
-	// starts: as they were where it took none apart and a hole moved no
-	// web's start.
-	if al.moved {
-		list = list[:0]
-		for v, w := range webs {
-			if w != nil && w.members[0] == VReg(v) {
-				list = append(list, w)
 			}
 		}
-		al.sortByStart(list, pos)
 	}
-	al.list = list
-
-	// Slots: for the webs spilled, and those in registers that live across
-	// a call. A web with a parameter has the slot the parameter arrives in,
-	// which holds nothing else from the function's start until then.
-	slots := al.slots[:0]
-	al.slotScan.reset(cfg.slots, cfg.slotHeap, pos)
-	take := func(s int32, rs []rng) {
-		for int(s) >= len(slots) {
-			slots = append(slots, nil)
-		}
-		slots[s] = unionInto(rngs, slots[s], rs)
-	}
-	for _, w := range list {
-		if w.fixed < 0 {
-			continue
-		}
-		rs := append(rngs.take(1), rng{0, w.arrive + 1})
-		if w.spilled || w.calls || len(w.holesOf()) > 0 {
-			rs = unionInto(rngs, rs, al.slotRanges(w))
-			w.slot = w.fixed
-		}
-		for k := range w.width {
-			take(w.fixed+k, rs)
-		}
-	}
-	for _, w := range list {
-		if !(w.spilled || w.calls || len(w.holesOf()) > 0) || w.slot >= 0 {
-			continue
-		}
-		rs := al.slotRanges(w)
-		// The first slot from which width are free.
-		s := al.slotScan.first(slots, rs, w.width)
-		if int(s+w.width) > cfg.NumSlots {
-			clear(slots)
-			al.slots = slots[:0]
-			return nil, ErrSlots
-		}
-		w.slot = s
-		for k := range w.width {
-			take(s+k, rs)
-			al.slotScan.taken(slots, s+k)
-		}
-	}
-	nslots := len(slots)
-	clear(slots)
-	al.slots = slots[:0]
-
-	res := &al.res
-	res.Reg = grown(res.Reg, n)
-	res.Slot = grown(res.Slot, n)
-	res.flags = grown(res.flags, n)
-	res.NumSlots = nslots
-	for i := range res.Reg {
-		res.Reg[i] = -1
-		res.Slot[i] = -1
-	}
-	clear(res.flags)
-	res.splits = 0
-	across := al.across[:0]
-	for _, w := range list {
-		var fl uint8
-		if w.calls && w.reg >= 0 {
-			fl = flagStored
-		}
-		if len(w.holesOf()) > 0 {
-			fl |= flagSplit
-			res.splits += len(w.members)
-		}
-		for _, m := range w.members {
-			res.Reg[m] = int16(w.reg)
-			res.Slot[m] = w.slot
-			res.flags[m] = fl
-		}
-		if !w.calls || w.reg < 0 {
-			continue
-		}
-		// The calls each of its registers lives across in it, which
-		// reload it.
-		for _, m := range w.members {
-			if al.oneByOne {
-				crossed(ranges[m], func(k int) {
-					if clobbers[k].call && !inHoles(w.holesOf(), clobAt[k]) {
-						across = append(across, acrossEntry{int32(k), m})
-					}
-				})
-				continue
-			}
-			across = al.reloads(across, m, ranges[m], w.holesOf())
-		}
-	}
-	if res.splits > 0 {
-		al.splitMoves(res, list, ranges)
-	}
-	al.across = across
-	// Each call's registers, in the order found, by the call's index
-	// among the clobbers.
-	res.acrossOff = grown(res.acrossOff, len(clobbers)+1)
-	clear(res.acrossOff)
-	for _, e := range across {
-		res.acrossOff[e.call+1]++
-	}
-	for k := range clobbers {
-		res.acrossOff[k+1] += res.acrossOff[k]
-	}
-	res.acrossV = grown(res.acrossV, len(across))
-	next := al.next[:0]
-	for k := range clobbers {
-		next = append(next, res.acrossOff[k])
-	}
-	for _, e := range across {
-		res.acrossV[next[e.call]] = e.v
-		next[e.call]++
-	}
-	al.next = next[:0]
-	res.acrossKey = res.acrossKey[:0]
-	for k := range clobbers {
-		res.acrossKey = append(res.acrossKey, clobbers[k].key)
-	}
-	clear(webs)
-	clear(list)
-	al.list = list[:0]
-	lap(PhaseSlots)
-	return res, nil
+	return
 }
 
 // walkRanges makes each register's ranges, its weight and the clobbers by
@@ -1582,9 +1932,9 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 // block and into the next extends. Those found before it are on a list of
 // nodes, which only the registers of more than one range have; and
 // layoutRanges lays them out after. The registers live out of a block are
-// read from the words of its set that explore or the dataflow found any in
-// (outSum), not from all of them: a large function's sets are mostly
-// empty words.
+// read from exploreRegs's list of them, or, where liveness made sets, from
+// the words of its set that explore or the dataflow found any in (outSum),
+// not from all of them: a large function's sets are mostly empty words.
 func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []clobber) []clobber {
 	n, nb := len(f.Class), len(f.Blocks)
 	// Each register's tables of n, which an index found below n in one
@@ -1592,6 +1942,7 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 	cls := f.Class[:n]
 	globals, edgeArgs, argOff := al.globals, al.edgeArgs, al.argOff
 	weight, defW, defAt, starts, ends := al.weight[:n], al.defW[:n], al.defAt[:n], al.starts, al.ends
+	outOff, outRegs := al.outOff, al.outRegs
 	// last is each register's range found last, which begins first, or
 	// none (to 0); before[v] is, plus one, the index of the node of the
 	// one found before it, which begins after it, or 0, each node's next
@@ -1613,28 +1964,49 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 		b := &f.Blocks[i]
 		start, end := starts[i], ends[i]
 		w := depthWeight(b.Depth)
-		out := liveOut(i)
-		for si, sword := range al.outSum[i*sw : (i+1)*sw] {
-			for sword != 0 {
-				wi := si*64 + bits.TrailingZeros64(sword)
-				sword &= sword - 1
-				word := out[wi]
-				for word != 0 {
-					v := globals[wi*64+bits.TrailingZeros64(word)]
-					word &= word - 1
-					l := &last[v]
-					switch {
-					case l.from == end+2:
-						// Live into the next block too: its range, the last
-						// found, runs from here.
-						l.from = start
-					case l.to == 0:
-						*l = rng{start, end + 1}
-						nregs++
-					default:
-						nodes = append(nodes, rnode{*l, before[v]})
-						before[v] = int32(len(nodes))
-						*l = rng{start, end + 1}
+		if al.byReg {
+			// The registers live out of the block, listed.
+			for _, v := range outRegs[outOff[i]:outOff[i+1]] {
+				l := &last[v]
+				switch {
+				case l.from == end+2:
+					// Live into the next block too: its range, the last
+					// found, runs from here.
+					l.from = start
+				case l.to == 0:
+					*l = rng{start, end + 1}
+					nregs++
+				default:
+					nodes = append(nodes, rnode{*l, before[v]})
+					before[v] = int32(len(nodes))
+					*l = rng{start, end + 1}
+				}
+			}
+		} else {
+			// The sets' words that have any (outSum).
+			out := liveOut(i)
+			for si, sword := range al.outSum[i*sw : (i+1)*sw] {
+				for sword != 0 {
+					wi := si*64 + bits.TrailingZeros64(sword)
+					sword &= sword - 1
+					word := out[wi]
+					for word != 0 {
+						v := globals[wi*64+bits.TrailingZeros64(word)]
+						word &= word - 1
+						l := &last[v]
+						switch {
+						case l.from == end+2:
+							// Live into the next block too: its range, the last
+							// found, runs from here.
+							l.from = start
+						case l.to == 0:
+							*l = rng{start, end + 1}
+							nregs++
+						default:
+							nodes = append(nodes, rnode{*l, before[v]})
+							before[v] = int32(len(nodes))
+							*l = rng{start, end + 1}
+						}
 					}
 				}
 			}
@@ -1747,7 +2119,8 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 // defined, in its register or not: its definitions weigh nothing.
 func (al *Allocator) single(v VReg) *web {
 	w := al.pool.fill()
-	al.setSingle(w, v, al.ranges[v], append(al.vregs.take(1), v), &al.vacross[v])
+	a := al.acrossAt(v)
+	al.setSingle(w, v, al.rangesOf(v), append(al.vregs.take(1), v), &a)
 	return w
 }
 
@@ -1819,13 +2192,21 @@ func (al *Allocator) acrossOf(v VReg, rs []rng) vacross {
 // before -- joined where they meet, in one array, and makes its web of its
 // own (single) with what it lives across, each register's in one visit.
 func (al *Allocator) layoutRanges() {
-	last, before, nodes, ranges, webs, vacr := al.last, al.before, al.nodes, al.ranges, al.webs, al.vacross
+	last, before, nodes, rref, webs, vacr := al.last, al.before, al.nodes, al.rref, al.webs, al.vacross
 	clobIdx := al.clobIdx
 	flat := al.rngs.take(al.nregs + len(nodes))
-	// The webs from the pool's chunks a run at a time, and their members
-	// from one array of them, each its own.
-	ws := al.pool.rest()
-	members := al.vregs.take(al.nregs)[:al.nregs]
+	// With Config.eagerWebs, the webs from the pool's chunks a run at a
+	// time, and their members from one array of them, each its own; else
+	// the registers listed (owns), whose webs of their own are made where
+	// the coalescing needs them, and after it.
+	al.lazyWebs = !al.eagerWebs && (al.nregs >= lazyWebsMin || al.forceLazy)
+	var ws []web
+	var members []VReg
+	if !al.lazyWebs {
+		ws = al.pool.rest()
+		members = al.vregs.take(al.nregs)[:al.nregs]
+	}
+	owns := al.owns[:0]
 	nm := 0
 	for v := range last {
 		l := last[v]
@@ -1843,13 +2224,22 @@ func (al *Allocator) layoutRanges() {
 			}
 		}
 		rs := flat[a:len(flat):len(flat)]
-		ranges[v] = rs
+		rref[v] = rngRef{int32(a), int32(len(rs))}
 		// What it lives across, where a clobber lies in its extent.
 		var ac vacross
 		if len(clobIdx) > 0 && clobIdx[rs[0].from] != clobIdx[rs[len(rs)-1].to-1] {
 			ac = al.acrossOf(VReg(v), rs)
 		}
-		vacr[v] = ac
+		if !al.noAcross {
+			vacr[v] = ac
+		}
+		if al.lazyWebs {
+			if len(owns) == cap(owns) {
+				owns = doubled(owns)
+			}
+			owns = append(owns, VReg(v))
+			continue
+		}
 		if len(ws) == 0 {
 			ws = al.pool.rest()
 		}
@@ -1860,14 +2250,27 @@ func (al *Allocator) layoutRanges() {
 		nm++
 		webs[v] = w
 	}
-	al.pool.unuse(len(ws))
+	if !al.lazyWebs {
+		al.pool.unuse(len(ws))
+	}
 	al.nodes = nodes[:0]
+	al.rflat, al.owns = flat, owns
 }
 
 // posOf is a register and a position.
 type posOf struct {
 	v  VReg
 	at int32
+}
+
+// rngRef is a register's ranges in Allocator.rflat: n of them from off.
+type rngRef struct{ off, n int32 }
+
+// rangesOf is v's ranges, as the ranges' phase laid them out: their
+// array's capacity ends with them.
+func (al *Allocator) rangesOf(v VReg) []rng {
+	r := al.rref[v]
+	return al.rflat[r.off : r.off+r.n : r.off+r.n]
 }
 
 // rnode is a range of a register's found before its last (walkRanges), and
@@ -2052,6 +2455,154 @@ func (al *Allocator) explore(f *Func, words, stride int, defBlock, defInst []int
 	al.work = work[:0]
 }
 
+// exploreRegs finds liveness by the paths explore takes, register by
+// register, and lists the registers live out of each block, in the order
+// of their global numbers, block i's from outOff[i] to outOff[i+1] of
+// outRegs: no sets. A large function's sets are mostly empty, and as large
+// as its blocks times its registers live across a block's boundary --
+// Octane's zlib has a function of 1,337 blocks and 36,303 such registers,
+// whose sets take 12 MB for 277,000 registers live out -- and explore's
+// paths, which mark one register at a time, meet a cache line of them at
+// each block they visit. Register by register, what its paths have
+// visited is in two tables of the blocks, a word a block, of the number of
+// the register each was last marked for: nothing to clear from one
+// register to the next. The paths' starts -- each use's block, each phi
+// argument's edge -- are put in order of their registers first. Every
+// register is defined once at most.
+func (al *Allocator) exploreRegs(f *Func, defBlock []int32, paths []useAt) {
+	globals, global := al.globals, al.global
+	ng, nb := len(globals), len(f.Blocks)
+	// regEv is each register's starts, regEvOff[g] to regEvOff[g+1] of
+	// global g's: a block twice, plus one where it is the predecessor of an
+	// argument's edge, which the register is live out of and, but where it
+	// is defined there, into; a use's, which it is live into.
+	off := grown(al.regEvOff, ng+2)
+	clear(off)
+	// Each start's register's global number plus one, or 0, as the paths
+	// are counted, which the walk that puts them reads.
+	pg := grown(al.pathG, len(paths))
+	for k, x := range paths {
+		g := global[x.v]
+		pg[k] = g
+		if g > 0 {
+			off[g+1]++
+		}
+	}
+	al.pathG = pg
+	edgeArgs, argOff := al.edgeArgs, al.argOff
+	for _, e := range edgeArgs {
+		off[global[e.a]+1]++
+	}
+	for g := 2; g < len(off); g++ {
+		off[g] += off[g-1]
+	}
+	ev := grown(al.regEv, int(off[ng+1]))
+	for k, x := range paths {
+		if g := pg[k]; g > 0 {
+			ev[off[g]] = x.b << 1
+			off[g]++
+		}
+	}
+	for i := range nb {
+		for _, e := range edgeArgs[argOff[i]:argOff[i+1]] {
+			g := global[e.a]
+			ev[off[g]] = int32(i)<<1 | 1
+			off[g]++
+		}
+	}
+	al.regEvOff, al.regEv = off, ev
+	// inMark and outMark are, for each block, plus one the global number of
+	// the register last found live into it and out of it.
+	inMark := grown(al.inMark, nb)
+	outMark := grown(al.outMark, nb)
+	clear(inMark)
+	clear(outMark)
+	// outBlocks are the blocks each register is live out of, in order of
+	// the registers, global g's from outFrom[g] to outFrom[g+1]; outOff
+	// counts them by block.
+	outFrom := grown(al.outFrom, ng+1)
+	outOff := grown(al.outOff, nb+1)
+	clear(outOff)
+	outBlocks := al.outBlocks[:0]
+	work := al.work[:0]
+	// The blocks' predecessors in one array, block c's from predAt[c] to
+	// predAt[c+1]: the paths read them a block at a time, which a walk of
+	// the blocks' own lists would find each where its block is.
+	predAt := grown(al.predAt2, nb+1)
+	preds := al.preds2[:0]
+	for c := range nb {
+		predAt[c] = int32(len(preds))
+		for _, p := range f.Blocks[c].Preds {
+			preds = append(preds, int32(p))
+		}
+	}
+	predAt[nb] = int32(len(preds))
+	al.predAt2, al.preds2 = predAt, preds
+	for g, v := range globals {
+		outFrom[g] = int32(len(outBlocks))
+		mark := int32(g + 1)
+		db := defBlock[v]
+		for _, e := range ev[off[g]:off[g+1]] {
+			b := e >> 1
+			if e&1 != 0 {
+				if outMark[b] != mark {
+					outMark[b] = mark
+					if len(outBlocks) == cap(outBlocks) {
+						outBlocks = doubled(outBlocks)
+					}
+					outBlocks = append(outBlocks, b)
+				}
+				if b == db {
+					continue
+				}
+			}
+			if inMark[b] == mark {
+				continue
+			}
+			inMark[b] = mark
+			work = append(work[:0], b)
+			for len(work) > 0 {
+				c := work[len(work)-1]
+				work = work[:len(work)-1]
+				for _, p := range preds[predAt[c]:predAt[c+1]] {
+					if outMark[p] != mark {
+						outMark[p] = mark
+						if len(outBlocks) == cap(outBlocks) {
+							outBlocks = doubled(outBlocks)
+						}
+						outBlocks = append(outBlocks, p)
+					}
+					if p == db || inMark[p] == mark {
+						continue
+					}
+					inMark[p] = mark
+					work = append(work, p)
+				}
+			}
+		}
+	}
+	outFrom[ng] = int32(len(outBlocks))
+	// Listed by block, each block's in order of the registers.
+	for _, b := range outBlocks {
+		outOff[b+1]++
+	}
+	for i := 1; i <= nb; i++ {
+		outOff[i] += outOff[i-1]
+	}
+	outRegs := grown(al.outRegs, len(outBlocks))
+	at := grown(al.outAt, nb)
+	copy(at, outOff[:nb])
+	for g, v := range globals {
+		for _, b := range outBlocks[outFrom[g]:outFrom[g+1]] {
+			outRegs[at[b]] = v
+			at[b]++
+		}
+	}
+	al.inMark, al.outMark, al.outFrom, al.outOff, al.outBlocks, al.outRegs, al.outAt, al.work = inMark, outMark, outFrom, outOff, outBlocks, outRegs, at, work[:0]
+	// No sets: the ranges' walk reads the lists.
+	al.outSum, al.outSumW = al.outSum[:0], 0
+}
+
 // dataflow finds the registers' liveness by sweeps of the blocks until
 // their sets change no more, each register's uses before its definitions
 // in a block (gen) live into it, and what is live out of it but not
@@ -2215,21 +2766,28 @@ func classWeight(c int8) float64 { return float64(uint64(1) << (3 * uint(c))) }
 
 // partQueue is the parts of webs taken apart that the scan has yet to
 // reach, by their starts and then their members, the first first: at each
-// position a list of those that start there, in order of their members,
-// and a bit for each position that has any. A part starts at or after the
-// web it was part of, which the scan has reached, and the scan's position
-// only grows: the first part is found from the least position one was put
-// at since the last was taken (lo), a word of bits at a time. A part is one
-// register, its member its own, so that no two are in the same place.
+// position a list of those that start there, and a bit for each position
+// that has any. A part starts at or after the web it was part of, which
+// the scan has reached, and the scan's position only grows: the first part
+// is found from the least position one was put at since the last was taken
+// (lo), a word of bits at a time. A position's list is put in order of its
+// members when the scan first looks there (sorted has its bit), parts put
+// there after going to their places in it: many webs taken apart may have
+// parts that start at one place, the phis of a block, put in no order. A
+// part is one register, its member its own, so that no two are in the
+// same place.
 //
 // Between two scans every position's list is empty -- the scan takes every
 // part it puts -- and so is at, from one allocation to the next.
 type partQueue struct {
-	at    []int32
-	full  []uint64
-	nodes []partNode
-	lo    int32
-	n     int
+	at     []int32
+	full   []uint64
+	sorted []uint64
+	nodes  []partNode
+	lo     int32
+	n      int
+	// order is a list's nodes as sort puts them in order.
+	order []int32
 }
 
 // partNode is a part waiting in the queue: its web and member, and plus
@@ -2244,18 +2802,24 @@ type partNode struct {
 func (q *partQueue) reset(npos int32) {
 	q.at = grown(q.at, int(npos))
 	q.full = grown(q.full, int(npos+63)/64)
+	q.sorted = grown(q.sorted, int(npos+63)/64)
 	q.nodes, q.lo, q.n = q.nodes[:0], npos, 0
 }
 
 // push puts part w in its place.
 func (q *partQueue) push(w *web) {
 	s, m := w.start(), w.members[0]
+	if len(q.nodes) == cap(q.nodes) {
+		q.nodes = doubled(q.nodes)
+	}
 	q.nodes = append(q.nodes, partNode{w, m, 0})
 	k := int32(len(q.nodes))
-	// After those of lesser members.
 	link := &q.at[s]
-	for *link != 0 && q.nodes[*link-1].m < m {
-		link = &q.nodes[*link-1].next
+	if q.sorted[s>>6]&(1<<(s&63)) != 0 {
+		// After those of lesser members.
+		for *link != 0 && q.nodes[*link-1].m < m {
+			link = &q.nodes[*link-1].next
+		}
 	}
 	q.nodes[k-1].next, *link = *link, k
 	q.full[s>>6] |= 1 << (s & 63)
@@ -2275,7 +2839,28 @@ func (q *partQueue) first() (int32, *partNode) {
 		x = (x | 63) + 1
 	}
 	q.lo = x
+	if q.sorted[x>>6]&(1<<(x&63)) == 0 {
+		q.sort(x)
+	}
 	return x, &q.nodes[q.at[x]-1]
+}
+
+// sort puts position x's list in order of its members.
+func (q *partQueue) sort(x int32) {
+	q.sorted[x>>6] |= 1 << (x & 63)
+	order := q.order[:0]
+	for k := q.at[x]; k != 0; k = q.nodes[k-1].next {
+		order = append(order, k)
+	}
+	nodes := q.nodes
+	slices.SortFunc(order, func(a, b int32) int { return int(nodes[a-1].m - nodes[b-1].m) })
+	next := int32(0)
+	for i := len(order) - 1; i >= 0; i-- {
+		nodes[order[i]-1].next = next
+		next = order[i]
+	}
+	q.at[x] = next
+	q.order = order[:0]
 }
 
 // before reports whether the first part is scanned before w.
@@ -2291,6 +2876,7 @@ func (q *partQueue) pop() *web {
 	q.at[x] = e.next
 	if e.next == 0 {
 		q.full[x>>6] &^= 1 << (x & 63)
+		q.sorted[x>>6] &^= 1 << (x & 63)
 	}
 	q.n--
 	return e.w
