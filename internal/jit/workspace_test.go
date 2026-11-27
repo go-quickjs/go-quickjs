@@ -48,10 +48,10 @@ func TestWorkspaceAged(t *testing.T) {
 	}
 }
 
-// A pooled workspace goes as a runtime returns to its host
-// (DropIdleWorkspaces) when no compile has given it back since the return
-// before, and the pool's bytes with it; one given back since is kept, for
-// the next turn's compiles to take; one a compile is using stays its.
+// A pooled workspace goes as a runtime flushes (DropIdleWorkspaces) when
+// no compile has given it back since the flush before, and the pool's
+// bytes with it; one given back since is kept, for the next compiles to
+// take; one a compile is using stays its.
 func TestWorkspaceDroppedIdle(t *testing.T) {
 	busy := GetWorkspace()
 	w := GetWorkspace()
@@ -61,21 +61,21 @@ func TestWorkspaceDroppedIdle(t *testing.T) {
 	}
 	DropIdleWorkspaces()
 	if !pooled(w) {
-		t.Fatal("a workspace given back in the turn let go of at its end")
+		t.Fatal("a workspace given back since the last flush let go of at this one")
 	}
-	// A turn whose compile takes it and gives it back: kept again.
+	// A flush age whose compile takes it and gives it back: kept again.
 	if GetWorkspace() != w {
 		t.Fatal("the workspace given back was not the next taken")
 	}
 	PutWorkspace(w)
 	DropIdleWorkspaces()
 	if !pooled(w) {
-		t.Fatal("a workspace used in the turn let go of at its end")
+		t.Fatal("a workspace used since the last flush let go of")
 	}
-	// A turn with no compile: it goes.
+	// A flush age with no compile: it goes.
 	DropIdleWorkspaces()
 	if pooled(w) {
-		t.Fatal("an idle workspace kept through a turn")
+		t.Fatal("an idle workspace kept through a flush age")
 	}
 	PutWorkspace(busy)
 	if !pooled(busy) {
@@ -177,7 +177,7 @@ func TestWorkspaceReturnedUnrewound(t *testing.T) {
 	if pooled(dirty) || pooled(clean) {
 		t.Fatalf("kept %d cycles after it was given back", workspaceAge)
 	}
-	// And at two returns to the host with no compile.
+	// And at two flushes with no compile between.
 	w := GetWorkspace()
 	ReturnWorkspace(w)
 	DropIdleWorkspaces()

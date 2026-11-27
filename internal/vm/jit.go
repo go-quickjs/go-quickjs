@@ -1514,7 +1514,8 @@ type jitState struct {
 	regParked    map[jitKey]*jitRegEntry
 	parkedOldest uint64
 	// parkRun is parking's clock (parkClock) as the last parking ended,
-	// and parkCost what it and the unparkings since cost by it (parkDue).
+	// and parkCost what it and the unparkings since cost (parkSpan,
+	// parkDue).
 	parkRun, parkCost time.Duration
 	// parkedPools are the object pools of parked code, each with what its
 	// source holds weakly (jitParked's pools).
@@ -1523,6 +1524,9 @@ type jitState struct {
 	// unparked the code put back in the cache as it was (jitRegUnpark),
 	// for tests and the report (JITStats).
 	parkings, parkedCount, unparked uint64
+	// workLooks counts the flushes that looked for idle workspaces to let
+	// go of (jit.DropIdleWorkspaces), for tests.
+	workLooks uint64
 	// siteRegs is the call sites' pass's table by register
 	// (jitCallSiteFacts), reused from one closure's pass to the next: the
 	// pass ends on the runtime's goroutine, and nothing it hands on points
@@ -1920,6 +1924,10 @@ func (s *jitState) flush() {
 		return
 	}
 	s.flushedAt = tick
+	// The process's workspaces no compile has given back since the last
+	// such look go, a flush age idle as the code the flush lets go of.
+	jit.DropIdleWorkspaces()
+	s.workLooks++
 	s.jitShrinkContexts()
 	s.regFlush(tick, s.epoch())
 	jitFlushRealms[struct{}](s)

@@ -21,14 +21,14 @@ import (
 // JIT's budget counts. Pooled, the process keeps as many as compile at
 // once, as big as the recent compiles needed, and lets them go once
 // nothing has compiled in them for workspaceAge of the collector's cycles,
-// or for a turn ended by a runtime's return to its host
-// (DropIdleWorkspaces), as V8 gives a compile's zone back.
+// or for a flush age of a runtime's program (DropIdleWorkspaces), as V8
+// gives a compile's zone back.
 type Workspace struct {
 	SSA ssa.Workspace
 	MIR mir.Workspace
 	// cycle is the collector's cycle (workCycle) it was given back in,
-	// turn the hosts' returns' count (workTurn) then, and bytes what it
-	// kept.
+	// turn the runtimes' flushes' count (workTurn) then, and bytes what
+	// it kept.
 	cycle uint64
 	turn  uint64
 	bytes int
@@ -57,8 +57,8 @@ var (
 	// given back (workArm).
 	workCycle atomic.Uint64
 	workOnce  sync.Once
-	// workTurn counts the looks at the pool as runtimes return to their
-	// hosts (DropIdleWorkspaces) that found it holding a workspace.
+	// workTurn counts the looks at the pool as runtimes flush their code
+	// (DropIdleWorkspaces) that found it holding a workspace.
 	// workPool's lock guards it.
 	workTurn uint64
 )
@@ -154,18 +154,23 @@ func workGiveBack(w *Workspace) {
 	workPool.Unlock()
 }
 
-// DropIdleWorkspaces, as a runtime returns to its host, lets go of the
-// pooled workspaces no compile has given back since the last such return:
+// DropIdleWorkspaces, as a runtime's cache flushes its code -- once a
+// flush age of its program's running, a second, at a back edge's check, a
+// compile or a return to its host (internal/vm's flush) -- lets go of the
+// pooled workspaces no compile has given back since the last such look:
 // a program that has stopped compiling, and may run again much later or
-// never, keeps none of its compiles' working memory past its next return,
-// which had been tens of megabytes after a large function's compile -- 32
-// MB after Octane, two of the collector's cycles past its last compile,
-// which a host's one collection does not reach. A workspace given back
-// since is kept: a host whose calls each compile -- a new function of
-// each, made hot by its loop -- takes at each call the workspace the call
-// before gave back, rather than make one anew at each, tens of
-// allocations a call. A compile under way, its workspace out of the
-// pool, keeps it; the compiles a turn makes share one as before.
+// never, keeps none of its compiles' working memory past a flush age, as
+// it keeps none of the code it no longer runs, which had been tens of
+// megabytes after a large function's compile -- 32 MB after Octane, two
+// of the collector's cycles past its last compile, which a host's one
+// collection does not reach. Not at each return to the host, of which a
+// turn has many -- reading a result's string is one -- nor at a parking,
+// which comes mid-program: a workspace let go of so was made anew by the
+// next turn's compiles, its pages faulted in again, 0.2 ms and a
+// megabyte in each of Octane's benchmarks run once. A workspace given
+// back since the last look is kept; a compile under way, its workspace
+// out of the pool, keeps it; the compiles a turn makes share one as
+// before.
 func DropIdleWorkspaces() {
 	if workIdle.Load() == 0 {
 		return

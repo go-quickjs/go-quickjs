@@ -10,26 +10,24 @@ import (
 	"weak"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/jit"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
+	"github.com/go-quickjs/go-quickjs/internal/spanclock"
 )
 
 // jitReturned is jitReturnedToHost: what the JIT does as r's turn ends
-// with no frame running. The process's workspaces no compile has used
-// since the last such return go (jit.DropIdleWorkspaces); the cache looks
-// to flush (flush): an idle runtime, which takes no back edge's check nor
-// compiles, had kept all its code and what that holds until it ran again;
-// the code parked a flush age goes (regAgeParked); and, once the program
-// has run long enough since the last parking to pay for it (parkDue), the
-// cache parks its code (jitRegPark). The looks are the flush's own and a
-// comparison of times, so most of a host's short calls pay two clocks'
-// reads.
+// with no frame running. The cache looks to flush (flush): an idle
+// runtime, which takes no back edge's check nor compiles, had kept all its
+// code and what that holds, and the process's idle workspaces
+// (jit.DropIdleWorkspaces), until it ran again; the code parked a flush
+// age goes (regAgeParked); and, once the program has run long enough since
+// the last parking to pay for it (parkDue), the cache parks its code
+// (jitRegPark). The looks are the flush's own and a comparison of times,
+// so most of a host's short calls pay two clocks' reads.
 func jitReturned(r *Runtime) {
 	s := r.jit
 	if s == nil {
 		return
 	}
-	jit.DropIdleWorkspaces()
 	if s.unavailable {
 		return
 	}
@@ -60,16 +58,16 @@ func jitReturned(r *Runtime) {
 const jitParkPays = 200
 
 // parkDue reports whether the program has run jitParkPays times what the
-// last parking and the unparkings since cost (parkCost) since it ended
-// (parkRun). A turn too short to measure has run nothing.
+// last parking and the unparkings since cost (parkCost, measured by
+// parkSpan) since it ended (parkRun). A turn too short to measure has run
+// nothing.
 func (s *jitState) parkDue() bool {
 	ran := s.parkClock() - s.parkRun
 	return ran > 0 && ran >= jitParkPays*s.parkCost
 }
 
-// parkClock is parking's clock: the program's time (running), which a
-// parking and an unparking also measure their cost by; where a test set
-// the cache's clocks, the time of their ticks (jitTestConfig's parkNow,
+// parkClock is parking's clock: the program's time (running); where a test
+// set the cache's clocks, the time of their ticks (jitTestConfig's parkNow,
 // flushNow and clocks), and held, none goes by.
 func (s *jitState) parkClock() time.Duration {
 	t := &s.rt.jitTest
@@ -88,6 +86,23 @@ func (s *jitState) parkClock() time.Duration {
 		return 0
 	}
 	return s.running()
+}
+
+// parkSpan is the clock a parking and an unparking measure their cost by
+// (parkCost): one that resolves their tens to hundreds of microseconds
+// (internal/spanclock), which the program's clock does not on Windows, where
+// Go's clock moves only at the system timer's tick. Measured by that, a
+// parking cost nothing in most of its measures, and every return a tick
+// after the last parking parked again: in a fixed run of Octane, each
+// benchmark's code at its end, a walk of 0.15 to 0.2 ms in a run of a few
+// milliseconds. Where a test set
+// the cache's clocks, or holds them, it is parking's clock (parkClock).
+func (s *jitState) parkSpan() time.Duration {
+	t := &s.rt.jitTest
+	if t.parkNow != nil || t.flushNow != nil || t.clocks != nil || jitClocksHeld.Load() {
+		return s.parkClock()
+	}
+	return spanclock.Now()
 }
 
 // Parking. Native code reads by address what it was compiled against --
@@ -453,7 +468,7 @@ func (s *jitState) jitRegPark() {
 		// next return tries again.
 		return
 	}
-	from := s.parkClock()
+	from := s.parkSpan()
 	s.parkings++
 	// makeRoom's list of what it may reclaim, an epoch's, is made again at
 	// its next look: kept, it held the entries it listed and what they
@@ -471,8 +486,8 @@ func (s *jitState) jitRegPark() {
 		}
 		s.regParkEntry(key, e, tick)
 	}
+	s.parkCost = s.parkSpan() - from
 	s.parkRun = s.parkClock()
-	s.parkCost = s.parkRun - from
 }
 
 // regParkEntry parks e, the code of the function whose key is key.
@@ -515,9 +530,9 @@ func (s *jitState) jitRegUnpark(e *jitRegEntry) bool {
 		return false
 	}
 	// What it costs is parking's (parkDue).
-	from := s.parkClock()
+	from := s.parkSpan()
 	ok := s.regUnpark(e)
-	s.parkCost += s.parkClock() - from
+	s.parkCost += s.parkSpan() - from
 	return ok
 }
 

@@ -2718,8 +2718,11 @@ being made again, and go once a whole cycle has passed with none as big.
 `jit.PutWorkspace` and `jit.ReturnWorkspace` stamp a workspace with the
 pool's count of cycles as it is given back, and its rewind -- there, or on
 the worker that takes one given back unrewound -- passes that. A pooled
-workspace goes whole after two idle cycles, or at the return after a turn
-that left it unused (`DropIdleWorkspaces`). Counted by jobs, the last
+workspace goes whole after two idle cycles, or once a runtime's flush
+has looked twice with no compile giving it back between, a flush age of
+the program's running idle (`DropIdleWorkspaces`): not at each return to
+the host, of which a turn has many -- reading a result's string is one --
+and where each of Octane's benchmarks, run once, made its workspace anew. Counted by jobs, the last
 sixteen, a big compile's chunks had gone as it ended, and the next as big
 made them again: half of the garbage Typescript's compiles made. The
 builder makes an instruction's guards with a method of a value on the
@@ -4147,7 +4150,11 @@ the program has run, since the last parking ended, 200 times what that
 parking, the unparkings since and the compiles again of the code it lost
 cost (`jitReturned`, `parkDue`, `jitParkPays`: what parking costs besides
 came to some one and a half times that, so parking's share of the running
-is some 1 to 2%; and a turn too short to measure parks nothing), the cache parks its code no
+is some 1 to 2%; and a turn too short to measure parks nothing) -- a cost
+measured by a clock that resolves microseconds (`parkSpan`,
+internal/spanclock), since Go's on Windows moves at the timer's tick and
+read most parkings as costing nothing, which had the runtime park at
+nearly every return -- the cache parks its code no
 run, native call or compile uses, valid or invalidated: out of the cache
 (`regParked`), its link cleared, so that native callers call Go, its entry
 marked not cached, so that its templates' calls take the path code let go

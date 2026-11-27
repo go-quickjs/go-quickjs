@@ -480,3 +480,113 @@ func TestJITParkingsBounded(t *testing.T) {
 		t.Fatalf("%d parkings of turns that ran nothing", r.jit.parkings-parkings)
 	}
 }
+
+// A parking measures what it cost by a clock that resolves it (parkSpan):
+// a parking of f's code, some microseconds of walking it, costs more than
+// none, so that the next is due only once the program has run some
+// hundreds of times as long (parkDue). Measured by the program's clock,
+// which on Windows moves at the system timer's tick, it cost none in most
+// parkings, and the runtime parked at every return a tick after the last:
+// each of Octane's benchmarks run once parked its code at its end. The
+// runtime's clocks run here, as a host's do.
+func TestJITParkCostMeasured(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	if jitFastClocks {
+		t.Skip("parking's clock is the fast clocks' ticks")
+	}
+	jitNoInlineForTest(t, "g")
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	jitRunClocksForTest(t, r)
+	if _, err := r.Run(compileForTest(t, jitParkSource)); err != nil {
+		t.Fatal(err)
+	}
+	// The rounds that compile f park nothing, their turns running nothing
+	// by parking's clock: with it running, a parking was due at whichever
+	// return the program's time had paid for one, the last round's among
+	// them on a loaded machine, which left f parked before the parking
+	// this test measures.
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.parkNow = func() time.Duration { return 0 } })
+	for i := 0; i < 300; i++ {
+		v, err := r.Run(compileForTest(t, `f(g, 100)`))
+		if err != nil || v.Number() != jitParkWant {
+			t.Fatalf("round %d: %v, %v", i, v, err)
+		}
+	}
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.parkNow = nil })
+	s := r.jit
+	if e := s.regCache[r.jitRegKeyOf(jitGlobalClosure(r, "f"))]; e == nil || e.code == nil {
+		t.Fatalf("f not compiled: %+v", e)
+	}
+	parked := s.parkedCount
+	s.jitRegPark()
+	if s.parkedCount == parked {
+		t.Fatal("nothing parked")
+	}
+	if s.parkCost <= 0 {
+		t.Fatalf("a parking of %d entries measured as costing %v", s.parkedCount-parked, s.parkCost)
+	}
+	if v, err := r.Run(compileForTest(t, `f(g, 100)`)); err != nil || v.Number() != jitParkWant {
+		t.Fatalf("after the parking: %v, %v", v, err)
+	}
+}
+
+// The process's idle workspaces go at the flush's look, once a flush age
+// of the program's running, as the code the flush lets go of does
+// (jit.DropIdleWorkspaces): not at a parking, nor at each of the host's
+// returns, of which a program's turn has many, so that the next turn's
+// compiles take the workspace the last gave back rather than make one
+// anew -- dropped at every second return, each of Octane's benchmarks run
+// once made its own, a megabyte and its pages faulted in again. A runtime
+// whose host's calls go on returning with no compile has a flush look at
+// its workspaces once a flush age has gone by, and the next look lets go
+// of those not used between (internal/jit's TestWorkspaceDroppedIdle).
+func TestJITWorkspacesDroppedAtTheFlush(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setEpoch := jitFlushForTest(t)
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	if _, err := r.Run(compileForTest(t, `
+		function f(n) { var s = 0; for (var i = 0; i < n; i++) s = (s + (i * 7) % 13) | 0; return s }`)); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		// Node: f(1000)
+		if v, err := r.Run(compileForTest(t, `f(1000)`)); err != nil || v.Number() != 6000 {
+			t.Fatalf("f(1000): %v, %v", v, err)
+		}
+	}
+	if _, code := jitCachedForTest(r, "f"); !code {
+		t.Fatal("f not compiled")
+	}
+	s := r.jit
+	looks := s.workLooks
+	idle := compileForTest(t, `0`)
+	// A parking and the host's returns within a flush age: no look.
+	parked := s.parkedCount
+	s.jitRegPark()
+	if s.parkedCount == parked {
+		t.Fatal("nothing parked")
+	}
+	for i := 0; i < 20; i++ {
+		if _, err := r.Run(idle); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s.workLooks != looks {
+		t.Fatalf("%d looks at the workspaces within a flush age", s.workLooks-looks)
+	}
+	// The host's calls of an idle runtime, two flush ages apart: a look at
+	// each.
+	for _, e := range []uint64{1000 + jitFlushAge, 1000 + 2*jitFlushAge} {
+		setEpoch(e)
+		if _, err := r.Run(idle); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s.workLooks != looks+2 {
+		t.Fatalf("%d looks at the workspaces over two flush ages, want 2", s.workLooks-looks)
+	}
+}
