@@ -75,6 +75,8 @@ type jitSnapData struct {
 	// (jit_snapkeyedstore.go).
 	inst   jitInstanceOfData
 	kstore jitKeyedStoreData
+	// typed is TypedKind's (jit_snaptyped.go).
+	typed jitTypedKindData
 	// rt is the runtime the gathers ran on, the root's: the closures'
 	// copies' (closureCopy).
 	rt *Runtime

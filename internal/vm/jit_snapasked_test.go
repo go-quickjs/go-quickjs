@@ -102,6 +102,7 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 	r.jitState().unavailable = false
 	compared, functions := 0, 0
 	unbound := map[jitSnapMethod]int{}
+	typedMissed := 0
 	for _, cl := range cls {
 		c := r.regOf(cl)
 		if c == nil {
@@ -165,6 +166,14 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 					unbound[snapKeyedStore]++
 				}
 			}
+			// TypedKind's cells made by register pc (gatherTypedKind) at no
+			// PC, and its PCs no register pc's asking had.
+			for _, a := range s.d.typed.asked {
+				if !a.bound {
+					unbound[snapTypedKind]++
+				}
+			}
+			typedMissed += s.d.typed.missed
 			// InstanceOf asked by register pc (gatherInstanceOf) at no PC.
 			for _, a := range s.d.inst.asked {
 				if !a.bound {
@@ -246,4 +255,5 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 		functions, compared, unbound[snapAccessor], unbound[snapStringProperty], unbound[snapNativeCalls], unbound[snapOperands])
 	t.Logf("asked by register pc at no PC: %d InstanceOf", unbound[snapInstanceOf])
 	t.Logf("gathered by register pc at no PC: %d KeyedStore", unbound[snapKeyedStore])
+	t.Logf("TypedKind: cells made by register pc at no PC %d, PCs asked at no register pc %d", unbound[snapTypedKind], typedMissed)
 }

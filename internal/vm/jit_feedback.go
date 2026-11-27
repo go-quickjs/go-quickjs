@@ -1800,12 +1800,22 @@ func (f *jitRegFeedback) WalkedCloseCell() uintptr { return f.fb.WalkedCloseCell
 // the register instruction's pc -- kept in the function's lowering, under
 // keys of their own (-1-pc).
 func (f *jitRegFeedback) TypedKind(pc int) (ssa.TypedSite, bool) {
+	if pc < 0 || pc >= len(f.p.Origin) {
+		return ssa.TypedSite{}, false
+	}
+	return f.typedKindAt(int(f.p.Origin[pc]))
+}
+
+// typedKindAt is TypedKind's answer for the register instruction at
+// register pc rpc, of the register code alone: the snapshot asks it so
+// (jit_snaptyped.go).
+func (f *jitRegFeedback) typedKindAt(rpc int) (ssa.TypedSite, bool) {
 	s := f.fb.r.jit
-	if s == nil || pc < 0 || pc >= len(f.p.Origin) {
+	if s == nil {
 		return ssa.TypedSite{}, false
 	}
 	l := s.lowering(f.fb.fn)
-	key := -1 - int32(f.p.Origin[pc])
+	key := -1 - int32(rpc)
 	cell := l.typedCells[key]
 	if cell == nil {
 		if l.typedCells == nil {
