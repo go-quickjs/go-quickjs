@@ -35,6 +35,16 @@ import (
 // native code.
 func (s *jitState) regLinkOf(cl *closure, c *regCode) *jitLink {
 	key := s.rt.jitRegKeyOf(cl)
+	if h := cl.hint(); h != 0 && int(h) < len(s.hints) {
+		// Found by the slot of the hint table the template's hint names
+		// (regHint), with no lookup of the map: a slot holds a link that
+		// regLinks has by its key until the link is let go of, which
+		// empties the slot (regDropLink), and the slot is the link's own
+		// (its hint) and the template's already.
+		if l := s.hints[h].link; l != nil && l.key == key {
+			return l
+		}
+	}
 	if l := s.regLinks[key]; l != nil {
 		s.regHint(cl, l)
 		return l

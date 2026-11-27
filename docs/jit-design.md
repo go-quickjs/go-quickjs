@@ -1418,6 +1418,22 @@ is under [The projection](#the-projection).
   2 to 5% slower; sized to their first ask, 8.4 against 5.5); the
   no-argument questions asked once a compile, of which 6 of 13 are the
   compile's whole (about 2 µs, a later option).
+  The calls' targets' share of the goroutine (`NativeCalls`' gather and
+  the call sites' pass), about 5.6 µs a compile at the median and 15 at
+  the mean, is first touches of the heap, not computing: warm, it is 0.8.
+  Of it (QPC, Typescript in the background, µs a compile, timers' own
+  cost in each figure) the targets' facts are 0.4 and 1.2, deciding
+  their links 0.2 and 0.5, finding the links 0.7 and 1.6, the call
+  sites' pass 2.3 and 7.1. Tried on these numbers and dropped: the
+  facts' fixed parts (the function's flags, its register code's) read
+  on the worker, the gather taking only what changes -- the gather must
+  decide each target's link, which the code embeds before the install,
+  and the decision reads those parts, so the most it saves is 0.3 and
+  1.2; and the link decided on the worker and made at the install,
+  which needs the code relocated there and moves the link's making onto
+  the install rather than removing it. A link found by the hint slot
+  its template names, before the map of links: the targets' gather
+  4.1 and 10.2 to 3.6 and 9.1 (three runs each).
 - **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
   was run beside mir's scan on every compile, given the same function: an
   instruction for each value and the block's end, the frame states' uses

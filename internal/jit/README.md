@@ -3768,8 +3768,10 @@ pointer), names its function's link for generic calls, which native code
 finds a callee's code by (`regHint`, `abi.HintTable`); the slot holds the
 function's address too, so a stale hint misses however often its slot was
 reused. The hint lives in what a template's closures share
-(`closureCode`), so the closure holds nothing of the JIT's. The table
-grows only in room made for its growth (`hintGrowth`, `makeRoom`); where
+(`closureCode`), so the closure holds nothing of the JIT's. Go finds a
+function's link by it too (`regLinkOf`), before the map of links, by
+the slot's link and its key: a link is in its slot only while the map
+has it. The table grows only in room made for its growth (`hintGrowth`, `makeRoom`); where
 there is none, the link has no slot for now and a generic call of the
 function is Go's until a later link finds the room. When the OS denies
 executable memory, the runtime marks the JIT unavailable for good.
