@@ -1503,6 +1503,84 @@ is under [The projection](#the-projection).
   sites' gather 3.8 and 11.8 µs a compile to 3.3 and 10.5, about 0.7 µs
   a compile moved onto the exits (some 770 lists made anew a run, 0.55 µs
   each), so a net 0.45 µs of the goroutine's.
+- **Next: the floor, and the design to reach it.** *Measured* (Ryzen 5
+  3600, Typescript in the background, QPC, µs a compile, median and mean,
+  two runs each way): the goroutine's unavoidable work is the copies of
+  what changes in place and the makes of what the runtime keeps. The
+  copies alone -- a plain copy of each gathered closure's caches, their
+  earlier entries, its call caches and its learning's header, run first
+  so that it pays the cold misses -- are 0.7 and 1.7; the makes alone
+  (links, register code, the constructions' seeds, the literals' and
+  generators' pools) 0.5 and 2.7; the rest of the snapshot about 45 and
+  98, of 46 and 102, over about 4.5 closures a compile (the function and
+  3.5 callees' nodes). The tier line's preparation is 111 µs a compile
+  at the mean, 10 to 15 of it past the snapshot (the hand-over). So the
+  preparation is some 40 times its floor at the median and 23 at the
+  mean, and the copy is not what it costs: the caches' first touches are
+  0.7 and 1.7 of the closures' copies' 4.5 and 12. What it costs is the
+  gathers' own work on the goroutine: the inline sites' prefix, which
+  decides the callees a compile takes (`discover`: 22 and 57, with the
+  nodes it gathers), the questions that read the heap (the property
+  sites', 3.3 and 10.5; the calls' targets', 3.0 and 7.9; the literals',
+  the globals', the typed kinds'), their allocation, and their first
+  touches of the heap behind the caches -- function objects, closures,
+  register code, shapes, prototypes, bindings.
+  The design that reaches about 5 and 10 has the goroutine copy and make,
+  and nothing else; every decision is the worker's, over the copies and
+  over what does not change once made, which it reads as it reads
+  register code. What each family reads is of three kinds:
+  - *Immutable once made*, read on the worker as it is: register code
+    and its `bytecode.Function` (package vm writes none of its fields); a
+    `regCode`'s fields, set before it is published; a closure's `fn`,
+    `closureCode`, `realm` and upvalues' pointers; a template's `env`;
+    a function object's data (`closure`, `bound`, `arrow`, `extra`, its
+    `rare` and the realm a built-in is of), but for `ctorKind`, which a
+    class's `extends` sets after it is made; a typed array's kind; the
+    names' and constants' tables, made anew rather than written; the
+    realm's built-ins, set at its making.
+  - *Published by the hand-over*, held by header: the learning's lists,
+    which only grow, appended past any header taken, or are made anew
+    (`TestJITLearnedListsPersist`), and the learned property sites,
+    made anew at their next write once taken
+    (`TestJITLearnedPolyPersists`); and the caches the gather copies.
+  - *Mutable*, and so copied, or answered as a fact at the gather: the
+    property and call caches (the interpreter's hot path writes them,
+    `fillPropCache`, `rhCallW`); a closure's register code (`regOf`, nil
+    to code) and its refusal (an install); the dispatcher's counts, its
+    operands' lattice and the BigInt marks (the native handlers); a
+    binding's value, the global object's and a prototype's properties and
+    shapes, a unique shape until it is remembered, an upvalue's slot (the
+    program, as it runs); a link and a hint (the cache's bookkeeping); a
+    pool's room (native code, Go's refills).
+  The work is then: the prefix's decisions and the heap-reading questions
+  moved to the worker, each reading what of the first kind it needs and
+  what the gather copied of the third, with a gather that copies, takes
+  headers and makes the links, register code and pools an answer must
+  find made; a test of each family that its derivation answers as the
+  asking does (as `TestJITSnapshotAnswersAsAsked`) and that nothing it
+  reads on the worker is written after it is made.
+  The other lever is deciding the builder's inlining plan before the
+  gather. Over Octane's functions 1,212 of 1,623 callees' snapshots are
+  derived, but a build asks anything of some 400 to 650: about 60% of
+  the callees `Inline` takes are declined by the builder after, each
+  one's gather paid on the goroutine for nothing. The refusals of a
+  program of its own (`ssa.Uninlinable`: its size, handlers, captures,
+  reachable calls and closures; 517 of 2,070 programs), skipped where the
+  lowering is cached, measured level; what declines them is the caller's
+  side -- the inlining budget against the running total, which is order
+  dependent, typed inlining, the plan's call frequencies inside callees,
+  the depth with the plan's choices -- none known before the plan runs
+  over the lowered programs. Two ways: the plan decided on the goroutine
+  before the gather, gathering only what it inlines, which needs the
+  plan answerable from register code and cached lowerings -- ssa's plan
+  split into a register-level part and the rest, with a test that they
+  agree, as `Uninlinable` is; or callees gathered lazily on the worker
+  as the plan takes them, which cannot work while a gather reads state
+  written in place and makes the runtime's objects, until every family's
+  gathered state is persistent or immutable. The first, scoped as a
+  register-level plan with `Uninlinable` its first piece and measured by
+  how many derived but unasked callees it removes before it is timed, is
+  the one to build.
 - **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
   was run beside mir's scan on every compile, given the same function: an
   instruction for each value and the block's end, the frame states' uses
