@@ -1205,6 +1205,7 @@ func TestWalkMethods(t *testing.T) {
 		{"phiWalks", func(c *Config) { c.phiWalks = true }},
 		{"searchPreds", func(c *Config) { c.searchPreds = true }},
 		{"rangeLists", func(c *Config) { c.rangeLists = true }},
+		{"sortList", func(c *Config) { c.sortList = true }},
 	}
 	var al, old Allocator
 	twice := 0

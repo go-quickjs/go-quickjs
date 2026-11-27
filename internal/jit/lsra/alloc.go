@@ -291,6 +291,7 @@ type Allocator struct {
 	before []int32
 	nodes  []rnode
 	nregs  int
+	order  []posOf
 	// outSum is a bit for each word of each block's live-out set that has
 	// one, outSumW words a block: explore's, or the dataflow's.
 	outSum  []uint64
@@ -315,6 +316,7 @@ type Allocator struct {
 	oneByOne     bool
 	searchPreds  bool
 	rangeLists   bool
+	sortList     bool
 	maxPos       int32
 	evKnown      bool
 	blocksKnown  bool
@@ -401,7 +403,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.split, al.stress = !cfg.NoSplit, cfg.StressSplit && !cfg.NoSplit
 	al.displace, al.mutateHoles, al.oneByOne, al.twoPass, al.plainLists, al.markPass = cfg.Displace, cfg.mutateHoles, cfg.oneByOne, cfg.twoPass, cfg.plainLists, cfg.markPass
 	al.hintPass, al.blockByBlock, al.mergeAll, al.regByReg, al.phiWalks = cfg.hintPass, cfg.blockByBlock, cfg.mergeAll, cfg.regByReg, cfg.phiWalks
-	al.searchPreds, al.rangeLists = cfg.searchPreds, cfg.rangeLists
+	al.searchPreds, al.rangeLists, al.sortList = cfg.searchPreds, cfg.rangeLists, cfg.sortList
 
 	// predIdx is, for each block's successor k, the block's index among
 	// that successor's predecessors: predIdx[predOff[i]+k]. The walk that
@@ -854,6 +856,8 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	// put where it goes (unionInto). With Config.twoPass, the walk is an
 	// overlap test and then, where there is none, unionInto.
 	merged, at := al.merged, al.at
+	// merges is the number of webs joined with others.
+	merges := 0
 	for _, pr := range pairs {
 		x, y := webs[pr.a], webs[pr.b]
 		if x == y || (x.fixed >= 0 && y.fixed >= 0) {
@@ -880,6 +884,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			x, y = y, x
 		}
 		x.members = appendA(&al.vregs, x.members, y.members...)
+		merges++
 		switch {
 		case !walk && !al.twoPass:
 			// The few put into the many where the searches found them: in
@@ -1021,23 +1026,68 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			}
 		}
 	}
-	// The webs, each once, by its first member, in the walk that takes the
-	// last of what weighs (above) from their weights: the definitions of a
-	// web's registers that live across no call, where it is joined with
-	// one that does. The hints read no weight.
+	// The webs, each once, in order of their starts, and the last of what
+	// weighs (above) taken from their weights: the definitions of a web's
+	// registers that live across no call, where it is joined with one that
+	// does. The hints read no weight. With Config.sortList, the webs by
+	// their first members, sorted.
 	list := al.list[:0]
-	for v, w := range webs {
-		if w == nil {
-			continue
+	if al.rangeLists || al.sortList {
+		for v, w := range webs {
+			if w == nil {
+				continue
+			}
+			if w.calls && len(w.members) > 1 && !vacr[v].calls {
+				w.weight -= defW[v]
+			}
+			if w.members[0] == VReg(v) {
+				list = append(list, w)
+			}
 		}
-		if w.calls && len(w.members) > 1 && !vacr[v].calls {
-			w.weight -= defW[v]
-		}
-		if w.members[0] == VReg(v) {
+		al.sortByStart(list, pos)
+	} else {
+		// In order of their starts, from the definitions and temporaries
+		// in the order the ranges' walk met them, backwards (al.order):
+		// each web where its first member is defined, where it starts --
+		// its members never meet, and one alone starts there -- and those
+		// that start at once in order of their first members. Where a web
+		// starts elsewhere -- a register used before any definition --
+		// they are sorted.
+		order := al.order
+		for k := len(order) - 1; k >= 0; k-- {
+			e := order[k]
+			w := webs[e.v]
+			if w.start() != e.at {
+				continue
+			}
 			list = append(list, w)
+			for j := len(list) - 1; j > 0 && list[j-1].start() == e.at && list[j-1].members[0] > w.members[0]; j-- {
+				list[j-1], list[j] = w, list[j-1]
+			}
+		}
+		if len(list) != al.nregs-merges {
+			list = list[:0]
+			for v, w := range webs {
+				if w != nil && w.members[0] == VReg(v) {
+					list = append(list, w)
+				}
+			}
+			al.sortByStart(list, pos)
+		}
+		// The last of what weighs, from the webs listed: the definitions
+		// of a web's registers that live across no call, where it is joined
+		// with one that does (whole numbers, exactly, in any order).
+		for _, w := range list {
+			if !w.calls || len(w.members) == 1 {
+				continue
+			}
+			for _, m := range w.members {
+				if !vacr[m].calls {
+					w.weight -= defW[m]
+				}
+			}
 		}
 	}
-	al.sortByStart(list, pos)
 	lap(PhaseWebs)
 
 	// Registers: a linear scan of each class's webs, in order of their
@@ -1476,6 +1526,11 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 	clear(before)
 	nodes := al.nodes[:0]
 	sw := al.outSumW
+	// order is the definitions and the temporaries, each with its
+	// position, as the walk meets them, backwards: no of them, those past
+	// n not kept.
+	order := grown(al.order, n)
+	no := 0
 	// nregs is the number of registers that have ranges.
 	nregs := 0
 	for i := nb - 1; i >= 0; i-- {
@@ -1522,6 +1577,10 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 				weight[d] += w
 				defW[d] += w
 				defAt[d] = u + 1
+				if no < len(order) {
+					order[no] = posOf{d, u + 1}
+				}
+				no++
 				// Cut where it is open, else a range of its own.
 				switch l := &last[d]; {
 				case l.from == start && l.to != 0:
@@ -1558,6 +1617,10 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 					continue
 				}
 				weight[t] = math.Inf(1)
+				if no < len(order) {
+					order[no] = posOf{t, u}
+				}
+				no++
 				if l := &last[t]; l.to == 0 {
 					nregs++
 				} else {
@@ -1577,6 +1640,10 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 			}
 			weight[d] += w
 			defAt[d] = start
+			if no < len(order) {
+				order[no] = posOf{d, start}
+			}
+			no++
 			switch l := &last[d]; {
 			case l.from == start && l.to != 0:
 			case l.to == 0:
@@ -1589,7 +1656,12 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 			}
 		}
 	}
-	al.last, al.before, al.nodes, al.nregs = last, before, nodes, nregs
+	al.last, al.before, al.nodes, al.nregs, al.order = last, before, nodes, nregs, order[:min(no, n)]
+	if no > n {
+		// More than n, a register defined more than once: the webs are
+		// sorted (al.order says nothing).
+		al.order = al.order[:0]
+	}
 	return clobbers
 }
 
@@ -1695,6 +1767,12 @@ func (al *Allocator) layoutRanges() {
 		webs[v] = al.single(VReg(v))
 	}
 	al.nodes = nodes[:0]
+}
+
+// posOf is a register and a position.
+type posOf struct {
+	v  VReg
+	at int32
 }
 
 // rnode is a range of a register's found before its last (walkRanges), and

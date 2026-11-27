@@ -279,6 +279,10 @@ type Config struct {
 	// tests that compare it with keeping the range found last apart and
 	// laying the ranges out with the webs made (walkRanges, layoutRanges).
 	rangeLists bool
+	// sortList has the webs listed in order of their starts by a sort,
+	// for the tests that compare it with listing them from the order in
+	// which the ranges' walk met their definitions.
+	sortList bool
 	// plainLists has the scan read every web on its active and inactive
 	// lists at every position, for the tests that compare it with reading
 	// each only where its entry says it may have changed.
