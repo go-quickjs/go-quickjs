@@ -1445,7 +1445,12 @@ func regConstOperand(p *ir.Program, pc, slot int) (float64, bool) {
 // kept, by register pc, in what the function's code learned (regLearned),
 // across its compiles.
 func (f *jitRegFeedback) Literal(pc int) (ssa.LiteralSite, bool) {
-	l := f.literalAt(pc)
+	return f.literalSite(f.literalAt(pc))
+}
+
+// literalSite is Literal's answer of l, a literal found or made
+// (literalOf), what the code keeps of it appended to f's keep.
+func (f *jitRegFeedback) literalSite(l *jitLiteral) (ssa.LiteralSite, bool) {
 	if l == nil {
 		return ssa.LiteralSite{}, false
 	}
@@ -1541,11 +1546,20 @@ func (f *jitRegFeedback) regLiteralAt(rpc int, w bytecode.RInstr) *abi.ObjectPoo
 // instruction pc, an ObjectLiteral or an ArrayLiteral, made if it has none.
 func (f *jitRegFeedback) literalAt(pc int) *jitLiteral {
 	w, op, ok := f.at(pc)
-	e, cl, r := f.fb.e, f.fb.cl, f.fb.r
-	if !ok || e == nil || cl == nil || op != ir.ObjectLiteral && op != ir.ArrayLiteral {
+	if !ok || op != ir.ObjectLiteral && op != ir.ArrayLiteral {
 		return nil
 	}
-	rpc := int(f.p.Origin[pc])
+	return f.literalOf(int(f.p.Origin[pc]), w)
+}
+
+// literalOf is literalAt's literal of the register instruction w at
+// register pc rpc, of the register code alone: the snapshot asks it so
+// (jit_snapliteral.go).
+func (f *jitRegFeedback) literalOf(rpc int, w bytecode.RInstr) *jitLiteral {
+	e, cl, r := f.fb.e, f.fb.cl, f.fb.r
+	if e == nil || cl == nil || rpc >= len(f.rc.Code) {
+		return nil
+	}
 	for i := range e.literals {
 		if int(e.literals[i].pc) == rpc && e.literals[i].fn == cl.fn {
 			return &e.literals[i]
@@ -1592,7 +1606,7 @@ func (f *jitRegFeedback) literalAt(pc int) *jitLiteral {
 		}
 	case bytecode.RLit:
 		// regexp_lit's literal (compile's regexpLit).
-		if consts, k := regConsts(cl.fn, f.rc), int(w.C()); f.regLitFed(pc) && k < len(consts) && consts[k].Kind == bytecode.ConstRegExp {
+		if consts, k := regConsts(cl.fn, f.rc), int(w.C()); f.regLitFedAt(rpc) && k < len(consts) && consts[k].Kind == bytecode.ConstRegExp {
 			return r.jitRegExpLiteral(e, cl, rpc, &consts[k])
 		}
 	case bytecode.RCallMW:
@@ -1669,8 +1683,7 @@ func (r *Runtime) jitRegSharedLiteral(e *jitEntry, cl *closure, rc *bytecode.Reg
 // transition no object has taken yet.
 func (f *jitRegFeedback) Define(pc int) (*ssa.PropertyAdd, bool) {
 	w, op, ok := f.at(pc)
-	cl := f.fb.cl
-	if !ok || op != ir.FieldDefine || w.Op() != bytecode.RNewObjectLit || cl == nil {
+	if !ok || op != ir.FieldDefine || w.Op() != bytecode.RNewObjectLit {
 		return nil, false
 	}
 	// The literal's object, the origin's first instruction, and the field's
@@ -1679,12 +1692,26 @@ func (f *jitRegFeedback) Define(pc int) (*ssa.PropertyAdd, bool) {
 	for first > 0 && f.p.Origin[first-1] == f.p.Origin[pc] {
 		first--
 	}
-	l := f.literalAt(first)
+	if f.p.Code[first].Op != ir.ObjectLiteral {
+		return nil, false
+	}
+	return f.defineAt(int(f.p.Origin[pc]), w, pc-first-1)
+}
+
+// defineAt is Define's answer for field i of the object literal of the
+// register instruction w at register pc rpc, of the register code alone:
+// the snapshot asks it so (jit_snapliteral.go).
+func (f *jitRegFeedback) defineAt(rpc int, w bytecode.RInstr, i int) (*ssa.PropertyAdd, bool) {
+	cl := f.fb.cl
+	if cl == nil || w.Op() != bytecode.RNewObjectLit {
+		return nil, false
+	}
+	l := f.literalOf(rpc, w)
 	if l == nil || l.root == nil {
 		return nil, false
 	}
-	keys := f.rc.ObjKeys[f.rc.Aux[f.p.Origin[pc]]]
-	s, key, ok := regLiteralField(cl, keys, l.root, pc-first-1)
+	keys := f.rc.ObjKeys[f.rc.Aux[rpc]]
+	s, key, ok := regLiteralField(cl, keys, l.root, i)
 	if !ok {
 		return nil, false
 	}

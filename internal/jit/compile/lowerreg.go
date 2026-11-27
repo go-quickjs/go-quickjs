@@ -1344,7 +1344,7 @@ func (l *regLowering) lower(pc int) {
 	case bytecode.RNewObject:
 		l.emit(ir.Instruction{Op: ir.ObjectLiteral, Dest: int(a)}, false)
 	case bytecode.RNewArray:
-		if int(c) > ir.MaxArrayLiteral {
+		if !regArrayFits(int(c)) {
 			host()
 			break
 		}
@@ -1690,14 +1690,38 @@ func (l *regLowering) lower(pc int) {
 	}
 }
 
-// constArray lowers new_array_k's literal of the constants lit to dest:
-// each loaded to a scratch slot, the literal made over them (ArrayLiteral),
-// its result copied out. It reports false, lowering nothing, for a literal
-// longer than an ArrayLiteral takes or of a constant other than a number,
-// a string or a BigInt.
-func (l *regLowering) constArray(dest int, lit []bytecode.LitElem) bool {
-	consts := l.fn.Constants
-	if len(lit) > ir.MaxArrayLiteral {
+// RegArrayLiteral reports whether the lowering makes the array literal of
+// the register instruction at register pc rpc of rc, fn's register code --
+// new_array's, new_array_k's -- natively, an ir.ArrayLiteral, as far as the
+// instruction says: one of no more elements than an ArrayLiteral takes,
+// new_array_k's of constants that are numbers, strings or BigInts. The
+// lowering decides so by it; any other is Go's.
+func RegArrayLiteral(rc *bytecode.RegCode, fn *bytecode.Function, rpc int) bool {
+	if rc == nil || rpc < 0 || rpc >= len(rc.Code) {
+		return false
+	}
+	w := rc.Code[rpc]
+	switch w.Op() {
+	case bytecode.RNewArray:
+		return regArrayFits(int(w.C()))
+	case bytecode.RNewArrayK:
+		if rpc >= len(rc.Aux) || int(rc.Aux[rpc]) >= len(rc.Literals) {
+			return false
+		}
+		return regConstArrayFits(regView(rc, fn).Constants, rc.Literals[rc.Aux[rpc]])
+	}
+	return false
+}
+
+// regArrayFits reports whether an array literal of n elements is an
+// ir.ArrayLiteral's.
+func regArrayFits(n int) bool { return n <= ir.MaxArrayLiteral }
+
+// regConstArrayFits reports whether new_array_k's literal of the
+// constants lit, of consts, is an ir.ArrayLiteral's: no longer than one
+// takes, each constant a number, a string or a BigInt.
+func regConstArrayFits(consts []bytecode.Constant, lit []bytecode.LitElem) bool {
+	if !regArrayFits(len(lit)) {
 		return false
 	}
 	for _, x := range lit {
@@ -1712,6 +1736,19 @@ func (l *regLowering) constArray(dest int, lit []bytecode.LitElem) bool {
 		default:
 			return false
 		}
+	}
+	return true
+}
+
+// constArray lowers new_array_k's literal of the constants lit to dest:
+// each loaded to a scratch slot, the literal made over them (ArrayLiteral),
+// its result copied out. It reports false, lowering nothing, for a literal
+// longer than an ArrayLiteral takes or of a constant other than a number,
+// a string or a BigInt.
+func (l *regLowering) constArray(dest int, lit []bytecode.LitElem) bool {
+	consts := l.fn.Constants
+	if !regConstArrayFits(consts, lit) {
+		return false
 	}
 	base := l.scratch + l.used
 	for range lit {

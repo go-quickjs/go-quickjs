@@ -102,7 +102,7 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 	r.jitState().unavailable = false
 	compared, functions := 0, 0
 	unbound := map[jitSnapMethod]int{}
-	typedMissed := 0
+	typedMissed, litMissed := 0, 0
 	for _, cl := range cls {
 		c := r.regOf(cl)
 		if c == nil {
@@ -174,6 +174,20 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 				}
 			}
 			typedMissed += s.d.typed.missed
+			// Literal's and Define's answers asked by register pc
+			// (gatherLiteral) at no PC, and their PCs no register pc's
+			// asking had.
+			for _, a := range s.d.lits.lits {
+				if !a.bound {
+					unbound[snapLiteral]++
+				}
+			}
+			for _, a := range s.d.lits.defs {
+				if !a.bound {
+					unbound[snapDefine]++
+				}
+			}
+			litMissed += s.d.lits.missed
 			// InstanceOf asked by register pc (gatherInstanceOf) at no PC.
 			for _, a := range s.d.inst.asked {
 				if !a.bound {
@@ -256,4 +270,5 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 	t.Logf("asked by register pc at no PC: %d InstanceOf", unbound[snapInstanceOf])
 	t.Logf("gathered by register pc at no PC: %d KeyedStore", unbound[snapKeyedStore])
 	t.Logf("TypedKind: cells made by register pc at no PC %d, PCs asked at no register pc %d", unbound[snapTypedKind], typedMissed)
+	t.Logf("literals: asked by register pc at no PC: %d Literal, %d Define; literal PCs asked at no register pc %d", unbound[snapLiteral], unbound[snapDefine], litMissed)
 }
