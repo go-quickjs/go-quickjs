@@ -68,17 +68,109 @@ func (r *Runtime) jitRegLower(cl *closure, rc *bytecode.RegCode, kind jitLowerKi
 		if !ok {
 			got = jitRegLowerKinds(rc, cl.fn, kind, h)
 		}
-		n := l.footprint()
-		for k := range got.done {
-			if got.done[k] && !l.done[k] {
-				l.progs[k], l.errs[k], l.done[k] = got.progs[k], got.errs[k], true
-			}
-		}
-		n = l.footprint() - n
-		l.bytes += n
-		s.lowerBytes += n
+		s.regKeepLowered(l, &got)
 	}
 	return l.progs[kind], l.errs[kind]
+}
+
+// regKeepLowered keeps in l, a function's lowering (regLowering), what got
+// lowered of the kinds l has none of, made of the function's register code
+// with l's hints, and counts it in what the JIT holds once for each program
+// (jitLowering's footprint): a lowering made on the runtime's goroutine
+// (jitRegLower), taken of the workers' ahead (regTakeAhead), or made on a
+// worker for a snapshot's derivation and kept at the install
+// (regKeepLoweredAt). It reports whether it kept any.
+func (s *jitState) regKeepLowered(l *jitLowering, got *jitLowered) bool {
+	n := l.footprint()
+	kept := false
+	for k := range got.done {
+		if got.done[k] && !l.done[k] {
+			l.progs[k], l.errs[k], l.done[k] = got.progs[k], got.errs[k], true
+			kept = true
+		}
+	}
+	n = l.footprint() - n
+	l.bytes += n
+	s.lowerBytes += n
+	return kept
+}
+
+// regKeepLoweredAt is regKeepLowered for cl's function, its register code
+// rc, of got lowered on a worker with hints h (jitRegHintsNow's, copied as
+// they were) at the install of the compile that lowered it there: kept
+// where the hints taken now (jitRegLowering) are h still, the kinds the
+// function's lowering has none of -- one lowered meanwhile on the
+// runtime's goroutine stays -- and nothing kept where they have grown
+// since, which the next ask lowers anew.
+func (r *Runtime) regKeepLoweredAt(cl *closure, rc *bytecode.RegCode, h *jitcompile.Hints, got *jitLowered) bool {
+	_, l, now := r.jitRegLowering(cl, rc)
+	if l == nil || !jitHintsSame(&now, h) {
+		return false
+	}
+	return r.jit.regKeepLowered(l, got)
+}
+
+// jitRegHintsCopy is the hints cl's function's register code rc would be
+// lowered with now -- what jitRegLowering would take, KeepParams among
+// them, taken by the same code (jitHintsTake) -- in a copy of their own,
+// the function's key, and its lowering's programs (cached) where they were
+// lowered with those hints, nil where not: nothing of the runtime's
+// written -- no state made for the function, nothing lowered again or
+// anew -- for a snapshot's gather to hand a worker.
+func (r *Runtime) jitRegHintsCopy(cl *closure, rc *bytecode.RegCode) (key jitKey, h jitcompile.Hints, cached *jitLowered) {
+	h.KeepParams = r.nodeQuirks && !cl.fn.Strict
+	s := r.jit
+	if s == nil || rc == nil || rc != cl.fn.RegCompiled() {
+		return jitKey{}, h, nil
+	}
+	key = r.jitRegKeyOf(cl)
+	if e := s.regLearned[key]; e != nil {
+		x := &e.regHints
+		h.StringAdds, h.ElementReads = slices.Clone(x.StringAdds), slices.Clone(x.ElementReads)
+		h.StringReads, h.WholeOps = slices.Clone(x.StringReads), slices.Clone(x.WholeOps)
+	}
+	jitHintsTake(&h, cl, rc)
+	if l := s.regLowered[key]; l != nil {
+		lh := l.hints
+		lh.KeepParams = h.KeepParams
+		if jitHintsSame(&lh, &h) {
+			cached = &jitLowered{done: l.done, progs: l.progs, errs: l.errs}
+		}
+	}
+	return key, h, cached
+}
+
+// jitHintsTake takes into h what the interpreter has met since of cl's
+// function's register code rc: the additions that met a string, its marks
+// (regStringAddOf), and what its operand lattice met (jitLatticeHints),
+// each pc appended once, in order: into what the function learned
+// (jitRegLowering), or into a copy (jitRegHintsCopy).
+func jitHintsTake(h *jitcompile.Hints, cl *closure, rc *bytecode.RegCode) {
+	if cl.reg == nil || cl.reg.rc != rc {
+		return
+	}
+	if marks := cl.reg.stringAdds.Load(); marks != nil {
+		for i := range *marks {
+			for word := (*marks)[i].Load(); word != 0; word &= word - 1 {
+				pc := int32(i*32 + bits.TrailingZeros32(word))
+				if !slices.Contains(h.StringAdds, pc) {
+					h.StringAdds = append(h.StringAdds, pc)
+				}
+			}
+		}
+	}
+	if cl.jitRegOps != nil {
+		// What the operand lattice met, taken as the marks are: an
+		// addition that met a string Go's, an operator that met an object
+		// run whole, from the first lowering on.
+		jitLatticeHints(h, rc, cl.jitRegOps)
+	}
+}
+
+// jitHintsTaken reports whether jitHintsTake has anything of cl's to take
+// for its register code rc: marks or a lattice.
+func jitHintsTaken(cl *closure, rc *bytecode.RegCode) bool {
+	return cl.reg != nil && cl.reg.rc == rc && (cl.reg.stringAdds.Load() != nil || cl.jitRegOps != nil)
 }
 
 // jitRegLowering is the register lowering of cl's function, its key key,
@@ -101,28 +193,10 @@ func (r *Runtime) jitRegLowering(cl *closure, rc *bytecode.RegCode) (jitKey, *ji
 		}
 		s.hintsTaken = append(s.hintsTaken, cl)
 	}
-	var marks *[]atomic.Uint32
-	if cl.reg != nil && cl.reg.rc == rc {
-		marks = cl.reg.stringAdds.Load()
-	}
-	if marks != nil {
+	if jitHintsTaken(cl, rc) {
 		// Take interpreter feedback before asking for a cached lowering:
 		// new hints invalidate it, including an inlined callee's.
-		learned := s.regLearnedOf(key)
-		for i := range *marks {
-			for word := (*marks)[i].Load(); word != 0; word &= word - 1 {
-				pc := int32(i*32 + bits.TrailingZeros32(word))
-				if !slices.Contains(learned.regHints.StringAdds, pc) {
-					learned.regHints.StringAdds = append(learned.regHints.StringAdds, pc)
-				}
-			}
-		}
-	}
-	if cl.reg != nil && cl.reg.rc == rc && cl.jitRegOps != nil {
-		// What the operand lattice met, taken as the marks are: an
-		// addition that met a string Go's, an operator that met an object
-		// run whole, from the first lowering on.
-		jitLatticeHints(&s.regLearnedOf(key).regHints, rc, cl.jitRegOps)
+		jitHintsTake(&s.regLearnedOf(key).regHints, cl, rc)
 	}
 	return r.jitRegLowered(key, cl)
 }

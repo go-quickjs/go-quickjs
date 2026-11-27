@@ -325,3 +325,78 @@ func TestJITLowerAheadHintsAtTheAskThatGoesOn(t *testing.T) {
 		t.Fatalf("the program compiled is not the goroutine's lowering with the mark (%v)", err)
 	}
 }
+
+// A lowering made on a worker is kept at its install (regKeepLoweredAt)
+// as one made on the runtime's goroutine is: its programs for the kinds
+// the function's lowering has none of, counted once each in what the JIT
+// holds; nothing kept a second time, nor where the function's hints have
+// grown since it was made. The hints it was made with are taken at the
+// gather by jitRegHintsCopy, which writes nothing: no state made for the
+// function, its lowerings untouched, and once kept, the programs are what
+// it answers with.
+func TestJITKeepLoweredAt(t *testing.T) {
+	t.Parallel()
+	r := newTestRuntime(t, Config{JIT: true})
+	t.Cleanup(r.Close)
+	// Called once, made its register code, and compiled never.
+	r.SetJITWarmUp(60000, 60000)
+	if _, err := r.Run(compileForTest(t, `function loop(n){let s=0;for(let i=0;i<n;i++)s=(s+i)|0;return s}; loop(1)`)); err != nil {
+		t.Fatal(err)
+	}
+	cl := jitGlobalClosureForTest(r, "loop")
+	rc := cl.reg.rc
+	key := r.jitRegKeyOf(cl)
+	s := r.jitState()
+	learned, lowered, held := s.regLearned[key], s.regLowered[key], s.lowerBytes
+	if lowered != nil && lowered.done[jitLowerSSA] {
+		t.Fatal("loop lowered before the test")
+	}
+	// A mark the interpreter has made, not taken yet.
+	add := -1
+	for pc, w := range rc.Code {
+		switch w.Op() {
+		case bytecode.RAdd, bytecode.RAddI, bytecode.RAddI32, bytecode.RAddII32:
+			add = pc
+		}
+	}
+	if add < 0 {
+		t.Fatalf("no addition in loop's register code:\n%s", rc)
+	}
+	regStringAddOf(cl.reg, add)
+	k, h, cached := r.jitRegHintsCopy(cl, rc)
+	if k != key || cached != nil || !slices.Contains(h.StringAdds, int32(add)) {
+		t.Fatalf("key %v, cached %v, hints %+v: want loop's, none cached, the mark taken into the copy", k, cached, h)
+	}
+	if s.regLearned[key] != learned || s.regLowered[key] != lowered || s.lowerBytes != held ||
+		learned != nil && slices.Contains(learned.regHints.StringAdds, int32(add)) {
+		t.Fatal("the copy wrote the runtime's state")
+	}
+	got := jitRegLowerKinds(rc, cl.fn, jitLowerSSA, h)
+	if !r.regKeepLoweredAt(cl, rc, &h, &got) {
+		t.Fatal("not kept")
+	}
+	l := s.regLowered[key]
+	if l == nil || l.progs[jitLowerSSA] != got.progs[jitLowerSSA] || l.progs[jitLowerInline] != got.progs[jitLowerSSA] {
+		t.Fatalf("not kept: %+v", l)
+	}
+	n := got.progs[jitLowerSSA].Footprint()
+	if lowered == nil {
+		// And the lowering's own, made for it.
+		n += jitLoweringFixed
+	}
+	if s.lowerBytes-held != n {
+		t.Fatalf("counted %d, want the program's once, %d", s.lowerBytes-held, n)
+	}
+	if r.regKeepLoweredAt(cl, rc, &h, &got) || s.lowerBytes-held != n {
+		t.Fatal("kept again")
+	}
+	if _, h2, cached := r.jitRegHintsCopy(cl, rc); cached == nil || cached.progs[jitLowerSSA] != got.progs[jitLowerSSA] || !jitHintsSame(&h2, &h) {
+		t.Fatal("the kept programs are not the copy's answer")
+	}
+	// Hints grown since: nothing kept.
+	s.relower(l)
+	s.regLearnedOf(key).regHints.WholeOps = append(s.regLearnedOf(key).regHints.WholeOps, 1)
+	if r.regKeepLoweredAt(cl, rc, &h, &got) {
+		t.Fatal("kept, made with hints the function has outgrown")
+	}
+}
