@@ -158,6 +158,12 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 			if s.d.native.unknownUnasked {
 				unbound[snapOperands]++
 			}
+			// InstanceOf asked by register pc (gatherInstanceOf) at no PC.
+			for _, a := range s.d.inst.asked {
+				if !a.bound {
+					unbound[snapInstanceOf]++
+				}
+			}
 			// What the calls' gather made by register pc (jitTargetsBind)
 			// where no PC asks NativeCalls: a pool made early.
 			tg := &s.d.calls.tg
@@ -231,4 +237,5 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 	t.Logf("globals: asked by register pc at no PC: %d Global, %d GenSteps; closures' literals made by register pc unused: %d", unbound[snapGlobal], unbound[snapGenSteps], unbound[snapClosure])
 	t.Logf("%d functions, %d questions compared; asked by register pc at no PC: %d Accessor, %d StringProperty; made by register pc at no PC: %d NativeCalls, %d Operands",
 		functions, compared, unbound[snapAccessor], unbound[snapStringProperty], unbound[snapNativeCalls], unbound[snapOperands])
+	t.Logf("asked by register pc at no PC: %d InstanceOf", unbound[snapInstanceOf])
 }

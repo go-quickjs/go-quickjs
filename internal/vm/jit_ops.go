@@ -82,10 +82,20 @@ func (f *jitRegFeedback) regChainValue(rpc, reg, n int) (Value, bool) {
 // Symbol.hasInstance the realm's.
 func (f *jitRegFeedback) InstanceOf(pc int) (ssa.InstanceOfSite, bool) {
 	w, op, ok := f.at(pc)
-	if !ok || op != ir.Host || w.Op() != bytecode.RInstanceOf && w.Op() != bytecode.RInstanceOfNext || f.fb.r.hasInstanceFn == nil {
+	if !ok || op != ir.Host {
 		return ssa.InstanceOfSite{}, false
 	}
-	v, ok := f.regDefined(int(f.p.Origin[pc]), int(w.C()))
+	return f.instanceOfAt(int(f.p.Origin[pc]), w)
+}
+
+// instanceOfAt is InstanceOf's answer for the register instruction w at
+// register pc rpc, an instanceof's, of the register code alone: the
+// snapshot asks it so, by register pc (jit_snapinstanceof.go).
+func (f *jitRegFeedback) instanceOfAt(rpc int, w bytecode.RInstr) (ssa.InstanceOfSite, bool) {
+	if w.Op() != bytecode.RInstanceOf && w.Op() != bytecode.RInstanceOfNext || f.fb.r.hasInstanceFn == nil {
+		return ssa.InstanceOfSite{}, false
+	}
+	v, ok := f.regDefined(rpc, int(w.C()))
 	if !ok || !v.IsObject() {
 		return ssa.InstanceOfSite{}, false
 	}
