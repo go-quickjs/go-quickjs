@@ -863,14 +863,12 @@ func (s *jitState) regLearnedOf(key jitKey) *jitEntry {
 // which its finish adopts as the function's (regLearnedAdopt) where the
 // compile takes the callee.
 func (s *jitState) jitLearnedScratch(key jitKey) *jitEntry {
-	// One allocation for both.
-	x := &struct {
-		e jitEntry
-		l jitLearned
-	}{}
-	x.l.reg, x.l.regLink = true, s.regLinks[key]
-	x.e.jitLearned = &x.l
-	return &x.e
+	// Two allocations, never one: once its code is let go of, the entry,
+	// adopted as the function's, outlives what it learned, which regForget
+	// replaces with a copy that holds no object. Made in one allocation,
+	// the entry kept the learned state it replaced alive, and with it the
+	// closures, shapes and objects of a realm let go of.
+	return &jitEntry{jitLearned: &jitLearned{reg: true, regLink: s.regLinks[key]}}
 }
 
 // regLearnedAdopt keeps l, made apart (jitLearnedScratch) or anew, as what
