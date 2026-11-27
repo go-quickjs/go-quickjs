@@ -465,11 +465,12 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 		for j := range b.Insts {
 			in := &b.Insts[j]
+			regs, nu := in.Regs, int(in.NUses)
 			if in.Hint != None && in.NDefs > 0 && !al.hintPass {
-				hinted = append(hinted, hintAt{int32(i), in.Regs[in.NUses], in.Hint})
+				hinted = append(hinted, hintAt{int32(i), regs[nu], in.Hint})
 			}
 			if !al.markPass {
-				for _, u := range in.Uses() {
+				for _, u := range regs[:nu] {
 					if !alloc(u) {
 						continue
 					}
@@ -482,7 +483,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 					}
 				}
 			}
-			for _, d := range in.Defs() {
+			for _, d := range regs[nu : nu+int(in.NDefs)] {
 				if alloc(d) {
 					define(d, i, j)
 				}
@@ -638,14 +639,15 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		for j := len(b.Insts) - 1; j >= 0; j-- {
 			in := &b.Insts[j]
 			u := start + 2 + 2*int32(j)
-			for _, d := range in.Defs() {
+			regs, nu, nd := in.Regs, int(in.NUses), int(in.NUses)+int(in.NDefs)
+			for _, d := range regs[nu:nd] {
 				if alloc(d) {
 					weight[d] += w
 					defW[d] += w
 					def(d, u+1)
 				}
 			}
-			for _, v := range in.Uses() {
+			for _, v := range regs[:nu] {
 				if !alloc(v) {
 					continue
 				}
@@ -656,7 +658,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 					opened = append(opened, v)
 				}
 			}
-			for _, t := range in.Temps() {
+			for _, t := range regs[nd:] {
 				// Live from the reads to the writes, and heavier than
 				// anything it meets, which gives way to it.
 				if alloc(t) {
@@ -1143,7 +1145,10 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 					keepIn = append(keepIn, inactiveEntry(a))
 				}
 			}
-			inactive = append(keepIn, back...)
+			inactive = keepIn
+			if len(back) > 0 {
+				inactive = append(inactive, back...)
+			}
 			al.back = back
 			used := cur.avoid
 			for _, e := range active {

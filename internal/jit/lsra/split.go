@@ -171,11 +171,12 @@ type evPair struct {
 func (al *Allocator) eventPass(pairs []evPair) []evPair {
 	f := al.f
 	webs := al.webs
+	cls := f.Class
 	// phiFree reports whether every argument of phi p is its web's.
 	phiFree := func(p *Phi) bool {
 		x := webs[p.Def]
 		for _, a := range p.Args {
-			if a >= 0 && f.Class[a] != NoClass && webs[a] != x {
+			if a >= 0 && cls[a] != NoClass && webs[a] != x {
 				return false
 			}
 		}
@@ -185,7 +186,7 @@ func (al *Allocator) eventPass(pairs []evPair) []evPair {
 		b := &f.Blocks[i]
 		start := al.starts[i]
 		for k := range b.Phis {
-			if d := b.Phis[k].Def; d >= 0 && f.Class[d] != NoClass {
+			if d := b.Phis[k].Def; d >= 0 && cls[d] != NoClass {
 				e := start<<2 | evDef
 				if phiFree(&b.Phis[k]) {
 					e |= evFree
@@ -193,23 +194,25 @@ func (al *Allocator) eventPass(pairs []evPair) []evPair {
 				pairs = append(pairs, evPair{d, e})
 			}
 		}
+		u := start + 2
 		for j := range b.Insts {
 			in := &b.Insts[j]
-			u := start + 2 + 2*int32(j)
-			for _, v := range in.Uses() {
-				if v >= 0 && f.Class[v] != NoClass {
+			regs, nu := in.Regs, int(in.NUses)
+			for _, v := range regs[:nu] {
+				if v >= 0 && cls[v] != NoClass {
 					pairs = append(pairs, evPair{v, u << 2})
 				}
 			}
-			for _, d := range in.Defs() {
-				if d >= 0 && f.Class[d] != NoClass {
+			for _, d := range regs[nu : nu+int(in.NDefs)] {
+				if d >= 0 && cls[d] != NoClass {
 					e := (u+1)<<2 | evDef
-					if webs[d] != nil && webs[d].calls {
+					if w := webs[d]; w != nil && w.calls {
 						e |= evFree
 					}
 					pairs = append(pairs, evPair{d, e})
 				}
 			}
+			u += 2
 		}
 		if !al.phiWalks {
 			for _, x := range al.edgeArgs[al.argOff[i]:al.argOff[i+1]] {
