@@ -316,6 +316,10 @@ func (q *jitCallCtx) callTargets(t *jitRegTargets, pc int, w bytecode.RInstr, ar
 	rpc := int32(q.rpcOf(pc))
 	newW := w.Op() == bytecode.RNewW
 	calls := src.calls(int(w.C()))
+	// The learning's native calls at the call, found by one pass over
+	// the list, which each question of them below reads (at).
+	var at jitLearnedAtCall
+	at.of(l, rpc)
 	// A site whose cache the interpreter has not filled, or not made yet
 	// (jitCallUnfilled).
 	unfilled := !newW && w.Op() != bytecode.RApplyArgs && uint(w.C()) >= uint(len(calls))
@@ -325,7 +329,7 @@ func (q *jitCallCtx) callTargets(t *jitRegTargets, pc int, w bytecode.RInstr, ar
 			// (jitRegMadeBy).
 			byCode := jitRegMadeByIn(q.cl, e.cl, calls)
 			q.addTarget(t, pc, argc, method, e.callee, e.cl, e.rc, nil, nil, byCode, false)
-			if t.n != 0 && l != nil && !jitRegCallKnown(l, rpc, e.callee) {
+			if t.n != 0 && l != nil && !at.has(func(x *jitInline) bool { return x.obj == e.callee }) {
 				l.nativeCalls = append(l.nativeCalls, jitInline{pc: rpc, cl: e.cl, obj: e.callee, byCode: byCode})
 			}
 		} else if e.kind&regCallThrough != 0 && method && argc >= 1 && e.cl != nil && e.rc != nil && l != nil {
@@ -336,7 +340,7 @@ func (q *jitCallCtx) callTargets(t *jitRegTargets, pc int, w bytecode.RInstr, ar
 			// call's own (callThrough) taught.
 			n := t.n
 			q.addTarget(t, pc, argc, method, e.callee, e.cl, e.rc, nil, nil, false, true)
-			if t.n > n && !slices.ContainsFunc(l.nativeCalls, func(x jitInline) bool { return x.pc == rpc && x.obj == e.callee && x.via }) {
+			if t.n > n && !at.has(func(x *jitInline) bool { return x.obj == e.callee && x.via }) {
 				l.nativeCalls = append(l.nativeCalls, jitInline{pc: rpc, cl: e.cl, obj: e.callee, via: true})
 			}
 		} else {
@@ -346,7 +350,7 @@ func (q *jitCallCtx) callTargets(t *jitRegTargets, pc int, w bytecode.RInstr, ar
 	if q.rc != nil && q.rc.Typed {
 		q.mustLive().regTableTargets(t, pc, w, rpc, argc, method)
 	}
-	if unfilled && method && l != nil && argc >= 1 && !slices.ContainsFunc(l.nativeCalls, func(x jitInline) bool { return x.pc == rpc }) {
+	if unfilled && method && l != nil && argc >= 1 && !at.any() {
 		// G.call(x, ...) the interpreter has not made yet, G the binding the
 		// method's read read -- _super.call(this, ...) of a class compiled
 		// to ES5 -- called natively through Function.prototype.call from
@@ -360,7 +364,7 @@ func (q *jitCallCtx) callTargets(t *jitRegTargets, pc int, w bytecode.RInstr, ar
 			}
 		}
 	}
-	if unfilled && !method && l != nil && !slices.ContainsFunc(l.nativeCalls, func(x jitInline) bool { return x.pc == rpc }) &&
+	if unfilled && !method && l != nil && !at.any() &&
 		!slices.ContainsFunc(l.inlines, func(x jitInline) bool { return x.pc == rpc }) {
 		// A plain call the interpreter has not made yet, of the function
 		// the binding read before it holds now -- a global's, a captured
@@ -394,12 +398,12 @@ func (q *jitCallCtx) callTargets(t *jitRegTargets, pc int, w bytecode.RInstr, ar
 			}
 			n := t.n
 			q.addTarget(t, pc, argc, method, c.o, c.cl, rc, nil, nil, false, false)
-			if t.n > n && !jitRegCallKnown(l, rpc, c.o) {
+			if t.n > n && !at.has(func(x *jitInline) bool { return x.obj == c.o }) {
 				l.nativeCalls = append(l.nativeCalls, jitInline{pc: rpc, cl: c.cl, obj: c.o})
 			}
 		}
 	}
-	if newW && l != nil && !slices.ContainsFunc(l.nativeCalls, func(x jitInline) bool { return x.pc == rpc && x.pool != nil }) {
+	if newW && l != nil && !at.has(func(x *jitInline) bool { return x.pool != nil }) {
 		// A construction no call of Go has taught the code yet, of the
 		// function the binding read before it holds now
 		// (jitRegSeedConstruct): its objects from a pool, from the first
@@ -410,18 +414,87 @@ func (q *jitCallCtx) callTargets(t *jitRegTargets, pc int, w bytecode.RInstr, ar
 		q.src.seed(int(rpc), w, argc)
 	}
 	if l != nil {
-		for _, x := range l.nativeCalls {
+		at.sync()
+		for k := 0; k < at.n; k++ {
 			// Not one of no object: a closure the code made and called,
 			// inlined where it is not made (madeInline), whose inlining
 			// left native code too often (jitInlineLeft) -- made and
 			// called from then on, its call's shape no longer given
 			// (CallShape's notInline). Asked for a native call of a nil
 			// object, the compile had panicked.
-			if x.pc == rpc && (x.pool != nil) == newW && !x.forEach && x.cl != nil && x.obj != nil && x.active == nil {
+			if x := at.entry(k); (x.pool != nil) == newW && !x.forEach && x.cl != nil && x.obj != nil && x.active == nil {
 				q.addTarget(t, pc, argc, method, x.obj, x.cl, src.reg(x.cl), x.pool, x.parent, x.byCode && !x.via, x.via)
 			}
 		}
 	}
+}
+
+// jitLearnedAtCall is the entries of a learning's native calls at the call of
+// one register pc, by their index in the list, in its order: found by one
+// pass over the list, and kept up with its appends (sync), where each
+// question of them had passed over the whole list -- a call's targets, of
+// a function that learned some forty native calls, passed over them five
+// times, each entry copied. The first few are held in place, so that it
+// stays on its asker's stack.
+type jitLearnedAtCall struct {
+	l       *jitEntry
+	rpc     int32
+	scanned int
+	n       int
+	first   [8]int32
+	more    []int32
+}
+
+// of makes a the entries of l's native calls at register pc rpc; l may be
+// nil, of none.
+func (a *jitLearnedAtCall) of(l *jitEntry, rpc int32) {
+	a.l, a.rpc = l, rpc
+	a.sync()
+}
+
+// sync takes in the entries appended to the list since a last looked.
+func (a *jitLearnedAtCall) sync() {
+	if a.l == nil {
+		return
+	}
+	list := a.l.nativeCalls
+	for i := a.scanned; i < len(list); i++ {
+		if list[i].pc != a.rpc {
+			continue
+		}
+		if a.n < len(a.first) {
+			a.first[a.n] = int32(i)
+		} else {
+			a.more = append(a.more, int32(i))
+		}
+		a.n++
+	}
+	a.scanned = len(list)
+}
+
+// entry is the k-th entry at the call.
+func (a *jitLearnedAtCall) entry(k int) *jitInline {
+	if k < len(a.first) {
+		return &a.l.nativeCalls[a.first[k]]
+	}
+	return &a.l.nativeCalls[a.more[k-len(a.first)]]
+}
+
+// any reports whether the list has an entry at the call.
+func (a *jitLearnedAtCall) any() bool {
+	a.sync()
+	return a.n != 0
+}
+
+// has reports whether the list has an entry at the call that f holds of.
+func (a *jitLearnedAtCall) has(f func(x *jitInline) bool) bool {
+	a.sync()
+	for k := 0; k < a.n; k++ {
+		if f(a.entry(k)) {
+			return true
+		}
+	}
+	return false
 }
 
 // regAddTarget adds to t the native call of o, cl's, running rc, at the
