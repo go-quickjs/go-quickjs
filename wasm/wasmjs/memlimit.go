@@ -14,11 +14,20 @@ import (
 //
 // A runtime made with a memory limit measures its heap by walking it, and
 // what wasm holds is part of that heap: the bridge's budget charges the
-// runtime's meter as memories and tables are made and grown and as GC
-// objects are allocated, and the walk asks each wasm object it reaches
-// through the JS objects standing for them what it holds (vm.HostSized).
-// A memory or table grow past the limit fails as one that cannot be had
-// does; a GC allocation past it stops the script, as a JavaScript one does.
+// runtime's meter as memories and tables are made and grown, as GC objects
+// are allocated and as a call's first run of a function compiles its body
+// to register code, and the walk asks each wasm object it reaches through
+// the JS objects standing for them what it holds (vm.HostSized). A memory or
+// table grow past the limit fails as one that cannot be had does; a GC
+// allocation or a compile past it stops the script, as a JavaScript
+// allocation does.
+//
+// A module's code is shared by every instance of it, and by the runtimes
+// it is cloned to (clone.go), each of which compiles the bodies its calls
+// run first. A compile is charged to the runtime whose call made it, on
+// that runtime's goroutine; each runtime whose heap reaches the module or
+// an instance of it counts all of the module's register code, whichever
+// runtime compiled it, as it counts the module's bytes.
 
 // jsMeter is the runtime's meter, as the budget charges it.
 type jsMeter struct{ r *vm.Runtime }
@@ -61,13 +70,15 @@ func (s *funcSlot) MemoryFootprint(has func(unsafe.Pointer) bool) int64 {
 }
 
 // MemoryFootprint returns what the module holds: its copy of the module's
-// bytes, which its code, data and custom sections are ranges of, and the
-// records decoding made of the rest, once for each decoded module however
-// many objects stand for it. The register code its functions are compiled
-// to as they first run is not counted.
+// bytes, which its code, data and custom sections are ranges of, the
+// records decoding made of the rest, and the register code its functions
+// are compiled to as they first run, with their records
+// (engine.Code.MemoryFootprint), once for each compiled module however many
+// objects stand for it. Its instances count the code too, once.
 func (md *moduleData) MemoryFootprint(has func(unsafe.Pointer) bool) int64 {
 	m := md.m
-	size := int64(unsafe.Sizeof(moduleData{})) + int64(cap(md.builtins))*int64(unsafe.Sizeof(builtin(0)))
+	size := int64(unsafe.Sizeof(moduleData{})) + int64(cap(md.builtins))*int64(unsafe.Sizeof(builtin(0))) +
+		md.code.MemoryFootprint(has)
 	if m == nil || has(unsafe.Pointer(m)) {
 		return size
 	}

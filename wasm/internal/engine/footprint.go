@@ -57,14 +57,15 @@ func (f *Function) MemoryFootprint(has func(unsafe.Pointer) bool) int64 {
 	return int64(unsafe.Sizeof(Function{})) + f.Inst.MemoryFootprint(has)
 }
 
-// MemoryFootprint returns what the instance holds: its memories, tables,
-// globals and segments, the GC objects they reach, and the instances of the
-// functions it imported.
+// MemoryFootprint returns what the instance holds: its code's records and
+// register code (Code.MemoryFootprint), its memories, tables, globals and
+// segments, the GC objects they reach, and the instances of the functions it
+// imported.
 func (inst *Instance) MemoryFootprint(has func(unsafe.Pointer) bool) int64 {
 	if inst == nil || has(unsafe.Pointer(inst)) {
 		return 0
 	}
-	size := int64(unsafe.Sizeof(Instance{}))
+	size := int64(unsafe.Sizeof(Instance{})) + inst.Code.MemoryFootprint(has)
 	for _, m := range inst.Memories {
 		size += m.MemoryFootprint(has)
 	}
@@ -141,4 +142,60 @@ func refsFootprint(has func(unsafe.Pointer) bool, roots func(visit func(Ref))) i
 		size += objectSize(r, visit)
 	}
 	return size
+}
+
+// MemoryFootprint returns what the code holds past its module: the records
+// of the functions run so far and the register code of the bodies the
+// interpreter compiled at their first run, whichever runtime ran them.
+// Every walk that reaches the code counts it, once however many modules
+// and instances share it.
+func (c *Code) MemoryFootprint(has func(unsafe.Pointer) bool) int64 {
+	if c == nil || has(unsafe.Pointer(c)) {
+		return 0
+	}
+	return int64(unsafe.Sizeof(Code{})) + sliceBytes(c.fns) + c.held.Load()
+}
+
+// footprint returns what record p takes, with its register code.
+func (p *compiled) footprint() int64 {
+	return int64(unsafe.Sizeof(compiled{})+unsafe.Sizeof(fnJIT{})) +
+		sliceBytes(p.params) + sliceBytes(p.results) + p.reg.footprint()
+}
+
+// regLoopBytes is what an entry of a register code's loops takes in its map,
+// its key and value and its share of the map's groups.
+const regLoopBytes = 16
+
+// footprint returns what register code r takes, nil none.
+func (r *regCode) footprint() int64 {
+	if r == nil {
+		return 0
+	}
+	n := int64(unsafe.Sizeof(regCode{})) + sliceBytes(r.code) + sliceBytes(r.offs) +
+		sliceBytes(r.sites) + sliceBytes(r.tables) + sliceBytes(r.regions) + sliceBytes(r.gc) +
+		int64(len(r.loops))*regLoopBytes
+	for i := range r.sites {
+		n += sliceBytes(r.sites[i].args) + sliceBytes(r.sites[i].rets)
+	}
+	for _, t := range r.tables {
+		n += sliceBytes(t)
+	}
+	for i := range r.regions {
+		cl := r.regions[i].clauses
+		n += sliceBytes(cl)
+		for j := range cl {
+			n += sliceBytes(cl[j].vals)
+		}
+	}
+	for i := range r.gc {
+		g := &r.gc[i]
+		n += sliceBytes(g.ops) + sliceBytes(g.vals) + sliceBytes(g.types) + sliceBytes(g.natVals)
+	}
+	return n
+}
+
+// sliceBytes returns what the backing array of s takes.
+func sliceBytes[T any](s []T) int64 {
+	var zero T
+	return int64(cap(s)) * int64(unsafe.Sizeof(zero))
 }

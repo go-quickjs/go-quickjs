@@ -522,13 +522,28 @@ heap with what its WebAssembly holds in it.
   holds only once what is reachable is counted again, leaves native code
   for the engine to make it.
 - What a closed module held is given back once Go collects it.
+- `RuntimeConfig.WithMemoryLimit` counts nothing of a compiled module: its
+  bytes, what decoding made of them, and the register code its functions
+  are compiled to as they first run. The host compiled the module, which
+  bounds that code, and the code is made once for every instance of the
+  module and every runtime sharing it through a compilation cache, so it
+  is no instance's to pay for. Under `quickjs.WithMemoryLimit` the script
+  compiles its modules, and pays for them and their code, as below.
 - Under `quickjs.WithMemoryLimit`, the runtime's measurement of its heap asks
   each WebAssembly object it reaches what it holds, and a memory's buffer is
   counted by the memory's size, not the address space reserved for it. A
-  `WebAssembly.Module` counts its copy of the module's bytes and what
-  decoding made of them, once however many objects stand for the same
-  compiled module; the register code its functions are compiled to as
-  they first run is not counted. A `WebAssembly.Table` that does not fit stops the script, as an allocation of
+  `WebAssembly.Module` counts its copy of the module's bytes, what
+  decoding made of them, and the register code its functions are compiled
+  to as they first run, with their records, once however many objects --
+  Modules, their clones, Instances -- stand for the same compiled module.
+  That code can be many times the module's bytes -- some 25 times for a
+  body of calls -- and is charged as a call compiles it: a call whose
+  first runs of functions compile past the limit stops the script with
+  `ErrMemoryLimit`, as a GC allocation past it does. A module cloned to
+  another runtime shares its code: each runtime is charged for the bodies
+  its own calls compile, on its own goroutine, and each runtime's
+  measurement counts all of the module's code, whichever runtime compiled
+  it, as it counts the module's bytes. A `WebAssembly.Table` that does not fit stops the script, as an allocation of
   a size the script chose does. A shared memory another runtime can grow --
   one cloned to it, or one whose growable buffer was made, which can be --
   is no longer charged as it grows, since its grows run on that runtime's

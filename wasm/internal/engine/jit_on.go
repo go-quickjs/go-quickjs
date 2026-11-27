@@ -1627,7 +1627,7 @@ func (x *exec) jitTail(lv *jitLevel, fn *Function, ft *module.FuncType, f *exitF
 	// above the one Go entered.
 	depth := x.depth + int((ctx.RSP-lv.rsBase)/rsEntryBytes) - 1
 	if fn.Inst == lv.inst && fn.Host == nil && !x.nearDepthLimit(depth) {
-		cd := lv.inst.Code.get(fn.Index)
+		cd := lv.inst.Code.getIn(fn.Index, lv.inst)
 		start, rstart := f.top-len(f.l), f.rtop-len(f.r)
 		nchunk, rchunk := x.nchunks[lv.nc], x.rchunks[lv.rc]
 		if nat := lv.cj.native(lv.inst.Code, fn.Index, cd); nat != nil && start+cd.nslots <= len(nchunk) && rstart+cd.nativeRefSlots() <= len(rchunk) {

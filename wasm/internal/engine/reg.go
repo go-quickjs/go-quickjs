@@ -531,7 +531,7 @@ func rhCall(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 		regHostCall(l, f, fn, s)
 		return pc + 1
 	}
-	cd := fn.Inst.Code.get(fn.Index)
+	cd := fn.Inst.Code.getIn(fn.Index, fn.Inst)
 	nc, nsp, rc, rsp := x.nc, x.nsp, x.rc, x.rsp
 	nl, _, _ := x.takeNum(cd.nslots)
 	nr, _, _ := x.takeRef(cd.rslots)

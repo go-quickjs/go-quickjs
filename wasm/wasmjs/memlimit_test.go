@@ -3,6 +3,7 @@
 package wasmjs_test
 
 import (
+	"encoding/binary"
 	"errors"
 	"strings"
 	"testing"
@@ -161,5 +162,78 @@ func TestMemoryLimitCountsModules(t *testing.T) {
 	rt = newRuntime(t, quickjs.WithMemoryLimit(32<<20))
 	if v, err := rt.Eval(strings.Replace(script, "KEEP", "false", 1)); err != nil || v.String() != "0" {
 		t.Fatalf("letting the modules go: got %v, %v; want 0", v, err)
+	}
+}
+
+// manyCallsModule returns a module of a function g returning its argument,
+// n functions each passing their argument through g calls times, and an
+// export run passing its argument through each of them: register code some
+// 25 times the module's bytes, compiled as run first calls each.
+func manyCallsModule(n, calls int) []byte {
+	sec := func(b []byte, id byte, body []byte) []byte {
+		b = append(b, id)
+		b = binary.AppendUvarint(b, uint64(len(body)))
+		return append(b, body...)
+	}
+	fn := func(callees func(func(uint32))) []byte {
+		body := []byte{0}
+		callees(func(i uint32) {
+			body = append(body, 0x20, 0, 0x10)
+			body = binary.AppendUvarint(body, uint64(i))
+			body = append(body, 0x21, 0)
+		})
+		body = append(body, 0x20, 0, 0x0b)
+		return append(binary.AppendUvarint(nil, uint64(len(body))), body...)
+	}
+	b := []byte{0, 'a', 's', 'm', 1, 0, 0, 0}
+	b = sec(b, 1, []byte{1, 0x60, 1, 0x7f, 1, 0x7f})
+	funcs := binary.AppendUvarint(nil, uint64(n+2))
+	for range n + 2 {
+		funcs = append(funcs, 0)
+	}
+	b = sec(b, 3, funcs)
+	exp := []byte{1, 3, 'r', 'u', 'n', 0}
+	b = sec(b, 7, binary.AppendUvarint(exp, uint64(n+1)))
+	code := binary.AppendUvarint(nil, uint64(n+2))
+	code = append(code, fn(func(func(uint32)) {})...)
+	for range n {
+		code = append(code, fn(func(call func(uint32)) {
+			for range calls {
+				call(0)
+			}
+		})...)
+	}
+	code = append(code, fn(func(call func(uint32)) {
+		for i := range n {
+			call(uint32(i + 1))
+		}
+	})...)
+	return sec(b, 10, code)
+}
+
+// TestMemoryLimitCountsCode checks that the register code a module's
+// functions are compiled to as a call first runs them is charged as it is
+// compiled: a module of 1.2 MB whose one call compiles 31 MB of it, with
+// the functions' records, ran to its end under a limit of 16 MiB, which now
+// stops it as an allocation past the limit does. Under a limit it fits, it
+// runs.
+func TestMemoryLimitCountsCode(t *testing.T) {
+	bin := manyCallsModule(400, 500)
+	run := func(limit int64) error {
+		rt := newRuntime(t, quickjs.WithMemoryLimit(limit))
+		if err := rt.Global().Set("bytes", rt.NewArrayBuffer(bin, quickjs.CopyMemory)); err != nil {
+			t.Fatal(err)
+		}
+		v, err := rt.Eval(`new WebAssembly.Instance(new WebAssembly.Module(bytes)).exports.run(7)`)
+		if err == nil && v.String() != "7" {
+			t.Fatalf("run(7) = %v", v)
+		}
+		return err
+	}
+	if err := run(16 << 20); !errors.Is(err, quickjs.ErrMemoryLimit) {
+		t.Fatalf("compiling 31 MB of code under 16 MiB: got %v, want ErrMemoryLimit", err)
+	}
+	if err := run(128 << 20); err != nil {
+		t.Fatalf("under 128 MiB: %v", err)
 	}
 }

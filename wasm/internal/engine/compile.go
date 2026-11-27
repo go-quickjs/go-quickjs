@@ -49,6 +49,10 @@ type Code struct {
 	// test is what a test compiles and runs the code with, nil but in a
 	// test's (codeTest).
 	test *codeTest
+	// held is what the records of the functions run so far take, with the
+	// register code of the bodies compiled (compiled.footprint): what the
+	// code holds past the module, which its footprint counts.
+	held atomic.Int64
 }
 
 // codeTest is what a test compiles and runs a Code with in place of the
@@ -154,58 +158,86 @@ func newCompiled() *compiled {
 	return &p.c
 }
 
-// get returns function index's record, making it if there is none.
+// get returns function index's record, making it if there is none: for
+// the JIT's work in Go, which asks for the records of functions it runs
+// or has run, a body it compiles charged to no budget.
 func (c *Code) get(index uint32) *compiled {
 	if p := c.fns[index].Load(); p != nil {
 		return p
 	}
-	return c.first(index)
+	return c.first(index, nil)
 }
 
-// first makes function index's record at its first use: where native code
-// runs a function from its first call (nativeFirst) and validation bounded
-// its frame, the record of that frame alone, its body left to the
-// interpreter's first need of it; else the record of the body the
-// interpreter compiles.
+// getIn is get for a call of instance inst of the code: a record or a
+// body it makes is charged to the instance's budget, as it is made.
+func (c *Code) getIn(index uint32, inst *Instance) *compiled {
+	if p := c.fns[index].Load(); p != nil {
+		return p
+	}
+	return c.first(index, inst)
+}
+
+// first makes function index's record at its first use, for a call of
+// inst, if not nil: where native code runs a function from its first call
+// (nativeFirst) and validation bounded its frame, the record of that frame
+// alone, its body left to the interpreter's first need of it; else the
+// record of the body the interpreter compiles.
 //
 //go:noinline
-func (c *Code) first(index uint32) *compiled {
+func (c *Code) first(index uint32, inst *Instance) *compiled {
 	if c.nativeFirst() {
 		if p := c.boundRecord(index); p != nil {
-			c.fns[index].CompareAndSwap(nil, p)
+			if c.fns[index].CompareAndSwap(nil, p) {
+				n := p.footprint()
+				c.held.Add(n)
+				inst.chargeCode(n)
+			}
 			return c.fns[index].Load()
 		}
 	}
-	return c.interp(index)
+	return c.interp(index, inst)
 }
 
 // interp returns function index's record with its body built, compiling
-// the body if it is not. A record made before keeps its frame -- native
-// code may run in it -- and its native code's state.
-func (c *Code) interp(index uint32) *compiled {
+// the body if it is not, for a call of inst, if not nil, whose budget what
+// the compile makes is charged to. A record made before keeps its frame --
+// native code may run in it -- and its native code's state.
+func (c *Code) interp(index uint32, inst *Instance) *compiled {
 	if p := c.fns[index].Load(); p != nil && p.built {
 		return p
 	}
+	p, n := c.build(index)
+	inst.chargeCode(n)
+	return p
+}
+
+// build is interp's compile, under the code's lock, returning the record
+// and the bytes it added to what the code holds (Code.held).
+func (c *Code) build(index uint32) (*compiled, int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	old := c.fns[index].Load()
 	if old != nil && old.built {
-		return old
+		return old, 0
 	}
 	start := time.Now()
 	p := compileFunction(c, index)
 	countTime(&jitStats.interpTime, start)
 	jitStats.interpreted.Add(1)
+	n := p.footprint()
 	if old != nil {
 		if p.nslots > old.nslots || p.rslots > old.rslots {
 			panic("wasm: a function body's frame larger than validation's bound")
 		}
+		// A copy of old, which was counted, takes the register code.
+		n = p.reg.footprint()
 		q := *old
 		q.built, q.reg = true, p.reg
 		p = &q
 	}
+	c.held.Add(n)
 	c.fns[index].Store(p)
-	return p
+	return p, n
 }
 
 // boundRecord returns the record of function index's frame as validation

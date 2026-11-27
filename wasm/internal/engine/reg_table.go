@@ -130,7 +130,7 @@ func regCallFn(l unsafe.Pointer, f *frame, s *regSite, fn *Function) {
 		regHostCall(l, f, fn, s)
 		return
 	}
-	cd := fn.Inst.Code.get(fn.Index)
+	cd := fn.Inst.Code.getIn(fn.Index, fn.Inst)
 	nc, nsp, rc, rsp := x.nc, x.nsp, x.rc, x.rsp
 	nl, _, _ := x.takeNum(cd.nslots)
 	nr, _, _ := x.takeRef(cd.rslots)

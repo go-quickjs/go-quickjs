@@ -36,7 +36,12 @@ import (
 // JavaScript runtime's, which measures its whole heap, wasm's included --
 // and only charge it. The meter's walk asks the wasm objects it reaches what
 // they hold (MemoryFootprint), and the budget itself for what the frames of
-// the calls running hold.
+// the calls running hold. Such a budget is charged too for the records and
+// the register code a call of its instances makes as it first runs a
+// function (Instance.chargeCode), which the footprint of the module's code
+// counts: under a JavaScript runtime the script compiles its modules, whose
+// code is many times their bytes. A budget that counts itself counts no part
+// of a module, which its host compiled.
 
 // ErrMemoryLimit stops execution that needs more memory than its budget
 // allows.
@@ -201,6 +206,23 @@ func (b *Budget) chargeGC(x *exec, n int64) {
 		panic(hostError{ErrMemoryLimit})
 	}
 	b.gcNew.Add(n)
+}
+
+// chargeCode counts n bytes of records and register code a call of inst
+// made (Code.first, Code.interp), for a budget charging an outer meter,
+// stopping execution if they do not fit, as a GC object that does not does.
+// The meter counts them again in each measurement, through the footprint of
+// the code (Code.MemoryFootprint). A budget that counts itself counts no
+// code, as it counts no module.
+func (inst *Instance) chargeCode(n int64) {
+	if inst == nil || n <= 0 {
+		return
+	}
+	if b := inst.budget; b != nil && b.outer != nil {
+		if err := b.outer.Charge(n); err != nil {
+			panic(hostError{err})
+		}
+	}
 }
 
 // tryChargeGC counts a GC object of n bytes as chargeGC does where that

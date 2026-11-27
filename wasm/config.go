@@ -52,7 +52,10 @@ type RuntimeConfig interface {
 	// back once Go collects it. The count of GC objects is an estimate: it
 	// may pass the limit by a sixteenth of it before it is found, and what
 	// only a call running on another goroutine holds is counted at that
-	// call's own next count. 0, the default, is no limit.
+	// call's own next count. A compiled module is not counted -- its bytes,
+	// what decoding made and the register code its functions are compiled
+	// to as they first run -- as the host compiled it, and runtimes sharing
+	// a compilation cache share its code. 0, the default, is no limit.
 	WithMemoryLimit(bytes int64) RuntimeConfig
 
 	// WithJITMemoryLimit bounds what the compiler (NewRuntimeConfigCompiler)

@@ -12,7 +12,7 @@ func (x *exec) frameAt(d int) *frame {
 }
 
 // codeOf returns wasm function fn's record.
-func codeOf(fn *Function) *compiled { return fn.Inst.Code.get(fn.Index) }
+func codeOf(fn *Function) *compiled { return fn.Inst.Code.getIn(fn.Index, fn.Inst) }
 
 // run runs wasm function fn, whose record is code, in a frame of slots l and
 // r, holding its arguments, and leaves its results there: natively where it
@@ -44,7 +44,7 @@ func (x *exec) run(fn *Function, code *compiled, l []uint64, r []Ref, nc, nsp, r
 	f.l, f.r, f.inst = l, r, fn.Inst
 	if jitBuilt {
 		if !code.built {
-			code = fn.Inst.Code.interp(fn.Index)
+			code = fn.Inst.Code.interp(fn.Index, fn.Inst)
 		}
 		f.osr = osrBudget(fn.Inst.Code, code)
 	}
@@ -112,7 +112,7 @@ func (x *exec) tailChain(f *frame, code *compiled, l []uint64, r []Ref, nc, nsp,
 		}
 		if jitBuilt {
 			if !callee.built {
-				callee = fn.Inst.Code.interp(fn.Index)
+				callee = fn.Inst.Code.interp(fn.Index, fn.Inst)
 			}
 			f.osr = osrBudget(fn.Inst.Code, callee)
 		}
