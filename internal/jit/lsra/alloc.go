@@ -801,7 +801,12 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			cls := int(f.Class[v])
 			if len(clobAt) > 0 {
 				mi := 0
-				for _, r := range ranges[v] {
+				rs := ranges[v]
+				if clobIdx[rs[0].from] == clobIdx[rs[len(rs)-1].to-1] {
+					// No clobber in its extent: none in its ranges.
+					rs = nil
+				}
+				for _, r := range rs {
 					lo, hi := int(clobIdx[r.from]), int(clobIdx[r.to-1])
 					if lo == hi {
 						continue
@@ -1004,9 +1009,29 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		h := 0
 		for i := range f.Blocks {
 			b := &f.Blocks[i]
-			if len(b.Phis) > 0 {
-				weighPhis(b)
-				phiHints(b)
+			// Each phi weighed and its hints given in one walk of them.
+			for _, p := range b.Phis {
+				x := webs[p.Def]
+				weigh := x != nil && len(x.members) > 1
+				all := weigh
+				for k, a := range p.Args {
+					y := webOf(a)
+					if x != nil && y != nil && x != y && x.cls == y.cls {
+						x.hints = appendA(&al.hints, x.hints, y)
+						y.hints = appendA(&al.hints, y.hints, x)
+					}
+					if !weigh || !alloc(a) {
+						continue
+					}
+					if y == x {
+						x.weight -= depthWeight(f.Blocks[b.Preds[k]].Depth)
+					} else {
+						all = false
+					}
+				}
+				if all {
+					x.weight -= depthWeight(b.Depth)
+				}
 			}
 			for ; h < len(hinted) && hinted[h].b == int32(i); h++ {
 				if x, y := webOf(hinted[h].d), webOf(hinted[h].h); x != nil && y != nil && x != y && x.cls == y.cls {
