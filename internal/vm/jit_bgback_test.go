@@ -15,7 +15,8 @@ import (
 // or by the install, from the backend's code: at the give-back the code
 // is placed, and the backend's bytes and the workspace scribbled over and
 // rewound change nothing the code runs, which goes on giving the
-// interpreter's answers natively.
+// interpreter's answers natively. A compile whose lowering its worker
+// refused builds nothing, and is given back with no code.
 func TestJITRegWorkspaceBackAfterPlace(t *testing.T) {
 	prog := compileForTest(t, regBackgroundSrc)
 	want := ""
@@ -39,6 +40,15 @@ func TestJITRegWorkspaceBackAfterPlace(t *testing.T) {
 				c.workspaceBack = func(j *jitRegJob) {
 					backs++
 					e := j.e
+					if rt := j.root; rt != nil && rt.err != nil {
+						// Its lowering refused on the worker (lowerRoot) --
+						// norm's, of host operations alone, at its first
+						// ask: nothing built, nothing placed.
+						if j.placed != nil || e.code != nil || j.mc != nil {
+							t.Errorf("%s refused at its lowering (%v) given back with code", j.cl.fn.Name, rt.err)
+						}
+						return
+					}
 					if j.placed != nil || e.code == nil || j.mc == nil {
 						t.Errorf("%s given back with code placed %v, kept apart %v", j.cl.fn.Name, e.code != nil, j.placed != nil)
 						return
