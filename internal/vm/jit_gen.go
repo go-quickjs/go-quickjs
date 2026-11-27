@@ -144,18 +144,60 @@ func (f *jitRegFeedback) regGenSteps(rpc int) []ssa.GenStep {
 // realm's next (jitRegGenCallSeen): made natively, its result objects from
 // a pool.
 func (f *jitRegFeedback) regGenNextSite(rpc int, site *ssa.CallSite) {
+	q := f.callCtx()
+	q.genNextSite(rpc, site)
+}
+
+// genNextSite is regGenNextSite's, of q's source.
+func (q *jitCallCtx) genNextSite(rpc int, site *ssa.CallSite) {
 	if !site.Method || site.New || site.Argc > 1 {
 		return
 	}
-	gens := f.regGenSteps(rpc)
-	if len(gens) == 0 {
+	src := q.src
+	cls, pool := src.genNext(rpc)
+	if len(cls) == 0 {
 		return
 	}
-	fb := f.fb
-	pool := fb.r.jitGenResultPool(fb.e, rpc)
-	k := fb.keep()
+	k := src.keep()
+	gens := make([]ssa.GenStep, 0, len(cls))
+	for _, cl := range cls {
+		link := src.link(cl, src.reg(cl))
+		k.links = append(k.links, link)
+		gens = append(gens, ssa.GenStep{
+			Fn: uintptr(unsafe.Pointer(cl.fn)), Env: uintptr(unsafe.Pointer(cl.env)), Realm: uintptr(unsafe.Pointer(cl.realm)),
+			Entry: uintptr(unsafe.Pointer(&link.gen)), Count: uintptr(unsafe.Pointer(&link.in)),
+		})
+	}
 	k.pools = append(k.pools, pool)
-	site.Gens, site.GenNext, site.Pool = gens, fb.GenNext(), uintptr(unsafe.Pointer(pool))
+	site.Gens, site.GenNext, site.Pool = gens, uintptr(unsafe.Pointer(src.realm().genNextFn)), uintptr(unsafe.Pointer(pool))
+}
+
+// regGenNextOf is what the method call at register pc rpc resumes natively
+// (jitCallSrc's genNext): the closures of the generators its code learned
+// it resumes there that its native code may resume (regGenSteps' own),
+// and its result objects' pool, made at the first that has some.
+func (f *jitRegFeedback) regGenNextOf(rpc int) ([]*closure, *abi.ObjectPool) {
+	fb := f.fb
+	e := fb.e
+	if e == nil || fb.cl == nil {
+		return nil, nil
+	}
+	for _, st := range e.genSteps {
+		if int(st.pc) != rpc {
+			continue
+		}
+		var cls []*closure
+		for _, cl := range st.cls {
+			if cl.env == fb.cl.env && cl.realm == fb.cl.realm && jitRegGenCallable(cl) {
+				cls = append(cls, cl)
+			}
+		}
+		if len(cls) == 0 {
+			return nil, nil
+		}
+		return cls, fb.r.jitGenResultPool(e, rpc)
+	}
+	return nil, nil
 }
 
 // jitRegGenStepSeen notes a loop's step at register pc rpc of f's code e,

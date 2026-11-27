@@ -491,6 +491,38 @@ type jitCallSrc interface {
 	// poolRoom is the room of the arrays pool's are made with, which
 	// a refill changes (abi.ObjectPool's Room).
 	poolRoom(pool *abi.ObjectPool) uint64
+	// allocHidden reports whether the learned construction x, the i-th
+	// of the learning's native calls, is one the asking's NativeCalls
+	// had not met where it looked for an array's pool (regAllocSite): one
+	// a snapshot's gather learned at the construction's question, which
+	// no Inline's there learned before it (jitTargetsData's hidden).
+	allocHidden(i int, x *jitInline) bool
+	// seed learns at the construction w at register pc rpc, of argc
+	// arguments, which the code has learned no pool at, the function the
+	// binding read before it holds now, its objects from a pool
+	// (jitRegSeedConstruct): live, or nothing in a snapshot's copy, whose
+	// gather learned it (jitTargetsData's seed).
+	seed(rpc int, w bytecode.RInstr, argc int)
+	// literal is the pool of the RegExp literal the call w at register
+	// pc rpc gives its RegExp back to (regLiteralAt), made where it had
+	// none; nil for none.
+	literal(rpc int, w bytecode.RInstr) *abi.ObjectPool
+	// genNext is what the method call at register pc rpc resumes natively
+	// of the generators its code learned (regGenSteps): their closures and
+	// the pool of its result objects, made where it had none.
+	genNext(rpc int) ([]*closure, *abi.ObjectPool)
+	// genMake is what a call at register pc rpc of o, a generator
+	// function its code learned it calls, makes natively (jitGenMakeFact).
+	genMake(rpc int, o *Object) jitGenMakeFact
+	// superTarget is jitRegSuperTarget's answer for a super() of active's
+	// of argc arguments.
+	superTarget(active *Object, argc int) (p, skip *Object, cl *closure)
+	// arrayProtos is what a push native code makes reads of the realm's
+	// array prototypes (jitCallProtos), their shapes remembered.
+	arrayProtos() jitCallProtos
+	// copies is the runtime's cache of copied data properties' layouts
+	// (jitState's copies), made where it has none.
+	copies() uintptr
 	// realm is the realm's built-ins a call is compared with.
 	realm() jitCallRealm
 	// keep is the feedback an answer's effects -- what the code keeps
@@ -532,6 +564,33 @@ func (f jitCallFacts) target(rc *regCode, argc int, quirks bool) bool {
 type jitCallRealm struct {
 	callFn, applyFn, arrayCtor, global *Object
 	quirks                             bool
+	// realm is the runtime's realm, array its Array.prototype; genNextFn
+	// and genIterFn its generators' next and [Symbol.iterator], and
+	// genIteration and arrayIter the addresses of the runtime's caches
+	// of how generators and arrays iterate.
+	realm                   *Realm
+	array                   *Object
+	genNextFn, genIterFn    *Object
+	genIteration, arrayIter uintptr
+}
+
+// jitGenMakeFact is what a call of a generator function makes natively of
+// it (regGenMakeSite): the pool of its generators, the index of its own
+// prototype, and its register code; ok where it may.
+type jitGenMakeFact struct {
+	pool       *abi.ObjectPool
+	protoIndex int
+	c          *regCode
+	ok         bool
+}
+
+// jitCallProtos is the realm's Array.prototype and Object.prototype and
+// their shapes, remembered, where a push native code makes may keep to
+// them (regBuiltinSite): ok.
+type jitCallProtos struct {
+	ap, op           *Object
+	apShape, opShape *shape
+	ok               bool
 }
 
 // jitCallConstruct is what a construction with a function object, of a
@@ -614,7 +673,55 @@ func (l jitCallLive) construct(o *Object, argc int) jitCallConstruct {
 
 func (l jitCallLive) poolRoom(pool *abi.ObjectPool) uint64 { return pool.Room }
 
+func (l jitCallLive) allocHidden(int, *jitInline) bool { return false }
+
+func (l jitCallLive) seed(rpc int, w bytecode.RInstr, argc int) {
+	f := l.f
+	if o := f.regConstructorNow(rpc, int(w.A())); o != nil {
+		f.fb.r.jitRegSeedConstruct(f.fb.e, int32(rpc), o, argc)
+	}
+}
+
+func (l jitCallLive) literal(rpc int, w bytecode.RInstr) *abi.ObjectPool {
+	return l.f.regLiteralAt(rpc, w)
+}
+
+func (l jitCallLive) genNext(rpc int) ([]*closure, *abi.ObjectPool) {
+	return l.f.regGenNextOf(rpc)
+}
+
+func (l jitCallLive) genMake(rpc int, o *Object) jitGenMakeFact {
+	return l.f.regGenMakeOf(rpc, o)
+}
+
+func (l jitCallLive) superTarget(active *Object, argc int) (*Object, *Object, *closure) {
+	return l.f.fb.r.jitRegSuperTarget(active, argc)
+}
+
+func (l jitCallLive) arrayProtos() jitCallProtos { return l.f.fb.r.jitArrayProtos() }
+
+func (l jitCallLive) copies() uintptr { return l.f.fb.r.jitCopies() }
+
 func (l jitCallLive) realm() jitCallRealm { return l.f.fb.r.jitCallRealmNow() }
+
+// jitArrayProtos is r's jitCallProtos, now, their shapes remembered.
+func (r *Runtime) jitArrayProtos() jitCallProtos {
+	ap, op := r.proto.array, r.proto.object
+	if ap.shape == nil || op.shape == nil || ap.shape.loose || op.shape.loose || ap.proto() != op || op.proto() != nil ||
+		!ap.noIndexKeys() || !op.noIndexKeys() {
+		return jitCallProtos{ap: ap, op: op}
+	}
+	return jitCallProtos{ap: ap, op: op, apShape: remember(ap.shape), opShape: remember(op.shape), ok: true}
+}
+
+// jitCopies is the runtime's cache of copied data properties' layouts,
+// made at its first ask (regWholeSite's copy_data_props).
+func (r *Runtime) jitCopies() uintptr {
+	if r.jit.copies == nil {
+		r.jit.copies = new([jitCopyEntries]jitCopyEntry)
+	}
+	return uintptr(unsafe.Pointer(r.jit.copies))
+}
 
 func (l jitCallLive) keep() *jitFeedback { return l.f.fb.keep() }
 
@@ -622,7 +729,9 @@ func (l jitCallLive) live() *jitRegFeedback { return l.f }
 
 // jitCallRealmNow is r's built-ins a call is compared with, now.
 func (r *Runtime) jitCallRealmNow() jitCallRealm {
-	c := jitCallRealm{callFn: r.callFn, applyFn: r.applyFn, arrayCtor: r.proto.arrayCtor, quirks: r.nodeQuirks}
+	c := jitCallRealm{callFn: r.callFn, applyFn: r.applyFn, arrayCtor: r.proto.arrayCtor, quirks: r.nodeQuirks,
+		realm: r.Realm, array: r.proto.array, genNextFn: r.genNextFn, genIterFn: r.genIterFn,
+		genIteration: uintptr(unsafe.Pointer(&r.genIteration)), arrayIter: uintptr(unsafe.Pointer(&r.jit.arrayIter))}
 	if r.globalThis.IsObject() {
 		c.global = r.globalThis.Object()
 	}

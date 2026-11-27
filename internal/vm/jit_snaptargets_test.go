@@ -6,6 +6,10 @@ import (
 	"slices"
 	"testing"
 	"unsafe"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
 // The calls' targets' scribbler (jitSnapScribblers): the function's learned
@@ -32,7 +36,23 @@ func init() {
 	})
 	jitSnapGatheredAt = append(jitSnapGatheredAt, func(s *jitSnapshot, m jitSnapMethod, arg int64) bool {
 		t := &s.d.calls.tg
-		return m == snapNativeCalls && (!t.gathered || t.asked[arg>>6]&(1<<(arg&63)) != 0)
+		if m != snapNativeCalls && m != snapViaLeaf {
+			return false
+		}
+		if !t.gathered {
+			// Asked at its PCs (jitTargetsAskedAt).
+			return true
+		}
+		// A construction whose pool the gather learned, which the
+		// feedback asked again finds, where the asking's question had
+		// not (allocHidden).
+		rpc := s.p.Origin[arg]
+		for _, h := range t.hidden {
+			if uint32(h.rpc) == rpc {
+				return true
+			}
+		}
+		return false
 	})
 }
 
@@ -203,4 +223,73 @@ func jitLearnedByCall(calls []jitLearnedCall) []jitLearnedCall {
 	out := slices.Clone(calls)
 	slices.SortStableFunc(out, func(a, b jitLearnedCall) int { return int(a.pc) - int(b.pc) })
 	return out
+}
+
+// TestJITSnapshotConstructionSeed holds a snapshot's answer at a
+// construction whose pool no question has learned yet to the asking's:
+// its gather learns it (jitTargetsData's seed), as the asking's first
+// question of the construction would -- Inline's, where it asks
+// regCallTargets, or NativeCalls', which looks for an array's pool before
+// it learns one (regAllocSite) and so answers a call of Go -- and the
+// worker's NativeCalls answers as the asking's: new Array() made from the
+// pool where Inline's question learned it first, a call of Go where
+// Inline asks nothing there (notInline). The asking is the feedback's,
+// each PC's Inline before its NativeCalls, of a runtime that ran the
+// same code.
+func TestJITSnapshotConstructionSeed(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const src = `function f(n) { let s = 0; for (let i = 0; i < n; i++) s += new Array().length + i; return s }
+for (let k = 0; k < 20; k++) f(50)`
+	for _, notInline := range []bool{false, true} {
+		var answers [2][]ssa.CallSite
+		for side := range 2 {
+			r := jitRuntimeForTest(t, Config{JIT: true})
+			r.jitState().unavailable = true
+			if _, err := r.Run(compileForTest(t, src)); err != nil {
+				t.Fatal(err)
+			}
+			r.jitState().unavailable = false
+			cl := jitGlobalClosureForTest(r, "f")
+			c := r.regOf(cl)
+			p, err := r.jitRegLower(cl, c.rc, jitLowerSSA)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pc := -1
+			for i := range p.Code {
+				if w, op, ok := jitRegAt(p, c.rc, i); ok && op == ir.Host && w.Op() == bytecode.RNewW {
+					pc = i
+				}
+			}
+			if pc < 0 {
+				t.Fatal("no construction")
+			}
+			e := r.jitState().regLearnedOf(r.jitRegKeyOf(cl))
+			if jitLearnedAt(e.nativeCalls, int(p.Origin[pc]), true) {
+				t.Fatal("a pool learned before the question")
+			}
+			if notInline {
+				e.notInline = append(slices.Clip(e.notInline), int32(p.Origin[pc]))
+			}
+			if side == 0 {
+				fb := r.jitRegFeedbackFor(cl, p)
+				fb.Inline(pc)
+				answers[0] = fb.NativeCalls(pc)
+			} else {
+				snap := jitRegSnapshotOf(r.jitRegFeedbackFor(cl, p), p)
+				snap.s.derive()
+				answers[1] = snap.NativeCalls(pc)
+			}
+		}
+		asked, derived := answers[0], answers[1]
+		if len(asked) != 1 || len(derived) != 1 {
+			t.Fatalf("notInline %v: asked %+v, derived %+v", notInline, asked, derived)
+		}
+		if asked[0].Alloc != !notInline || derived[0].Alloc != asked[0].Alloc || derived[0].Go != asked[0].Go {
+			t.Errorf("notInline %v: asked Alloc %v Go %v, derived Alloc %v Go %v; want Alloc %v",
+				notInline, asked[0].Alloc, asked[0].Go, derived[0].Alloc, derived[0].Go, !notInline)
+		}
+	}
 }

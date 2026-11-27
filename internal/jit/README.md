@@ -886,48 +886,51 @@ from the closure's call caches copied whole once a compile, in its copy
 `regCallsRestored` restores them), and the realm's built-ins, a few words
 copied once a snapshot; a native function's data, which the answers read of
 a callee, is fixed when it is made. `NativeCalls` is derived from those
-copies too (`jit_snaptargets.go`), with `Resumed` and `EntryGeneric`, which
-read what it appends, through one implementation with the spot's
-(`jitCallSrc`: `jitCallLive`, `jitCallCopy`). The gather asks it on the
-goroutine only where its answer reads the heap or makes what the runtime
-keeps (`callsLive`: a construction the code has learned no pool at,
-`super()`, `apply`, a `regexp_lit`, a whole instruction, a loop's step,
-typed code, a built-in's checks, a literal given back, a generator made
-or resumed), and `ViaLeaf` where the code learned a leaf called through
-`call` -- each at its PC, in the methods' order there (`jitSnapAskedAt`),
-after `Inline`'s question, whose appends a construction's answer reads.
-What a call reads of the heap
-otherwise -- the function the binding before a call the interpreter has
-not made holds now, a method call's seen callees -- the gather reads once
-a closure a compile, in one pass forward over its code
-(`jitCallSiteFacts`, `jitClosureCopy`'s `sites`, which the inliner's
-callee walk reads too), the register code of such a function made there,
-where the asking would make it (`regOf`); and of a learned construction
-what its site reads (`jitCallConstruct`: `jitRegConstructTarget`'s answer
-and the prototype's index, a pool's room), its pool's root asked ahead
-with the answers' (`jitSnapData`'s `pools`). It then takes the learning's headers, cut to their lengths so that
-an append makes a list of its own; the learned calls' entries are never
-written in place either -- a target marked called by its code, an inlined
-call's exits counted, a step's generators grown -- each such write a list
-made anew. It also takes the facts of each target
-the copies name (`jitCallFacts`: what of `jitRegTarget` no argument count
-decides, an arrow, a shared this), a method call's seen callees
-(`jitRegSeenCallees`), the realm's `call`, `apply` and global object, and
-the links of the targets native callers may call, made there and kept in
-the snapshot's gained links (`gatherLink`), the only links a derivation's
-effects may name. A derivation appends to its copy of the learned calls,
-as the asking appended to the live list, and the runtime's goroutine writes
-the appends when the compile is done with, installed or thrown away
-(`jitSnapFinishers`, `jitTargetsFinish`), from a list the worker
-prepared (`jitLearnedPrepared`): the copy is taken once the PCs are
-asked, so that it has what their questions on the goroutine appended. A compile thrown away before a
-worker derived it is derived there first. A concurrent compile writes no
-feedback until it is done, as V8's does not. The merge puts a call's
-appends after what its list had when copied and before what exits learned
-meanwhile, as the asking had placed them: a call's targets are read in the
-order of its entries (`jitLearnedMerge`). The families' derivations run by
-stage (`jitSnapDeriveStage`), so that `Inline`'s and `NativeCalls`'
-appends are there for `Resumed`. A worker builds, optimizes and compiles
+copies too (`jit_snaptargets.go`), with `ViaLeaf`, `Resumed` and
+`EntryGeneric`, which read what it learns, through one implementation with
+the spot's (`jitCallSrc`: `jitCallLive`, `jitCallCopy`), at every PC; only
+typed code's are asked on the goroutine, at their PCs in the methods'
+order (`jitSnapAskedAt`). The goroutine's part is to copy, look up and
+make, by register pc, never reading the program the function is lowered
+to (a callee's may not be lowered yet). It copies the call caches and the
+learning's headers; the latter are taken once the PCs are asked, so that
+they hold what `Inline`'s questions on the goroutine appended, cut to
+their lengths so that an append makes a list of its own, and the learned
+calls' entries are never written in place either -- a target marked called
+by its code, an inlined call's exits counted, a step's generators grown --
+each such write a list made anew. It looks up the facts of each target the
+copies name (`jitCallFacts`: what of `jitRegTarget` no argument count
+decides, an arrow, a shared this; a learned construction's
+`jitCallConstruct` and its pool's room), each call site's, once a closure
+a compile, in one pass forward over its code (`jitCallSiteFacts`,
+`jitClosureCopy`'s `sites`, which the inliner's callee walk reads too: the
+function the binding before a call the interpreter has not made holds now,
+a method call's seen callees), what `super()` and a push read of the heap,
+and the realm's built-ins. And it makes what an answer must find made, as
+the asking would: the links of the targets native callers may call, kept
+in the snapshot's gained links (`gatherLink`), the only links a
+derivation's effects may name; register code a binding's function has
+none of (`regOf`); a RegExp literal's pool, a step's result objects' pool,
+a generator function's call's pool, the copied layouts' cache; and the
+pool of a construction no question has learned one at
+(`jitRegSeedConstruct`), which the asking's `NativeCalls` did not see where
+it looked for an array's pool before learning it, unless `Inline`'s
+question there learned it first -- so the derivation does not see it either
+(`allocHidden`). The pools and leaves a derived answer may name are kept
+(`jitSnapData`'s `pools`, `leaves`), their roots and kinds asked ahead with
+the answers'. The worker derives every answer from these, the program in
+hand: a call's window, a whole instruction's operands. A derivation appends
+to its copy of the learned calls, as the asking appended to the live list,
+and the runtime's goroutine writes the appends when the compile is done
+with, installed or thrown away (`jitSnapFinishers`, `jitTargetsFinish`),
+from a list the worker prepared (`jitLearnedPrepared`). A compile thrown
+away before a worker derived it is derived there first. A concurrent
+compile writes no feedback until it is done, as V8's does not. The merge
+puts a call's appends after what its list had when copied and before what
+exits learned meanwhile, as the asking had placed them: a call's targets
+are read in the order of its entries (`jitLearnedMerge`). The families'
+derivations run by stage (`jitSnapDeriveStage`), so that `Inline`'s and
+`NativeCalls`' appends are there for `Resumed`. A worker builds, optimizes and compiles
 from the snapshot
 (`jitRegJob`), touching nothing of the runtime's; and the runtime's
 goroutine installs it at a later check -- a sample (`jitRegHot`), at a call

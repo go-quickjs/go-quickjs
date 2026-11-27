@@ -61,6 +61,11 @@ func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 		}
 		c.a.pools(pools)
 	}
+	for _, fn := range s.d.leaves {
+		// The leaves a derivation's answers may name (jitSnapData's
+		// leaves).
+		fns[fn] = true
+	}
 	for _, pool := range s.d.pools {
 		// The pools a derivation's answers may name (jitSnapData's
 		// pools), which the worker answers after this.

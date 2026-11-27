@@ -316,8 +316,9 @@ func (q *jitCallCtx) allocSite(rpc int, w bytecode.RInstr, argc int) (ssa.CallSi
 		return ssa.CallSite{}, false
 	}
 	arrayCtor := src.realm().arrayCtor
-	for _, x := range l.nativeCalls {
-		if int(x.pc) != rpc || x.cl != nil || x.forEach || x.pool == nil || x.obj != arrayCtor {
+	for i := range l.nativeCalls {
+		x := &l.nativeCalls[i]
+		if int(x.pc) != rpc || x.cl != nil || x.forEach || x.pool == nil || x.obj != arrayCtor || src.allocHidden(i, x) {
 			continue
 		}
 		if argc == 1 && src.poolRoom(x.pool) == 0 {
@@ -542,12 +543,18 @@ func (r *Runtime) jitRegFrameless(ctx *abi.Context, cl *closure, c *regCode, rpc
 // shape's transition (DefineNext), a computed key that is a string its own
 // (StringSelf).
 func (f *jitRegFeedback) regWholeSite(pc int, w bytecode.RInstr) []ssa.CallSite {
-	_, argc, _, ok := f.p.Code[pc].WholeOperands(f.p.Regs)
+	q := f.callCtx()
+	return q.wholeSite(pc, w)
+}
+
+// wholeSite is regWholeSite's, of q's source.
+func (q *jitCallCtx) wholeSite(pc int, w bytecode.RInstr) []ssa.CallSite {
+	_, argc, _, ok := q.p.Code[pc].WholeOperands(q.p.Regs)
 	if !ok {
 		return nil
 	}
 	site := ssa.CallSite{Go: ssa.GoCall, Whole: true, Argc: argc, ThisSlot: -1}
-	r := f.fb.r
+	realm := q.src.realm()
 	switch op := w.Op(); {
 	case argc == 1 && op == bytecode.RForOfStart:
 		// A for...of's cursor, of the iterable: one over a generator with
@@ -555,8 +562,8 @@ func (f *jitRegFeedback) regWholeSite(pc int, w bytecode.RInstr) []ssa.CallSite 
 		// runtime's cache of how generators iterate (mir's genForOf); Go
 		// makes any other, an array's without a frame (jitForOfPlain).
 		site.ForOf = true
-		if r.genNextFn != nil && r.genIterFn != nil {
-			site.GenIter, site.GenIterFn, site.GenNext = uintptr(unsafe.Pointer(&r.genIteration)), uintptr(unsafe.Pointer(r.genIterFn)), f.GenNext()
+		if realm.genNextFn != nil && realm.genIterFn != nil {
+			site.GenIter, site.GenIterFn, site.GenNext = realm.genIteration, uintptr(unsafe.Pointer(realm.genIterFn)), uintptr(unsafe.Pointer(realm.genNextFn))
 		}
 	case argc == 1 && op == bytecode.RForInStart:
 		// A for...in's cursor, of the object, which Go makes without a
@@ -573,20 +580,17 @@ func (f *jitRegFeedback) regWholeSite(pc int, w bytecode.RInstr) []ssa.CallSite 
 	case op == bytecode.RDefineField:
 		// A literal's field along its shape's first transition by the key
 		// (DefineNext).
-		key, ok := f.name(int(f.p.Origin[pc]), w.C())
+		key, ok := jitRegNameOf(q.rc, q.cl, int(q.p.Origin[pc]), w.C())
 		if !ok || key >= 1<<24 {
 			return nil
 		}
 		site.Key, site.DefineNext = uint32(key), true
 	case op == bytecode.RArraySpread:
-		site.ArrayIter = uintptr(unsafe.Pointer(&r.jit.arrayIter))
+		site.ArrayIter = realm.arrayIter
 	case op == bytecode.RArrayPush:
 		site.Append = true
 	case op == bytecode.RCopyDataProps:
-		if r.jit.copies == nil {
-			r.jit.copies = new([jitCopyEntries]jitCopyEntry)
-		}
-		site.Copies = uintptr(unsafe.Pointer(r.jit.copies))
+		site.Copies = q.src.copies()
 	default:
 		return nil
 	}
@@ -717,30 +721,58 @@ func (r *Runtime) jitRegGenMakeSeen(f *frame, e *jitRegEntry, rpc int, callee Va
 // 2 (GenArgAt), a method's receiver to its register 1 too (GenThisAt),
 // where its window keeps it.
 func (f *jitRegFeedback) regGenMakeSite(rpc int, site *ssa.CallSite) {
-	fb := f.fb
-	if fb.e == nil || site.New {
+	q := f.callCtx()
+	q.genMakeSite(rpc, site)
+}
+
+// genMakeSite is regGenMakeSite's, of q's source.
+func (q *jitCallCtx) genMakeSite(rpc int, site *ssa.CallSite) {
+	src := q.src
+	l := src.learned()
+	if l == nil || site.New {
 		return
 	}
-	for _, x := range fb.e.genMakes {
-		if int(x.pc) != rpc || !fb.r.jitRegGenMakeable(x.obj, fb.cl) {
+	for i := range l.genMakes {
+		// Its pc and function alone: its pool is made in place at its first
+		// ask (jitGenMakePool), on the runtime's goroutine.
+		x := &l.genMakes[i]
+		if int(x.pc) != rpc {
 			continue
 		}
-		pool := fb.r.jitGenMakePool(fb.e, rpc, x.obj)
-		i := x.obj.findOwn(atomPrototype)
-		c := fb.r.regGenOf(x.obj.fn().closure, x.obj)
-		if pool == nil || i < 0 || c == nil {
+		o := x.obj
+		m := src.genMake(rpc, o)
+		if !m.ok {
 			continue
 		}
-		k := fb.keep()
-		k.pools, k.holders = append(k.pools, pool), append(k.holders, x.obj)
+		k := src.keep()
+		k.pools, k.holders = append(k.pools, m.pool), append(k.holders, o)
+		c := m.c
 		from := int(c.genFrom)
-		site.GenMake, site.Pool, site.ProtoIndex, site.ProtoKey = uintptr(unsafe.Pointer(x.obj)), uintptr(unsafe.Pointer(pool)), int(i), uint32(atomPrototype)
+		site.GenMake, site.Pool, site.ProtoIndex, site.ProtoKey = uintptr(unsafe.Pointer(o)), uintptr(unsafe.Pointer(m.pool)), m.protoIndex, uint32(atomPrototype)
 		site.Params, site.LocalCount, site.GenArgAt = int(c.params), int(c.numRegs)-from, 2-from
 		if from == 0 {
 			site.GenThisAt = 2
 		}
 		return
 	}
+}
+
+// regGenMakeOf is what a call at register pc rpc of o, a generator function
+// the code learned it calls there, makes natively (jitGenMakeFact): its
+// generators' pool, made at its first ask, where o is one native code may
+// make generators of.
+func (f *jitRegFeedback) regGenMakeOf(rpc int, o *Object) jitGenMakeFact {
+	fb := f.fb
+	if !fb.r.jitRegGenMakeable(o, fb.cl) {
+		return jitGenMakeFact{}
+	}
+	pool := fb.r.jitGenMakePool(fb.e, rpc, o)
+	i := o.findOwn(atomPrototype)
+	c := fb.r.regGenOf(o.fn().closure, o)
+	if pool == nil || i < 0 || c == nil {
+		return jitGenMakeFact{}
+	}
+	return jitGenMakeFact{pool: pool, protoIndex: int(i), c: c, ok: true}
 }
 
 // jitRegExpLeafGive gives pool back recv, the RegExp of its literal, a

@@ -397,10 +397,7 @@ func (q *jitCallCtx) callTargets(t *jitRegTargets, pc int, w bytecode.RInstr, ar
 		// callee inlined, whose own code may never be compiled. Learned
 		// only at calls of Go, a callee inlined from the first made each of
 		// its constructions by Go until one left the code that inlined it.
-		f := q.mustLive()
-		if o := f.regConstructorNow(int(rpc), int(w.A())); o != nil {
-			f.fb.r.jitRegSeedConstruct(l, rpc, o, argc)
-		}
+		q.src.seed(int(rpc), w, argc)
 	}
 	if l != nil {
 		for _, x := range l.nativeCalls {
@@ -1659,17 +1656,23 @@ func (q *jitCallCtx) callSite(pc int, o *Object, cl *closure, rc *regCode, argc 
 // (jitRegArrowBeforeSuper), whose binding the arrow shares, or of a parent
 // it learned none of.
 func (f *jitRegFeedback) regSuperSites(pc int, w bytecode.RInstr) []ssa.CallSite {
-	fb := f.fb
+	q := f.callCtx()
+	return q.superSites(pc, w)
+}
+
+// superSites is regSuperSites', of q's source.
+func (q *jitCallCtx) superSites(pc int, w bytecode.RInstr) []ssa.CallSite {
 	argc := int(w.B())
-	if fb.fn.Kind != bytecode.KindDerivedConstructor || !f.p.This {
+	if q.fn.Kind != bytecode.KindDerivedConstructor || !q.p.This {
 		return nil
 	}
-	if l, rpc := fb.e, int32(f.p.Origin[pc]); l != nil && !jitRegArrowBeforeSuper(f.rc, fb.fn) {
-		for _, x := range l.nativeCalls {
+	if l, rpc := q.src.learned(), int32(q.p.Origin[pc]); l != nil && !jitRegArrowBeforeSuper(q.rc, q.fn) {
+		for i := range l.nativeCalls {
+			x := &l.nativeCalls[i]
 			if x.pc != rpc || x.active == nil {
 				continue
 			}
-			if site, ok := f.regSuperSite(pc, x, argc); ok {
+			if site, ok := q.superSite(pc, x, argc); ok {
 				return []ssa.CallSite{site}
 			}
 			break
@@ -1681,30 +1684,29 @@ func (f *jitRegFeedback) regSuperSites(pc int, w bytecode.RInstr) []ssa.CallSite
 	return []ssa.CallSite{{Go: ssa.GoCall, Super: true, Argc: argc, ThisSlot: -1}}
 }
 
-// regSuperSite is the native super() at the program's instruction pc of x,
+// superSite is the native super() at the program's instruction pc of x,
 // a parent the code learned it constructs with (jitRegSuperSeen), of argc
 // arguments: the code of the class whose prototype it is still -- x.obj,
 // or past one with no constructor of its own, x.parent -- called through
 // its link, while the function running is x.active, the one the code was
 // learned for (mir's superGuards); or false where that code is no longer
 // one native callers construct with.
-func (f *jitRegFeedback) regSuperSite(pc int, x jitInline, argc int) (ssa.CallSite, bool) {
-	fb := f.fb
-	r := fb.r
-	p, skip, cl := r.jitRegSuperTarget(x.active, argc)
+func (q *jitCallCtx) superSite(pc int, x *jitInline, argc int) (ssa.CallSite, bool) {
+	src := q.src
+	p, skip, cl := src.superTarget(x.active, argc)
 	if p != x.obj || skip != x.parent || cl != x.cl || cl == nil {
 		return ssa.CallSite{}, false
 	}
-	rc := cl.reg
-	l := r.jitState().regLinkOf(cl, rc)
-	k := fb.keep()
+	rc := src.reg(cl)
+	l := src.link(cl, rc)
+	k := src.keep()
 	k.links = append(k.links, l)
 	k.holders = append(k.holders, x.obj, x.active)
 	site := ssa.CallSite{
 		Callee: uintptr(unsafe.Pointer(x.obj)), Closure: uintptr(unsafe.Pointer(cl)),
 		Entry: uintptr(unsafe.Pointer(&l.entry)), Count: uintptr(unsafe.Pointer(&l.in)),
 		Argc: argc, Params: 2 + int(rc.params), LocalCount: int(rc.numRegs), ThisSlot: -1,
-		Window: f.p.Code[pc].Left.Slot + 1,
+		Window: q.p.Code[pc].Left.Slot + 1,
 		Super:  true, Active: uintptr(unsafe.Pointer(x.active)), Derived: cl.fn.Kind == bytecode.KindDerivedConstructor,
 		// A parent that keeps its arguments is given them in its context,
 		// as any native callee (FrameArgs).

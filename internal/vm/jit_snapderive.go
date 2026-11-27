@@ -81,6 +81,10 @@ type jitSnapData struct {
 	// derivation's answers may name, whose roots the snapshot asks ahead
 	// (jitRegSnapshotOf's VirtualRoot) with the answers'.
 	pools []*abi.ObjectPool
+	// leaves, the root's, are the leaves its gathers found a derivation's
+	// answers may name, whose kinds the snapshot asks ahead
+	// (jitRegSnapshotOf's LeafKind) with the answers'.
+	leaves []uintptr
 }
 
 // jitClosureCopy is what of a closure's state a compile's gathers copy, on

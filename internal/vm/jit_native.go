@@ -3537,17 +3537,29 @@ func (r *Runtime) jitRegStepNextSeen(f *frame, e *jitRegEntry, rpc int, st *iter
 // or none, where the step has met none, or the next is no longer one
 // native callers call.
 func (f *jitRegFeedback) regStepSites(pc int) []ssa.CallSite {
-	l := f.fb.e
+	q := f.callCtx()
+	return q.stepSites(pc)
+}
+
+// stepSites is regStepSites', of q's source.
+func (q *jitCallCtx) stepSites(pc int) []ssa.CallSite {
+	src := q.src
+	l := src.learned()
 	if l == nil {
 		return nil
 	}
-	rpc := int32(f.p.Origin[pc])
+	rpc := int32(q.p.Origin[pc])
 	var sites []ssa.CallSite
-	for _, x := range l.nativeCalls {
-		if x.pc != rpc || x.pool != nil || x.cl == nil || x.cl.reg == nil {
+	for i := range l.nativeCalls {
+		x := &l.nativeCalls[i]
+		if x.pc != rpc || x.pool != nil || x.cl == nil {
 			continue
 		}
-		if site, ok := f.regCallSite(pc, x.obj, x.cl, x.cl.reg, 0, true, nil, nil, false, false); ok {
+		rc := src.reg(x.cl)
+		if rc == nil {
+			continue
+		}
+		if site, ok := q.callSite(pc, x.obj, x.cl, rc, 0, true, nil, nil, false, false); ok {
 			sites = append(sites, site)
 		}
 		break
@@ -3559,7 +3571,7 @@ func (f *jitRegFeedback) regStepSites(pc int) []ssa.CallSite {
 	for _, x := range l.stepResults {
 		if x.pc == rpc {
 			res.ResultShape, res.DoneAt, res.ValueAt = uintptr(unsafe.Pointer(x.shape)), int(x.done), int(x.value)
-			k := f.fb.keep()
+			k := src.keep()
 			k.shapes = append(k.shapes, x.shape)
 			break
 		}
