@@ -69,6 +69,7 @@ var workloads = []workload{
 	{suite: suiteMicro, name: "arrays", file: "arrays.wat", arg: 200_000, want: "3650257615542542252"},
 	{suite: suiteMicro, name: "literals", file: "literals.wat", arg: 100_000, want: "1099445456311103178"},
 	{suite: suiteMicro, name: "simd", file: "simd.wat", arg: 1000, want: "2051588800606"},
+	{suite: suiteMicro, name: "casts", file: "casts.wat", arg: 2_000_000, want: "-7324442499855263322"},
 
 	{suite: suitePrograms, name: "sha256", args: []string{"sha256", "8"},
 		want: "sha256 8 MiB 117b42beb574a22fa98a2efa93f9351041498d2cc9da3d1fa65f468c222a680f\n"},

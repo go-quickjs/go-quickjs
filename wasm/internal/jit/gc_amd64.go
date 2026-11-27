@@ -339,6 +339,10 @@ func (c *compiler) refTest(src mem, h module.HeapType, nullable bool) amd64.Cond
 		a.Load(r, r, l.RTT)
 		a.Op(amd64.Test, r, r, true)
 		a.Jcc(amd64.CondE, fail)
+		if depth >= l.SupersKept {
+			SupersWalk(a, l, r, rTmp, canon, depth, ok, fail)
+			break
+		}
 		a.Load(rTmp, r, l.Supers+8)
 		a.OpImm(amd64.Cmp, rTmp, int32(depth), true)
 		a.Jcc(amd64.CondBE, fail)
@@ -357,4 +361,33 @@ func (c *compiler) refTest(src mem, h module.HeapType, nullable bool) amd64.Cond
 	a.Op(amd64.Test, r, r, false)
 	c.freeG(r)
 	return amd64.CondNE
+}
+
+// SupersWalk goes to yes or no by whether the type whose runtime
+// information r points to has canonical type canon at depth depth of its
+// chain of supertypes, depth past those the type keeps at hand
+// (Layout.SupersKept): it walks the chain from the type, to the type's
+// jump where the jump is not above depth and to its supertype otherwise,
+// until the depth, in steps logarithmic in the chain's length -- no call,
+// and too few steps to need a poll. r and t are its scratch.
+func SupersWalk(a *amd64.Asm, l *Layout, r, t amd64.Reg, canon uint32, depth int, yes, no amd64.Label) {
+	loop, up, at := a.NewLabel(), a.NewLabel(), a.NewLabel()
+	a.Bind(loop)
+	a.LoadU32(t, r, l.RTTDepth)
+	a.OpImm(amd64.Cmp, t, int32(depth), false)
+	a.Jcc(amd64.CondB, no)
+	a.Jcc(amd64.CondE, at)
+	a.LoadU32(t, r, l.RTTJumpDepth)
+	a.OpImm(amd64.Cmp, t, int32(depth), false)
+	a.Jcc(amd64.CondB, up)
+	a.Load(r, r, l.RTTJump)
+	a.Jmp(loop)
+	a.Bind(up)
+	a.Load(r, r, l.RTTSuper)
+	a.Jmp(loop)
+	a.Bind(at)
+	a.LoadU32(t, r, l.RTTCanon)
+	a.OpImm(amd64.Cmp, t, int32(canon), false)
+	a.Jcc(amd64.CondNE, no)
+	a.Jmp(yes)
 }

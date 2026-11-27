@@ -30,7 +30,7 @@ func RefIsCanonicalSub(r Ref, c module.CanonicalIndex) bool {
 		return false
 	}
 	want := rttOf(c)
-	return got.isSub(want.canon, len(want.supers)-1)
+	return got.isSub(want.canon, int(want.depth))
 }
 
 // ArrayNumbers returns the elements of the array r refers to, packed as the

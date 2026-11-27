@@ -101,7 +101,8 @@ func (c *regCompiler) fastResult(x regOp, t module.ValueType, h int, b, cc uint6
 
 // The ways native code tests a non-null reference for a heap type
 // (regGC.mode), regdef's: not at all, leaving it to Go; by its type's
-// supertypes, for a type index; as an i31, a struct, an array, an eqref
+// supertypes, for a type index of a depth a type keeps them to (rtt.supers),
+// Go walking the chain past it; as an i31, a struct, an array, an eqref
 // (an i31, a struct or an array); or as any reference, for a top type.
 const (
 	castGo     = regdef.CastGo
@@ -131,7 +132,12 @@ func (c *regCompiler) castTarget(g *regGC, h module.HeapType) {
 		return
 	}
 	rt := rttOf(c.m.Canonical[h.Index()])
-	g.mode, g.depth, g.canon = castIndex, uint32(len(rt.supers)-1), rt.canon
+	if rt.depth >= superPrefix {
+		// Past the supertypes a type keeps at hand, Go walks the chain.
+		g.mode = castGo
+		return
+	}
+	g.mode, g.depth, g.canon = castIndex, rt.depth, rt.canon
 }
 
 // fastObj returns the object the reference slot field e names, trapping

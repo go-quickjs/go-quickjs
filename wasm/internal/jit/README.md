@@ -855,7 +855,15 @@ reference; a bottom type none; i31 the mark; eq an i31, a struct or an
 array, and struct and array the header's kind byte; a defined type an
 object whose header's runtime information has, at the type's depth among
 its supertypes, the type's canonical index -- the depth and the index
-known when the code is compiled.
+known when the code is compiled. The runtime information keeps the first
+64 of a type's supertypes by depth (`Layout.SupersKept`, every depth the
+interface's limits allow), and a depth among them is a bound check, a
+load and a compare. A deeper type, which only the core limits allow,
+is found by walking the object's type's chain of supertypes from the
+type: to its jump where the jump is not above the depth, to its supertype
+otherwise (`SupersWalk`), the jumps laid as a skew-binary ladder, so that
+the walk takes steps logarithmic in the chain's length, which needs
+neither a call nor a poll.
 
 struct.new and struct.new_default take a struct from a pool the engine
 fills ahead (`engine/jit_gc.go`), as the

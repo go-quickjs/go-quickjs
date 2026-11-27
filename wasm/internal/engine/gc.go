@@ -18,13 +18,31 @@ import (
 // byte an element, a reference array a cell. A short array, and any array
 // of references, is a single allocation, its elements after its header.
 
-// rtt is a type's runtime information: its canonical index, the canonical
-// indices of its declared supertypes by depth, ending with its own, and the
-// layout of its fields or elements.
+// rtt is a type's runtime information: its canonical index, its depth
+// among its declared supertypes, the canonical indices of the first
+// superPrefix of them by depth, from the root, ending with its own where
+// the type is not deeper, and the layout of its fields or elements.
+//
+// A cast tests a type against a type of depth d by the canonical index at
+// d of its chain of supertypes. For a d of the prefix that is an index into
+// supers; past it, a walk of the chain by jumps laid as a skew-binary
+// ladder (module.LinkSupertype), which reaches depth d in steps
+// logarithmic in the chain's length. Keeping the whole chain would make a
+// chain of n types hold n²/2 indices, and the core limits allow chains
+// 2^27 long; the prefix keeps it linear -- a type deeper than the prefix
+// shares its supertype's -- and holds every depth the interface's limits
+// allow, so that casts in modules within them test in a step.
 type rtt struct {
-	canon  module.CanonicalIndex
+	canon module.CanonicalIndex
+	// depth is the type's depth among its supertypes: 0 for none.
+	depth  uint32
 	def    *module.CanonicalType
 	supers []module.CanonicalIndex
+	// super is the supertype's runtime information, nil for none; jump is
+	// the type's jump up its chain, itself at the root, and jumpDepth the
+	// jump's depth.
+	super, jump *rtt
+	jumpDepth   uint32
 	// cells holds the cell of each struct field; ncells is the number of
 	// cells a struct of the type takes, header included.
 	cells  []int
@@ -35,12 +53,18 @@ type rtt struct {
 	refElems bool
 }
 
+// superPrefix is how many of a type's supertypes, from the root, its
+// runtime information keeps at hand (rtt.supers): depths 0 to 63, every
+// depth V8Limits and JSAPILimits allow.
+const superPrefix = 64
+
 var rtts struct {
 	sync.RWMutex
 	m map[module.CanonicalIndex]*rtt
 }
 
-// rttOf returns the runtime information of canonical type c.
+// rttOf returns the runtime information of canonical type c, made with
+// that of each of its supertypes not made yet, from the top down.
 func rttOf(c module.CanonicalIndex) *rtt {
 	rtts.RLock()
 	r := rtts.m[c]
@@ -48,13 +72,63 @@ func rttOf(c module.CanonicalIndex) *rtt {
 	if r != nil {
 		return r
 	}
+	rtts.Lock()
+	defer rtts.Unlock()
+	if r := rtts.m[c]; r != nil {
+		return r
+	}
+	if rtts.m == nil {
+		rtts.m = make(map[module.CanonicalIndex]*rtt)
+	}
+	var chain []module.CanonicalIndex
+	var sup *rtt
+	for x := c; ; {
+		chain = append(chain, x)
+		s := module.Canonical(x).Super
+		if s == module.NoCanonical {
+			break
+		}
+		if sup = rtts.m[s]; sup != nil {
+			break
+		}
+		x = s
+	}
+	for i := len(chain) - 1; i >= 0; i-- {
+		sup = newRTT(chain[i], sup)
+		rtts.m[chain[i]] = sup
+	}
+	return sup
+}
+
+// newRTT makes the runtime information of canonical type c, whose
+// supertype's is sup, nil for none.
+func newRTT(c module.CanonicalIndex, sup *rtt) *rtt {
 	def := module.Canonical(c)
-	r = &rtt{canon: c, def: def}
-	if def.Super != module.NoCanonical {
-		sup := rttOf(def.Super)
-		r.supers = append(append([]module.CanonicalIndex(nil), sup.supers...), c)
-	} else {
+	r := &rtt{canon: c, def: def}
+	if sup == nil {
+		r.jump = r
 		r.supers = []module.CanonicalIndex{c}
+	} else {
+		// The jump is the supertype, or, where the spans of the
+		// supertype's jump and of its jump's are of one length, the end
+		// of the two (module.LinkSupertype).
+		r.super, r.depth, r.jump = sup, sup.depth+1, sup
+		if sup.depth > 0 {
+			j := sup.jump
+			jj := j
+			if j.depth > 0 {
+				jj = j.jump
+			}
+			if sup.depth-j.depth == j.depth-jj.depth {
+				r.jump = jj
+			}
+		}
+		r.jumpDepth = r.jump.depth
+		if r.depth < superPrefix {
+			r.supers = append(sup.supers[:len(sup.supers):len(sup.supers)], c)
+		} else {
+			r.supers = sup.supers
+		}
 	}
 	switch def.Kind {
 	case module.TypeStruct:
@@ -74,16 +148,6 @@ func rttOf(c module.CanonicalIndex) *rtt {
 		r.refElems = t.IsRef()
 		r.elemSize = t.Size()
 	}
-	rtts.Lock()
-	if rtts.m == nil {
-		rtts.m = make(map[module.CanonicalIndex]*rtt)
-	}
-	if prev := rtts.m[c]; prev != nil {
-		r = prev
-	} else {
-		rtts.m[c] = r
-	}
-	rtts.Unlock()
 	return r
 }
 
@@ -108,10 +172,32 @@ func (c *Code) typeRTT(ti uint32) *rtt {
 	return r
 }
 
-// isSubRTT reports whether type r is the canonical type c or declares it,
-// directly or not, as a supertype.
+// isSub reports whether type r is the canonical type c, of depth depth,
+// or declares it, directly or not, as a supertype.
 func (r *rtt) isSub(c module.CanonicalIndex, depth int) bool {
-	return depth < len(r.supers) && r.supers[depth] == c
+	if depth < len(r.supers) {
+		return r.supers[depth] == c
+	}
+	return depth >= superPrefix && r.isSubDeep(c, uint32(depth))
+}
+
+// isSubDeep is isSub for a depth past superPrefix: the type of r's chain
+// at depth, found by the chain's jumps, is c. It is kept out of isSub's
+// callers, which test casts of the depths the prefix holds.
+//
+//go:noinline
+func (r *rtt) isSubDeep(c module.CanonicalIndex, depth uint32) bool {
+	if r.depth < depth {
+		return false
+	}
+	for r.depth > depth {
+		if r.jumpDepth >= depth {
+			r = r.jump
+		} else {
+			r = r.super
+		}
+	}
+	return r.canon == c
 }
 
 // objHeader returns the header of the object r points to.
@@ -346,7 +432,7 @@ func RefIsSub(r Ref, h module.HeapType, m *module.Module) bool {
 	if got == nil {
 		return false
 	}
-	return got.isSub(want.canon, len(want.supers)-1)
+	return got.isSub(want.canon, int(want.depth))
 }
 
 // refIsAbstract reports whether non-null reference r is of abstract heap

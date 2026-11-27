@@ -117,12 +117,21 @@ type Layout struct {
 	// An object begins with a header: Kind is its kind's byte, KindStruct
 	// and KindArray the values that say a struct and an array; RTT the
 	// pointer to its type's runtime information, nil for an object of no
-	// defined type, whose Supers are the canonical indices, 4 bytes each,
-	// of the type's supertypes by depth, its own last: their address, then
-	// their number.
+	// defined type. That holds the type's canonical index, RTTCanon, and its
+	// depth, RTTDepth, 4 bytes each; Supers, the canonical indices, 4 bytes
+	// each, of the type's supertypes by depth from the root, their address
+	// then their number, the first SupersKept of the chain, ending with the
+	// type's own where it is not deeper; and for a cast deeper than those,
+	// RTTSuper, the supertype's runtime information, RTTJump, that of the
+	// type its jump up the chain names, and RTTJumpDepth that type's depth,
+	// 4 bytes (SupersTest).
 	Kind                  int32
 	KindStruct, KindArray uint8
 	RTT, Supers           int32
+	SupersKept            int
+	RTTCanon, RTTDepth    int32
+	RTTSuper, RTTJump     int32
+	RTTJumpDepth          int32
 	// An array's ArrayLen is its length, a word; ArrayElems the address of
 	// its elements, packed: numbers by their size, references two words
 	// each.

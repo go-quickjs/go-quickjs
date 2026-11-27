@@ -724,6 +724,10 @@ func (g *gen) testRef(v *Value, src int32) {
 		a.Load(s1, s1, lay.RTT)
 		a.Op(amd64.Test, s1, s1, true)
 		a.Jcc(amd64.CondE, fail)
+		if depth >= lay.SupersKept {
+			wjit.SupersWalk(a, lay, s1, s0, canon, depth, ok, fail)
+			break
+		}
 		a.Load(s0, s1, lay.Supers+8)
 		a.OpImm(amd64.Cmp, s0, int32(depth), true)
 		a.Jcc(amd64.CondBE, fail)

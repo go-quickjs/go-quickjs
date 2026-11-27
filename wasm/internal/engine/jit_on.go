@@ -226,23 +226,29 @@ type jitLevel struct {
 
 // jitLayout is where the engine's objects keep what native code reads.
 var jitLayout = &wjit.Layout{
-	TableElems: int32(unsafe.Offsetof(Table{}.Elems)),
-	I31Mark:    uint64(uintptr(unsafe.Pointer(&i31Mark))),
-	Kind:       int32(unsafe.Offsetof(header{}.kind)),
-	KindStruct: uint8(ObjStruct),
-	KindArray:  uint8(ObjArray),
-	RTT:        int32(unsafe.Offsetof(header{}.rtt)),
-	Supers:     int32(unsafe.Offsetof(rtt{}.supers)),
-	ArrayLen:   int32(unsafe.Offsetof(Array{}.n)),
-	ArrayElems: int32(unsafe.Offsetof(Array{}.e)),
-	FuncType:   int32(unsafe.Offsetof(Function{}.Type)),
-	FuncInst:   int32(unsafe.Offsetof(Function{}.Inst)),
-	FuncIndex:  int32(unsafe.Offsetof(Function{}.Index)),
-	PoolCount:  int32(unsafe.Offsetof(gcPool{}.n)),
-	PoolObjs:   int32(unsafe.Offsetof(gcPool{}.objs)),
-	ArrayBlock: int32(arrayHeader),
-	ArrayClass: arrayClassOf[:],
-	Segment:    int32(unsafe.Sizeof([]byte(nil))),
+	TableElems:   int32(unsafe.Offsetof(Table{}.Elems)),
+	I31Mark:      uint64(uintptr(unsafe.Pointer(&i31Mark))),
+	Kind:         int32(unsafe.Offsetof(header{}.kind)),
+	KindStruct:   uint8(ObjStruct),
+	KindArray:    uint8(ObjArray),
+	RTT:          int32(unsafe.Offsetof(header{}.rtt)),
+	Supers:       int32(unsafe.Offsetof(rtt{}.supers)),
+	SupersKept:   superPrefix,
+	RTTCanon:     int32(unsafe.Offsetof(rtt{}.canon)),
+	RTTDepth:     int32(unsafe.Offsetof(rtt{}.depth)),
+	RTTSuper:     int32(unsafe.Offsetof(rtt{}.super)),
+	RTTJump:      int32(unsafe.Offsetof(rtt{}.jump)),
+	RTTJumpDepth: int32(unsafe.Offsetof(rtt{}.jumpDepth)),
+	ArrayLen:     int32(unsafe.Offsetof(Array{}.n)),
+	ArrayElems:   int32(unsafe.Offsetof(Array{}.e)),
+	FuncType:     int32(unsafe.Offsetof(Function{}.Type)),
+	FuncInst:     int32(unsafe.Offsetof(Function{}.Inst)),
+	FuncIndex:    int32(unsafe.Offsetof(Function{}.Index)),
+	PoolCount:    int32(unsafe.Offsetof(gcPool{}.n)),
+	PoolObjs:     int32(unsafe.Offsetof(gcPool{}.objs)),
+	ArrayBlock:   int32(arrayHeader),
+	ArrayClass:   arrayClassOf[:],
+	Segment:      int32(unsafe.Sizeof([]byte(nil))),
 }
 
 // A segment's entry, as native code reads it (wjit.Ctx.Datas): a slice's
@@ -253,7 +259,8 @@ var (
 	_ [unsafe.Sizeof(int(0)) - 8]struct{}
 )
 
-// A type's supertypes are 4 bytes each, as native code reads them.
+// A type's canonical index and its supertypes' are 4 bytes each, as native
+// code reads them.
 var _ [unsafe.Sizeof(module.CanonicalIndex(0)) - 4]struct{}
 
 // jitWriteBarrier and jitStoreRef are the write barrier's flag and store

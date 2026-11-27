@@ -552,7 +552,8 @@ between the object and its position's slot through the barrier, s0 (X16)
 holding R, the index or a number on its way. ref.i31 stores the mark and
 the low 31 bits; the tests compare the mark, the header's kind byte, and
 for a defined type the canonical index at its depth among the
-supertypes, a cast going to its trap. A new struct is taken from its pool
+supertypes, a type deeper than the 64 at hand by the baseline's walk of
+its chain (`wjit.SupersWalk`), a cast going to its trap. A new struct is taken from its pool
 -- the context's table, the type's pool, its count, each tested, the
 count decremented and the struct's pointer loaded into s1 -- its numbers
 stored from their locations and its references copied plainly through x0

@@ -634,9 +634,11 @@ first (`Array.e`) plus the index times its size, below its length
 (`Array.n`). A reference stored, to a slot or into an object, goes by
 storeRef, under the marking rule. `ref.test`, `ref.cast` and
 `br_on_cast` test by the record's mode (`regGC.mode`): a type index by
-the object's type's supertype at the target's depth (`rtt.supers`), i31,
-struct, array and eq by what the reference points to, a top type as
-always true; a bottom type is Go's. A null where an object is needed, an
+the object's type's supertype at the target's depth (`rtt.supers`, the
+first 64 of a chain), i31, struct, array and eq by what the reference
+points to, a top type as always true; a bottom type, and a type index
+deeper than 63, which Go finds by the chain's jumps (`rtt.isSubDeep`),
+are Go's. A null where an object is needed, an
 index out of bounds and a failed cast exit to Go, which traps.
 
 **Allocations.** `struct.new`, `struct.new_default`, `array.new`,

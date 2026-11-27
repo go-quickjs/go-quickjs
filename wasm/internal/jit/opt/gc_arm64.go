@@ -713,6 +713,10 @@ func (g *gen) testRef(v *Value, src int32) {
 		isI31(fail)
 		a.Load(s1, s1, lay.RTT)
 		a.Cbz(s1, fail, true)
+		if depth >= lay.SupersKept {
+			wjit.SupersWalk(a, lay, s1, s0, canon, depth, ok, fail)
+			break
+		}
 		// The supertypes' number, past depth; then the one at depth.
 		a.Load(s0, s1, lay.Supers+8)
 		a.CmpImm(s0, int64(depth), true)
