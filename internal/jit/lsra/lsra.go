@@ -268,6 +268,11 @@ type Config struct {
 	// block's successors' phis for the arguments they read at its end, for
 	// the tests that compare it with listing them once (edgeArgs).
 	phiWalks bool
+	// searchPreds has the walk that finds each edge's index among its
+	// successor's predecessors (predIdx) search them whatever their number,
+	// for the tests that compare it with sorting them where they are many
+	// (predIndex).
+	searchPreds bool
 	// plainLists has the scan read every web on its active and inactive
 	// lists at every position, for the tests that compare it with reading
 	// each only where its entry says it may have changed.

@@ -277,6 +277,14 @@ type Allocator struct {
 	// moved says the scan took a web apart or moved a web's start.
 	moved bool
 
+	// predKey is, for each block of more than manyPreds predecessors,
+	// its predecessors each with its index among them, as p<<32 | k in
+	// order, from predAt[s] on, made the first time the walk that finds
+	// predIdx meets such a block in an allocation (predsSorted).
+	predKey     []uint64
+	predAt      []int32
+	predsSorted bool
+
 	// The function being allocated, where splitting is allowed (split),
 	// its positions' end (maxPos), and whether its events and blockOf's
 	// table are known.
@@ -294,6 +302,7 @@ type Allocator struct {
 	plainLists   bool
 	mutateHoles  bool
 	oneByOne     bool
+	searchPreds  bool
 	maxPos       int32
 	evKnown      bool
 	blocksKnown  bool
@@ -380,6 +389,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.split, al.stress = !cfg.NoSplit, cfg.StressSplit && !cfg.NoSplit
 	al.displace, al.mutateHoles, al.oneByOne, al.twoPass, al.plainLists, al.markPass = cfg.Displace, cfg.mutateHoles, cfg.oneByOne, cfg.twoPass, cfg.plainLists, cfg.markPass
 	al.hintPass, al.blockByBlock, al.mergeAll, al.regByReg, al.phiWalks = cfg.hintPass, cfg.blockByBlock, cfg.mergeAll, cfg.regByReg, cfg.phiWalks
+	al.searchPreds = cfg.searchPreds
 
 	// predIdx is, for each block's successor k, the block's index among
 	// that successor's predecessors: predIdx[predOff[i]+k]. The walk that
@@ -390,6 +400,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	// block i's from argOff[i] to argOff[i+1].
 	al.predOff = grown(al.predOff, nb+1)
 	argOff := grown(al.argOff, nb+1)
+	al.predsSorted = false
 	predIdx, edgeArgs := al.predIdx[:0], al.edgeArgs[:0]
 	for i := range f.Blocks {
 		al.predOff[i], argOff[i] = int32(len(predIdx)), int32(len(edgeArgs))
@@ -399,7 +410,12 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			if len(succs) > 1 && len(sb.Preds) > 1 {
 				al.split = false
 			}
-			pi := slices.Index(sb.Preds, i)
+			var pi int
+			if ps := sb.Preds; len(ps) <= manyPreds || al.searchPreds {
+				pi = slices.Index(ps, i)
+			} else {
+				pi = al.predIndex(s, i)
+			}
 			predIdx = append(predIdx, int32(pi))
 			for k := range sb.Phis {
 				if a := sb.Phis[k].Args[pi]; alloc(a) {
@@ -1977,4 +1993,39 @@ func unionInto(ar *arena[rng], a, b []rng) []rng {
 		}
 	}
 	return out
+}
+
+// manyPreds is the most predecessors a block has whose index among them
+// predIdx's walk finds by a search of them: past it, by predIndex.
+const manyPreds = 32
+
+// predIndex is the index of block p among the predecessors of block s,
+// one of more than manyPreds of them: the first where p is there more than
+// once, or -1 where it is not there. The predecessors of each such block
+// are sorted, with their indices, the first time one is asked for, and
+// each found by a search: the walk asking for each edge's index then
+// costs the edges, not the edges times the predecessors, as a block every
+// arm of a large switch goes to would.
+func (al *Allocator) predIndex(s, p int) int {
+	f := al.f
+	if !al.predsSorted {
+		al.predsSorted = true
+		al.predAt = grown(al.predAt, len(f.Blocks))
+		al.predKey = al.predKey[:0]
+		for b := range f.Blocks {
+			if ps := f.Blocks[b].Preds; len(ps) > manyPreds {
+				al.predAt[b] = int32(len(al.predKey))
+				for k, q := range ps {
+					al.predKey = append(al.predKey, uint64(q)<<32|uint64(k))
+				}
+				slices.Sort(al.predKey[al.predAt[b]:])
+			}
+		}
+	}
+	keys := al.predKey[al.predAt[s] : int(al.predAt[s])+len(f.Blocks[s].Preds)]
+	k, _ := slices.BinarySearch(keys, uint64(p)<<32)
+	if k < len(keys) && keys[k]>>32 == uint64(p) {
+		return int(uint32(keys[k]))
+	}
+	return -1
 }

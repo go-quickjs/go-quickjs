@@ -1,6 +1,7 @@
 package lsra
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"slices"
 	"testing"
@@ -1041,6 +1042,118 @@ func TestManyCalls(t *testing.T) {
 	}
 }
 
+// manyPredsFunc is a function one of whose blocks n others branch to. Of
+// kind predsSwitch, the entry branches to n blocks, each defining and
+// reading a value and going to a block that reads one the entry defines (a
+// switch's arms meeting again); of predsPhi, each arm's value is read by a
+// phi of the block they meet in, instead; of predsFail, a chain of n blocks
+// each branches to the next and to one that fails, which reads the
+// entry's value.
+func manyPredsFunc(n, kind int) *Func {
+	f := &Func{}
+	reg := func() VReg {
+		f.Class = append(f.Class, 0)
+		f.FixedSlot = append(f.FixedSlot, -1)
+		return VReg(len(f.Class) - 1)
+	}
+	x := reg()
+	f.Blocks = append(f.Blocks, Block{Insts: []Inst{mk(nil, []VReg{x}, None)}})
+	last := n + 1
+	if kind == predsFail {
+		f.Blocks[0].Succs = []int{1}
+		var preds []int
+		for k := 1; k <= n; k++ {
+			v := reg()
+			next := k + 1
+			if k == n {
+				next = last + 1
+			}
+			preds = append(preds, k)
+			f.Blocks = append(f.Blocks, Block{Preds: []int{k - 1}, Succs: []int{next, last}, Insts: []Inst{mk([]VReg{x}, []VReg{v}, None), mk([]VReg{v}, nil, None)}})
+		}
+		f.Blocks = append(f.Blocks, Block{Preds: preds, Insts: []Inst{mk([]VReg{x}, nil, None)}})
+		f.Blocks = append(f.Blocks, Block{Preds: []int{n}, Insts: []Inst{mk([]VReg{x}, nil, None)}})
+		return f
+	}
+	var args []VReg
+	var preds []int
+	for k := 1; k <= n; k++ {
+		v := reg()
+		args = append(args, v)
+		preds = append(preds, k)
+		f.Blocks[0].Succs = append(f.Blocks[0].Succs, k)
+		insts := []Inst{mk([]VReg{x}, []VReg{v}, None)}
+		if kind == predsSwitch {
+			insts = append(insts, mk([]VReg{v}, nil, None))
+		}
+		f.Blocks = append(f.Blocks, Block{Preds: []int{0}, Succs: []int{last}, Insts: insts})
+	}
+	join := Block{Preds: preds, Insts: []Inst{mk([]VReg{x}, nil, None)}}
+	if kind == predsPhi {
+		p := reg()
+		join.Phis = []Phi{{Def: p, Args: args}}
+		join.Insts = []Inst{mk([]VReg{p, x}, nil, None)}
+	}
+	f.Blocks = append(f.Blocks, join)
+	return f
+}
+
+// manyPredsFunc's kinds.
+const (
+	predsSwitch = iota
+	predsPhi
+	predsFail
+)
+
+// BenchmarkManyPreds times the allocation of manyPredsFunc's functions of
+// kinds predsSwitch and predsFail, a block of n predecessors, and the
+// liveness phase (liveness-ns/op), which finds each edge's index among its
+// successor's predecessors. (Of predsPhi the liveness sets, n values live
+// across the n arms' ends, grow with n squared whatever else does.)
+func BenchmarkManyPreds(b *testing.B) {
+	for _, kind := range []int{predsSwitch, predsFail} {
+		for _, n := range []int{1000, 2000, 4000, 8000, 16000} {
+			name := fmt.Sprintf("switch%d", n)
+			if kind == predsFail {
+				name = fmt.Sprintf("fail%d", n)
+			}
+			b.Run(name, func(b *testing.B) {
+				f := manyPredsFunc(n, kind)
+				var al Allocator
+				var mark time.Time
+				var phases [NumPhases]time.Duration
+				cfg := &Config{Classes: [][]int{{0, 1, 2, 3}}, NumSlots: 1 << 20, Lap: func(p Phase) {
+					now := time.Now()
+					phases[p] += now.Sub(mark)
+					mark = now
+				}}
+				for b.Loop() {
+					mark = time.Now()
+					if _, err := al.Allocate(f, cfg); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.ReportMetric(float64(phases[PhaseLiveness].Nanoseconds())/float64(b.N), "liveness-ns/op")
+			})
+		}
+	}
+}
+
+// TestManyPreds allocates manyPredsFunc's functions and checks them.
+func TestManyPreds(t *testing.T) {
+	for kind := range 3 {
+		for _, n := range []int{1, 2, 40, 300} {
+			f := manyPredsFunc(n, kind)
+			cfg := &Config{Classes: [][]int{{0, 1, 2, 3}}, NumSlots: 1 << 20}
+			res, err := Allocate(f, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkAllocation(t, 0, f, cfg, res)
+		}
+	}
+}
+
 // TestManySlots allocates manySlotsFunc's functions and checks them: each
 // long value in a slot of its own, the short ones sharing.
 func TestManySlots(t *testing.T) {
@@ -1089,6 +1202,7 @@ func TestWalkMethods(t *testing.T) {
 		{"mergeAll", func(c *Config) { c.mergeAll = true }},
 		{"regByReg", func(c *Config) { c.regByReg = true }},
 		{"phiWalks", func(c *Config) { c.phiWalks = true }},
+		{"searchPreds", func(c *Config) { c.searchPreds = true }},
 	}
 	var al, old Allocator
 	twice := 0
@@ -1204,6 +1318,42 @@ func TestWalkMethods(t *testing.T) {
 		blocks             bool
 	}{{200, 200, 0, false}, {200, 200, 0, true}, {6, 400, 2, false}, {6, 400, 3, true}} {
 		check("manyCalls", manyCallsFunc(c.long, c.calls, c.every, c.blocks), big)
+	}
+	for kind := range 3 {
+		for _, n := range []int{manyPreds, manyPreds + 1, 3 * manyPreds} {
+			check("manyPreds", manyPredsFunc(n, kind), big)
+		}
+	}
+}
+
+// TestPredIndex finds each block's index among the predecessors of blocks
+// of many, some listed more than once, by predIndex and by a search, and
+// those of blocks that are not among them.
+func TestPredIndex(t *testing.T) {
+	rng := rand.New(rand.NewPCG(67, 71))
+	var al Allocator
+	for range 300 {
+		nb := 2 + rng.IntN(200)
+		f := &Func{Blocks: make([]Block, nb)}
+		for b := range f.Blocks {
+			np := rng.IntN(3 * manyPreds)
+			for range np {
+				f.Blocks[b].Preds = append(f.Blocks[b].Preds, rng.IntN(nb))
+			}
+		}
+		al.f, al.predsSorted = f, false
+		for s := range f.Blocks {
+			ps := f.Blocks[s].Preds
+			if len(ps) <= manyPreds {
+				continue
+			}
+			for range 2 * len(ps) {
+				p := rng.IntN(nb)
+				if got, want := al.predIndex(s, p), slices.Index(ps, p); got != want {
+					t.Fatalf("block %d among %v: %d, not %d", p, ps, got, want)
+				}
+			}
+		}
 	}
 }
 
