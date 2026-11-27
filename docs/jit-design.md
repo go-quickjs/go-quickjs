@@ -1630,8 +1630,31 @@ is under [The projection](#the-projection).
   quadratic parts blamed below -- one range for a register live through
   blocks one after another, the slots' scan passing over slots that
   certainly meet a web, and what a web lives across found from its uses
-  and ranges, not call by call -- so the comparison is due again before
-  the verdict stands.
+  and ranges, not call by call -- and fdc28202d..7a5c04b77, which cut
+  its walks. Measured again at 7a5c04b77, the same way on an idle
+  machine (`-jitcompile 3`, the median of three rounds):
+
+  | Program | mir | lsra |
+  |---|---:|---:|
+  | Typescript | 40.4 | 49.0 (61.0) |
+  | zlib | 25.9 | 48.7 (57.1) |
+  | Mandreel | 7.62 | 9.61 (12.3) |
+  | PdfJS | 10.5 | 11.5 (14.0) |
+  | Gameboy | 6.67 | 9.97 (12.4) |
+
+  lsra's own phases are still 1.09 to 1.88 times mir's, 1.33 to 2.20
+  with building its function, and the verdict stands. What remains is
+  its ranges and webs, 3.5 to 6.3 times mir's intervals and hints on
+  every program (Typescript 21.0 against 4.7 ms, zlib 19.6 against
+  3.1); zlib's slot scan is down from 21.6 to 6.1 ms, and lsra's
+  liveness and scan now beat mir's by more (Typescript 10.65 against
+  16.16, 12.28 against 19.50), but on zlib its liveness and on Gameboy
+  its scan are still longer. Its allocation is unchanged: the spills
+  and edge moves below are the same counts. The edge figures below are
+  sums over the runs measured, three for Typescript and two for the
+  rest; per run, Mandreel's is 5.28M to 185K.
+
+  The paragraph below describes the first measurement.
 
   That is 1.45 to 3.2 times as long, before its locations are mapped
   back, with mir's uses and saves still needed. Projected: allocation
