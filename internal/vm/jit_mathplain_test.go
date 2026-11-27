@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
@@ -47,6 +48,12 @@ func TestJITMathPlainCall(t *testing.T) {
 			srcs = append(srcs, rd[0])
 		}
 	}
+	// treeId called natively, its link counting the calls, rather than
+	// inlined in idLoop, as a callee whose literal defines its fields
+	// natively may be: the calls counted are its own.
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.noInline = func(fn *bytecode.Function) bool { return fn.Name == "treeId" }
+	})
 	r := jitAgreesForTest(t, mathPlainSetup, srcs...)
 	for _, rd := range rounds {
 		v, err := r.Run(compileForTest(t, "''+("+rd[0]+")"))

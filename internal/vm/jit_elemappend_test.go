@@ -2,7 +2,11 @@
 
 package vm
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+)
 
 // elemAppendSetup's functions store values that are no numbers at their
 // arrays' lengths -- objects, strings -- and then at what native code
@@ -54,6 +58,12 @@ func TestJITElemStoreAppends(t *testing.T) {
 	}
 	rounds = append(rounds, `(Object.defineProperty(Array.prototype, 3, { set(v) { hits++ }, configurable: true }), drive_setter(30, 8))`,
 		`(delete Array.prototype[3], drive_setter(30, 8) + ':' + drive_fillSum(30, 64))`)
+	// fill called natively, its link counting the calls, rather than
+	// inlined in fillSum, as its loop, small, leaving nothing to Go, may
+	// be: the calls of Go counted are its own.
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.noInline = func(fn *bytecode.Function) bool { return fn.Name == "fill" }
+	})
 	r := jitAgreesForTest(t, elemAppendSetup+drivers, rounds[:len(rounds)-2]...)
 	v, link, ok := jitViewOfFnNamedForTest(r, "fill")
 	if !ok || link == nil {

@@ -4118,10 +4118,14 @@ func (b *builder) stringCell(pc int) (uintptr, bool) {
 	return cell, ok && cell != 0
 }
 
-// define is what the literal's field at pc adds (LiteralFeedback).
+// define is what the literal's field at pc adds (LiteralFeedback), an
+// inlined callee's as the root's: the feedback is the frame's own, as its
+// literal's pool is (literal). Asked of the root alone, a callee's object
+// literal inlined left native code at its first field at every call, and
+// the call was no longer inlined after jitInlineExits of them.
 func (b *builder) define(pc int) (*PropertyAdd, bool) {
 	f, ok := b.fb.(LiteralFeedback)
-	if !ok || b.cur != b.root {
+	if !ok {
 		return nil, false
 	}
 	add, ok := f.Define(pc)

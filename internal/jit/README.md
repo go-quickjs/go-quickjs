@@ -3537,7 +3537,11 @@ frequencies are what the feedback dispatcher counted (see
 [Feedback](#feedback)). A callee's
 throw, or a call its own code has never been seen to make, does not keep it
 from being inlined: native code leaves the inlined frame there, as V8's code
-deoptimizes at a call with no feedback.
+deoptimizes at a call with no feedback. An inlined callee's object literal
+is made as the root's: its pool (`literal`) and the definitions of its
+fields (`define`) are its own feedback's, asked of its frame. Its
+definitions asked of the root alone, a callee's literal inlined in a loop
+had left native code at its first field at every call.
 
 **Callees with loops.** A callee with a loop is inlined where it is small --
 at most 24 instructions (`ssa`'s `maxInlineLoop`) -- and leaves nothing to
