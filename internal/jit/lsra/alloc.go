@@ -306,7 +306,9 @@ type Allocator struct {
 	predsSorted bool
 
 	// The ranges' walk's: each register's range found last, and the
-	// node of the one found before it (walkRanges).
+	// node of the one found before it (walkRanges), and the registers as
+	// it found them.
+	seen   []VReg
 	last   []rng
 	before []int32
 	nodes  []rnode
@@ -2001,10 +2003,9 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 	// none (to 0); before[v] is, plus one, the index of the node of the
 	// one found before it, which begins after it, or 0, each node's next
 	// the one found before it.
+	// Clear: layoutRanges clears each register's it reads.
 	last := grown(al.last, n)[:n]
-	clear(last)
 	before := grown(al.before, n)[:n]
-	clear(before)
 	nodes := al.nodes[:0]
 	sw := al.outSumW
 	// order is the definitions and the temporaries, each with its
@@ -2012,8 +2013,10 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 	// n not kept.
 	order := grown(al.order, n)
 	no := 0
-	// nregs is the number of registers that have ranges.
+	// nregs is the number of registers that have ranges, seen those
+	// registers, as the walk finds them.
 	nregs := 0
+	seen := grown(al.seen, n)
 	for i := nb - 1; i >= 0; i-- {
 		b := &f.Blocks[i]
 		start, end := starts[i], ends[i]
@@ -2029,6 +2032,7 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 					l.from = start
 				case l.to == 0:
 					*l = rng{start, end + 1}
+					seen[nregs] = v
 					nregs++
 				default:
 					nodes = append(nodes, rnode{*l, before[v]})
@@ -2055,6 +2059,7 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 							l.from = start
 						case l.to == 0:
 							*l = rng{start, end + 1}
+							seen[nregs] = v
 							nregs++
 						default:
 							nodes = append(nodes, rnode{*l, before[v]})
@@ -2089,6 +2094,7 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 					l.from = u + 1
 				case l.to == 0:
 					*l = rng{u + 1, u + 2}
+					seen[nregs] = d
 					nregs++
 				default:
 					nodes = append(nodes, rnode{*l, before[d]})
@@ -2105,6 +2111,7 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 				case l.from == start && l.to != 0:
 				case l.to == 0:
 					*l = rng{start, u + 1}
+					seen[nregs] = v
 					nregs++
 				default:
 					nodes = append(nodes, rnode{*l, before[v]})
@@ -2124,6 +2131,7 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 				}
 				no++
 				if l := &last[t]; l.to == 0 {
+					seen[nregs] = t
 					nregs++
 				} else {
 					nodes = append(nodes, rnode{*l, before[t]})
@@ -2150,6 +2158,7 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 			case l.from == start && l.to != 0:
 			case l.to == 0:
 				*l = rng{start, start + 1}
+				seen[nregs] = d
 				nregs++
 			default:
 				nodes = append(nodes, rnode{*l, before[d]})
@@ -2158,7 +2167,7 @@ func (al *Allocator) walkRanges(f *Func, liveOut func(int) []uint64, clobbers []
 			}
 		}
 	}
-	al.last, al.before, al.nodes, al.nregs, al.order = last, before, nodes, nregs, order[:min(no, n)]
+	al.last, al.before, al.nodes, al.nregs, al.order, al.seen = last, before, nodes, nregs, order[:min(no, n)], seen
 	if no > n {
 		// More than n, a register defined more than once: the webs are
 		// sorted (al.order says nothing).
@@ -2262,11 +2271,11 @@ func (al *Allocator) layoutRanges() {
 	}
 	owns := al.owns[:0]
 	nm := 0
-	for v := range last {
+	// The registers with ranges, as the walk found them (seen), each one's
+	// last and before cleared as they are read: clear for the next
+	// allocation's walk.
+	for _, v := range al.seen[:al.nregs] {
 		l := last[v]
-		if l.to == 0 {
-			continue
-		}
 		a := len(flat)
 		flat = append(flat, l)
 		for k := before[v]; k > 0; k = nodes[k-1].next {
@@ -2277,6 +2286,7 @@ func (al *Allocator) layoutRanges() {
 				flat = append(flat, x)
 			}
 		}
+		last[v], before[v] = rng{}, 0
 		rs := flat[a:len(flat):len(flat)]
 		rref[v] = rngRef{int32(a), int32(len(rs))}
 		// What it lives across, where a clobber lies in its extent.
