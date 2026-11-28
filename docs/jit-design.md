@@ -1670,6 +1670,30 @@ is under [The projection](#the-projection).
   sums over the runs measured, three for Typescript and two for the
   rest; per run, Mandreel's is 5.28M to 185K.
 
+  Measured again at bc9f3d797, after the seventeen commits d27473bda to
+  fe32d451a -- the scan reading its waiting lists only where an entry
+  may have changed, a large function's liveness explored 64 registers at
+  once, most overlaps answered by a test without a walk -- the same way
+  on an idle machine (`-jitcompile 3`, the median of three rounds):
+
+  | Program | mir | lsra |
+  |---|---:|---:|
+  | Typescript | 39.9 | 42.3 (53.8) |
+  | zlib | 26.9 | 27.0 (36.0) |
+  | Mandreel | 7.63 | 8.20 (10.8) |
+  | PdfJS | 10.7 | 10.4 (12.9) |
+  | Gameboy | 6.78 | 8.32 (10.7) |
+
+  lsra's own phases are now 0.97 to 1.23 times mir's, and 1.21 to 1.58
+  with building its function, which mir's scan does not need. Gameboy is
+  the furthest, its ranges and scan; PdfJS's are below mir's. Its
+  allocation is unchanged: spill cost against mir's is +0.7% on
+  Typescript, +3.4% on zlib, +32% on Mandreel and +19% on PdfJS, -28% on
+  Gameboy, and the edge cost is 78 to 96% lower but on zlib, 3.5 times
+  higher. The compile cost no longer decides it; what lsra's code runs
+  like in mir's place, spills and edges together, does, and that is a
+  trial of stage 7b's.
+
   The paragraph below describes the first measurement.
 
   That is 1.45 to 3.2 times as long, before its locations are mapped
