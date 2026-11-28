@@ -101,6 +101,63 @@ func linearLoopsSource(name string, n int) string {
 	return b.String()
 }
 
+// linearDeepSource is loops nested n/10 deep (the parser's bound of a
+// nest is some 2,000 statements, a loop and its block two), each of one
+// turn, adding an invariant product before the loop inside it and halving
+// a sum after it; doWhile makes each a do-while loop, whose test, and so
+// its way out, is at its end, after the loops inside it. One counter
+// steers them all, so that what is live at each level is the same few
+// values: a counter of each loop's own would be live through every loop
+// inside it, and every exit there would name them all, the depth's
+// square, as a program has it. What is found of each loop -- licm's walk,
+// the peeling's choice of a loop with none inside it, mir's budget loops
+// (findBudgets) -- must not take each loop's nest, the function's depth
+// for each of its loops.
+func linearDeepSource(doWhile bool) func(name string, n int) string {
+	return func(name string, n int) string {
+		var b strings.Builder
+		fmt.Fprintf(&b, "function %s(a, rounds) {\nvar s = 0, c = 0;\n", name)
+		d := n / 10
+		for i := range d {
+			if doWhile {
+				fmt.Fprintf(&b, "do {\nc = c + 1;\ns = s + a * %d;\n", i)
+			} else {
+				fmt.Fprintf(&b, "while (c < %d) {\nc = c + 1;\ns = s + a * %d;\n", i+1, i)
+			}
+		}
+		for i := range d {
+			if doWhile {
+				fmt.Fprintf(&b, "s = s * 0.5 + %d;\n} while (c < %d);\n", d-i, d-i)
+			} else {
+				fmt.Fprintf(&b, "s = s * 0.5 + %d;\n}\n", d-i)
+			}
+		}
+		b.WriteString("return s;\n}\n")
+		return b.String()
+	}
+}
+
+// linearBreaksSource is linearDeepSource's nest of while loops whose
+// innermost body leaves each of them by a labeled break of its own, a
+// test of each level's, which the loops around it walk from their own
+// back edges: each break's way out lies in every loop around its target.
+func linearBreaksSource(name string, n int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "function %s(a, rounds) {\nvar s = 0, c = 0;\n", name)
+	d := n / 20
+	for i := range d {
+		fmt.Fprintf(&b, "l%d: while (c < %d) {\nc = c + 1;\ns = s + a * %d;\n", i, i+1, i)
+	}
+	for i := range d {
+		fmt.Fprintf(&b, "if (s < %d - rounds * 1000) break l%d;\n", -i, i)
+	}
+	for i := range d {
+		fmt.Fprintf(&b, "s = s * 0.5 + %d;\n}\n", d-i)
+	}
+	b.WriteString("return s;\n}\n")
+	return b.String()
+}
+
 // linearGroupsSource is n variables a loop carries, each a phi group of
 // its header's phi and its new value, past every register: each turn reads
 // them all into n temporaries, live till the second half of the turn
@@ -284,7 +341,10 @@ func linearCompileOf(t *testing.T, src, name string, args func(*Runtime) []Value
 // of 16,000 -- where its sets now take what changes from block to block
 // (mir's blockLiveness); and n loops one after another (loops) had each
 // cleared a table of every block and looked at every block, to find its
-// own and to give its budget register an interval, n² steps (findBudgets).
+// own and to give its budget register an interval, n² steps (findBudgets);
+// and loops nested n/10 deep (deep, deepdo, breaks) had each loop's walk
+// take the loops inside it, d²/2 loops' blocks for a nest of d, to find
+// that only the innermost could count its budget in a register.
 // n variables a loop carries, each given the next's value every turn or
 // the one before's (rotate, rotateback), had their back edge's parallel
 // move made a pass over the pending moves at a time, a pass for each move
@@ -314,6 +374,9 @@ func TestJITCompileLinear(t *testing.T) {
 			return []Value{Float(1.25), Float(0.5), Float(7), spillMoreObject(r, 0), Str(NewString("pp")), Float(2)}
 		}},
 		{"loops", linearLoopsSource, plain},
+		{"deep", linearDeepSource(false), plain},
+		{"deepdo", linearDeepSource(true), plain},
+		{"breaks", linearBreaksSource, plain},
 		{"groups", linearGroupsSource, plain},
 		{"stores", linearStoresSource, plain},
 		{"rotate", linearRotateSource(false), plain},

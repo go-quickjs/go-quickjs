@@ -14,7 +14,7 @@ const (
 	layoutPadNI   = 797
 	layoutPadNGI  = -1
 	layoutPadNMI  = -1
-	layoutPadNE   = 605
+	layoutPadNE   = 20
 	layoutPadNGE  = -1
 	layoutPadNME  = -1
 	layoutPadNT   = 513
