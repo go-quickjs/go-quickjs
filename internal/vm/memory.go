@@ -356,8 +356,10 @@ var (
 	arrayExtSize = int64(unsafe.Sizeof(arrayExt{}))
 	propKeySize  = int64(unsafe.Sizeof(propKey{}))
 	shapeSize    = int64(unsafe.Sizeof(shape{}))
-	// propIndexSize is an index's own struct and its map's header.
-	propIndexSize = int64(unsafe.Sizeof(propIndex{})) + 48
+	// propIndexSize is an index's own struct; its table's entries are
+	// slotEntrySize each, of as many as the table has room for.
+	propIndexSize = int64(unsafe.Sizeof(propIndex{}))
+	slotEntrySize = int64(unsafe.Sizeof(slotEntry{}))
 	valueSize     = int64(unsafe.Sizeof(Value{}))
 	stringSize    = int64(unsafe.Sizeof(String{}))
 )
@@ -514,7 +516,10 @@ func (m *memoryMeter) object(o *Object) {
 	// A shared layout's index is the layout's, not the object's, and so is
 	// one an object borrows from it.
 	if s := o.shape; s != nil && s.unique && s.index != nil && !s.borrowed {
-		m.total += propIndexSize + int64(s.index.slots.n)*16
+		// The table is a power of two past twice its keys (slotTable),
+		// which counted as sixteen bytes a key had been half of a
+		// dictionary's: 1,203 bytes counted of 1,973 held for one of 17.
+		m.total += propIndexSize + int64(cap(s.index.slots.e))*slotEntrySize
 	}
 	// So are a shared layout's keys, and the layout; the object's own
 	// layout is its, a dictionary object's (dictShape).

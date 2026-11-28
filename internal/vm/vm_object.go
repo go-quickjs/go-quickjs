@@ -1568,6 +1568,10 @@ func (o *Object) outgrowProps() {
 		return
 	}
 	root := s.root()
+	if root.rootClass == emptyRootClass {
+		// The realm's root for {}, whose room is fixed (emptyLiteralRoom).
+		return
+	}
 	limit := maxRoom
 	if root.generic {
 		// A class's root for a prototype sizes only the objects

@@ -532,25 +532,46 @@ Paths are relative to this repository; `go-intl:` paths are in
   literal that names its keys goes further, in any code: a realm keeps a root
   for those keys, and new code makes none of its shapes
   (`literalkeys.go`), past a quarter of the tree starting again
-  (`TestFreshCodeMakesNoLiteralShapes`, `TestLiteralKeysMadeUp`). What remains:
+  (`TestFreshCodeMakesNoLiteralShapes`, `TestLiteralKeysMadeUp`). So does `{}`,
+  whose root is the realm's for no keys, of a fixed room of four, as V8's
+  empty literals are made of the Object function's initial map: objects built
+  alike from `{}` at any site of any code share their layouts
+  (`TestEmptyLiteralsShareAcrossCode`, `TestLiteralLayoutsShareAcrossSites`,
+  `TestFreshRunsOfTwoLiteralsStayBounded`, `TestEmptyLiteralRoomIsFixed`,
+  `TestJITEmptyLiteralsShareAcrossSites`). What remains:
   - Shapes are given back by a cleanup, after a collection. A host with a heap
     so large that it allocates 65,536 shapes between two collections, running
     new code for each request, finds the tree full until the next one, as
-    prototypes made and dropped always could.
+    prototypes made and dropped always could. New code's literals that name
+    their keys, and `{}`, make none.
   - One object kept of a run holds the budget of the sixteen roots its root
     shares one with; one kept of a `Program`'s roots let go holds the whole
     program's, up to a quarter of the tree.
   - A realm's roots for literals' keys stay for as long as the realm, up to a
     quarter of the tree, what grew from them with them.
-  - Objects that live, of literals of new code that name no keys, hold their
-    roots and what grew from them: Octane's CodeLoad, which evaluates a
-    library anew some thousands of times and keeps each copy's namespace
-    object, fills the tree, and every object made after it in the runtime
-    has a layout of its own, which no cache remembers, so that Box2D and
-    Typescript run slower after it than alone. With the JIT, the objects a
-    native construction's pool held then shared one such layout, each
-    adding its keys to the others' table, until each was given its own
-    (`jitPoolRoot`, `TestJITPoolObjectsTreeFull`).
+  - Objects that live, of literals of new code that say no list of keys -- a
+    spread, an accessor, a computed key, `__proto__` -- hold their sites'
+    roots and what grew from them. `{}` had too, until it took the realm's
+    root: Octane's CodeLoad, which evaluates a library anew some thousands of
+    times and keeps each copy's namespace object, a `{}` given 51 keys, had
+    filled the tree with 1,128 copies of one chain, and every object made
+    after it in the runtime had a layout of its own, which no cache
+    remembers, so that Box2D and Typescript ran slower after it than alone.
+    With the JIT, the objects a native construction's pool held then shared
+    one such layout, each adding its keys to the others' table, until each
+    was given its own (`jitPoolRoot`, `TestJITPoolObjectsTreeFull`).
+  - A tree full of live layouts that differ, or of keys a program makes up
+    under roots that live long -- a prototype's, which its layout keeps with
+    every transition out of it -- still gives each object made after it a
+    layout of its own. V8 has no such bound: its transitions are weak, the
+    collector clearing a transition to a map nothing else reaches
+    (`src/objects/transitions.h:67-74`; `MarkCompactCollector::
+    ClearPotentialSimpleMapTransition` and `ClearFullMapTransitions`,
+    `src/heap/mark-compact.cc:3527`, `:3841`), and a map's transitions are
+    bounded only by `kMaxNumberOfTransitions` (`transitions.h:150`). Here
+    `shape.next` and `shape.more` hold their shapes, which native handlers and
+    the JIT read directly, and `maxShapes` stands in for the collector. Weak
+    transitions with no cap are a stage of their own.
 
 ### KI-68 Code run once stays for what it left in a realm's tables
 - **Where:** `internal/vm/vm.go` (`templateObject`), `vm_shape.go` (`chainCell`)

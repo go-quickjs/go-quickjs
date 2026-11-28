@@ -136,3 +136,36 @@ func TestJITPoolObjectsTreeFull(t *testing.T) {
 		}
 	}
 }
+
+// Native code's {} at two sites of different functions makes its objects
+// from pools of the realm's root for {}, as the interpreter's first object
+// takes it: built alike, they share each layout, with the room of four.
+func TestJITEmptyLiteralsShareAcrossSites(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const src = `
+function A(i) { var o = {}; o.a = i; o.b = i + 1; return o; }
+function B(i) { var q = {}; q.a = -i; q.b = "b"; return q; }
+var s = 0, x, y;
+for (var i = 0; i < 3000; i++) { x = A(i); y = B(i); s += x.b; }
+s + ""
+`
+	r := newTestRuntime(t, Config{JIT: true})
+	defer r.Close()
+	r.jitCallThreshold, r.jitICThreshold = 1, 1
+	got, _ := jitRunWithin(t, r, src, jitTestWindow)
+	if got != "4501500" {
+		t.Fatalf("got %q", got)
+	}
+	if st := r.JITStats(); st.SSAEntries == 0 {
+		t.Fatalf("no native entry: %+v", st)
+	}
+	x, y := globalObject(r, "x"), globalObject(r, "y")
+	if x.shape != y.shape || x.shape.unique || x.shape.n != 2 || x.shape.root().rootClass != emptyRootClass {
+		t.Errorf("layouts %p and %p (unique %v, n %d)", x.shape, y.shape, x.shape.unique, x.shape.n)
+	}
+	if x.valc != emptyLiteralRoom || y.valc != emptyLiteralRoom {
+		t.Errorf("room %d and %d, want %d", x.valc, y.valc, emptyLiteralRoom)
+	}
+}

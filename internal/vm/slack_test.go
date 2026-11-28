@@ -11,7 +11,9 @@ import (
 // allocation while that is at most maxSlack, and past it a table of its
 // own made at that size, which no object carries and outgrows; a
 // constructor's, once its first objects are built, what they used (slack
-// tracking). Room for maxSlack had been carried by every object of a site
+// tracking). A literal's is learned on the root its keys share; {}'s,
+// which every {} of the realm shares, is fixed. Room for maxSlack had been
+// carried by every object of a site
 // whose objects outgrew it, and outgrown: an object of twenty properties
 // built as a tree held a third more than the interpreter's.
 func TestSlackOutgrown(t *testing.T) {
@@ -21,8 +23,12 @@ func TestSlackOutgrown(t *testing.T) {
 		room      int
 		inline    bool
 	}{
-		{"literal of six", `function f(fill) { let o = {}; if (fill) { o.a = 1; o.b = 2; o.c = 3; o.d = 4; o.e = 5; o.f = 6 } return o }`, 6, true},
-		{"literal of twenty", `function f(fill) { let o = {}; if (fill) for (let k = 0; k < 20; k++) o["p" + k] = k; return o }`, 9, false},
+		{"literal of six", `function f(fill) { let o = {z: 0}; if (fill) { o.a = 1; o.b = 2; o.c = 3; o.d = 4; o.e = 5; o.f = 6 } return o }`, 7, true},
+		{"literal of twenty", `function f(fill) { let o = {z: 0}; if (fill) for (let k = 0; k < 20; k++) o["p" + k] = k; return o }`, 9, false},
+		// {}'s room is fixed, as V8's Object function's initial map's is,
+		// however its objects grow (emptyLiteralRoom).
+		{"{} of six", `function f(fill) { let o = {}; if (fill) { o.a = 1; o.b = 2; o.c = 3; o.d = 4; o.e = 5; o.f = 6 } return o }`, emptyLiteralRoom, true},
+		{"{} of twenty", `function f(fill) { let o = {}; if (fill) for (let k = 0; k < 20; k++) o["p" + k] = k; return o }`, emptyLiteralRoom, true},
 		{"constructor of six", `function C(fill) { if (fill) { this.a = 1; this.b = 2; this.c = 3; this.d = 4; this.e = 5; this.f = 6 } } function f(fill) { return new C(fill) }`, 6, true},
 		{"constructor of twenty", `function C(fill) { if (fill) for (let k = 0; k < 20; k++) this["p" + k] = k } function f(fill) { return new C(fill) }`, 20, false},
 	} {

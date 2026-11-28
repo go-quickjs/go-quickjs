@@ -70,7 +70,8 @@ func TestShapeBudgetChurn(t *testing.T) {
 	// the objects whose prototype is in their table, the first made on each
 	// prototype (polyproto.go) -- which, past the first, are all a class
 	// made by a factory makes. No literal's root is among them (settleSites)
-	// but the realm's for a literal's keys, and the shapes grown from those.
+	// but the realm's for a literal's keys and for {} -- setPrototypeOf's
+	// one more -- and the shapes grown from those.
 	patterns := []struct {
 		name, body string
 		want       int
@@ -78,7 +79,7 @@ func TestShapeBudgetChurn(t *testing.T) {
 		{"Object.create", `var p = Object.create({x: i}); p.y = 1`, 18},
 		{"Object.create twice", `var q = {x: i}, p = Object.create(q), p2 = Object.create(q); p.y = 1; p2.y = 2`, 72},
 		{"__proto__ literal", `var o = {__proto__: {z: i}, w: 1}`, 19},
-		{"setPrototypeOf", `var o = Object.setPrototypeOf({}, {k: i}); o.v = 1`, 19},
+		{"setPrototypeOf", `var o = Object.setPrototypeOf({}, {k: i}); o.v = 1`, 20},
 		{"scope chain", `var a = frame(scope, i); var b = frame(a, i)`, 20},
 		{"Reflect.construct alternating", `var o = Reflect.construct(F, [], i & 1 ? G : H)`, 24},
 		{"prototype reassigned", `R.prototype = i & 1 ? P1 : P2; var o = new R()`, 20},

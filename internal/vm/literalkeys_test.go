@@ -223,7 +223,7 @@ func TestLiteralKeysTable(t *testing.T) {
 		`({ab: 1, c: 2})`, `({a: 1, bc: 2})`, `({z: 2})`}
 	// A literal with a method is made a property at a time, the method
 	// given its home object: new_object_lit is of values alone.
-	none := []string{`var a = {}; ({...a})`, `({})`, `({q: 1, q: 2})`, `var k = "k"; ({[k]: 1})`,
+	none := []string{`var a = {}; ({...a})`, `({q: 1, q: 2})`, `var k = "k"; ({[k]: 1})`,
 		`({get g() { return 1 }})`, `({__proto__: null})`, `var a = {}; ({r: 1, ...a})`, `({m() {}, n: 2})`}
 	got := map[string]uint64{}
 	for _, src := range says {
@@ -235,6 +235,10 @@ func TestLiteralKeysTable(t *testing.T) {
 		if keys(src) != 0 {
 			t.Errorf("%s says its keys", src)
 		}
+	}
+	// {} says it has none, and takes the realm's root for none.
+	if keys(`({})`) != noKeysHash {
+		t.Error("({}) says no keys")
 	}
 	if got[says[0]] != got[says[2]] {
 		t.Error("{x, y} and {\"x\", y} are told apart")

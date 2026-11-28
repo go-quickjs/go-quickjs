@@ -26,9 +26,24 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // literals need, and what reads their objects, kept or not, has read them
 // before.
 //
-// A literal with a spread, an accessor, a computed key or __proto__, {},
-// and one a direct eval or a module's own code makes, have a root of their
-// own, as before.
+// {} names no keys, and its root is the realm's for no keys, in any code:
+// V8's empty literal is made of its context's Object function's initial
+// map, every site's (CreateEmptyObjectLiteral), which the keys given it
+// then leave by transitions. A root of each site's own had grown a chain
+// for each site's objects: Octane's CodeLoad, which evaluates a library
+// anew some thousands of times and keeps each copy's namespace, {} given
+// some fifty keys, had a chain of fifty for each copy kept, until the
+// tree was full and every object made after it was of a layout of its
+// own. The root's room is fixed, as that map's is (V8's
+// kInitialGlobalObjectUnusedPropertiesCount): learned, as a site's is,
+// one {} grown to a table of hundreds of keys had sized every {} of the
+// realm. It is not the root new Object() and Object.create take
+// (rootFor), which their prototype's layout keeps for as long as the
+// realm, with every transition out of it: V8 shares the two, whose
+// transitions are weak.
+//
+// A literal with a spread, an accessor, a computed key or __proto__, which
+// says no list of keys, has a root of its own, as before.
 //
 // A root and what grows from it is the realm's, for as long as it lives. So
 // they are counted against a budget of their own, and past a quarter of the
@@ -42,6 +57,20 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // literalShapes is the most shapes a realm's roots may have grown.
 const literalShapes = maxShapes / 4
 
+// noKeysHash is the hash of no keys (bytecode.HashLiteralKeys), {}'s, which
+// keysOf says for a new_object.
+var noKeysHash = bytecode.HashLiteralKeys(nil)
+
+// emptyRootClass is the rootClass of the realm's root for {}: no object's
+// class, so that outgrowProps and noteGrowth, which learn a root's room,
+// leave its room as it is made (emptyLiteralRoom).
+const emptyRootClass = ClassCursor + 2
+
+// emptyLiteralRoom is the room of the objects {} makes, fixed: V8's
+// kInitialGlobalObjectUnusedPropertiesCount, the in-object properties of
+// its Object function's initial map.
+const emptyLiteralRoom = 4
+
 // literalRoots is the roots of a realm's literals.
 type literalRoots struct {
 	// byKeys is by the hash of the keys (RegCode.ObjKeysHash).
@@ -52,9 +81,17 @@ type literalRoots struct {
 }
 
 // keysOf is the hash of the keys of rc's object literal at pc, a
-// new_object_lit's (bytecode.RegCode.ObjKeysHash), 0 if it does not say
-// them.
+// new_object_lit's (bytecode.RegCode.ObjKeysHash) or {}'s, a new_object of
+// no properties, which has none (noKeysHash), 0 if it does not say them: a
+// new_object of properties is a literal with a spread, an accessor, a
+// computed key or __proto__, which say no list of keys.
 func keysOf[_ any](rc *bytecode.RegCode, pc int) uint64 {
+	if rc != nil && pc >= 0 && pc < len(rc.Code) && rc.Code[pc].Op() == bytecode.RNewObject {
+		if rc.Code[pc].B() == 0 {
+			return noKeysHash
+		}
+		return 0
+	}
 	if rc == nil || pc < 0 || pc >= len(rc.Code) || rc.Code[pc].Op() != bytecode.RNewObjectLit ||
 		pc >= len(rc.Aux) || int(rc.Aux[pc]) >= len(rc.ObjKeysHash) {
 		return 0
@@ -89,6 +126,15 @@ func prepareRun[_ any](r *Runtime, fn *bytecode.Function) *closure {
 		}
 	}
 	return cl
+}
+
+// keyEmptySite is regLiteralKeyedRoot for a new_object's site, whose cache
+// is as the code was prepared (noShape): started from the realm's root for
+// {}.
+//
+//go:noinline
+func keyEmptySite[_ any](r *Runtime, ic *propCache) {
+	keyedRoot[struct{}](r, noKeysHash, ic)
 }
 
 // keyedRoot starts ic from the realm's root for the literal's keys, of that
@@ -127,6 +173,9 @@ func rootOfKeys[_ any](r *Runtime, keys uint64) *shape {
 		}
 		l.budget.b.n.Add(1)
 		root = &shape{tree: t, proto: p, budget: l.budget}
+		if keys == noKeysHash {
+			root.rootClass, root.slack = emptyRootClass, emptyLiteralRoom
+		}
 		l.byKeys[keys] = root
 	}
 	return root

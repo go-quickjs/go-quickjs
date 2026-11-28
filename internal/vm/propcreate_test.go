@@ -186,7 +186,7 @@ func TestPropertyCreationAgreesWithNode(t *testing.T) {
 }
 
 // A literal's objects outgrow the room they were made with once, not at
-// each doubling: its site's root notes the room they came to need
+// each doubling: the root of its keys notes the room they came to need
 // (outgrowProps), and the next objects are made with it, from the third on.
 // A keyed store's objects -- a table of names, a dictionary past the soft
 // limit -- teach their site nothing, and objects with no site teach their
@@ -199,8 +199,8 @@ func TestObjectRoomLearnedFromGrowth(t *testing.T) {
 	defer r.Close()
 	_, err := r.Run(compileForTest(t, `
 		function record() {
-			var o = {};
-			o.a = 1; o.b = 2; o.c = 3; o.d = 4; o.e = 5; o.f = 6; o.g = 7; o.h = 8; o.i = 9; o.j = 10;
+			var o = {a: 1};
+			o.b = 2; o.c = 3; o.d = 4; o.e = 5; o.f = 6; o.g = 7; o.h = 8; o.i = 9; o.j = 10;
 			for (var i = 0; i < 10; i++) o[i] = i;
 			return o;
 		}
@@ -216,14 +216,19 @@ func TestObjectRoomLearnedFromGrowth(t *testing.T) {
 			return o;
 		}
 		function first() {
-			var o = {};
-			o.a = 1; o.b = 2; o.c = 3; o.d = 4; o.e = 5; o.f = 6; o.g = 7; o.h = 8; o.i = 9; o.j = 10;
+			var o = {a0: 1};
+			o.b = 2; o.c = 3; o.d = 4; o.e = 5; o.f = 6; o.g = 7; o.h = 8; o.i = 9; o.j = 10;
 			for (var i = 0; i < 10; i++) o[i] = i;
 			return o;
 		}
+		function empty() {
+			var o = {};
+			o.a = 1; o.b = 2; o.c = 3; o.d = 4; o.e = 5; o.f = 6; o.g = 7; o.h = 8; o.i = 9; o.j = 10;
+			return o;
+		}
 		var firsts = [first(), first(), first()];
-		var rec, tab, small, pl;
-		for (var n = 0; n < 200; n++) { rec = record(); tab = table(60); pl = plain(); }
+		var rec, tab, small, pl, emp;
+		for (var n = 0; n < 200; n++) { rec = record(); tab = table(60); pl = plain(); emp = empty(); }
 		small = table(2);`))
 	if err != nil {
 		t.Fatal(err)
@@ -246,6 +251,12 @@ func TestObjectRoomLearnedFromGrowth(t *testing.T) {
 	small := globalObject(r, "small")
 	if root := small.shape.root(); root.slack > maxSlack+1 {
 		t.Errorf("the table literal's root notes room for %d: its keyed stores taught it", root.slack)
+	}
+	// {}'s objects teach its root nothing: its room is fixed, as V8's
+	// Object function's initial map's is, and every {} of the realm shares
+	// it, whatever one of them grows to.
+	if emp := globalObject(r, "emp"); emp.shape.root().slack != emptyLiteralRoom || int(emp.valn) != 10 {
+		t.Errorf("{} grown to %d properties: its root notes room for %d, want %d", emp.valn, emp.shape.root().slack, emptyLiteralRoom)
 	}
 	pl := globalObject(r, "pl")
 	if root := pl.shape.root(); !root.generic || root.slack > maxSlack+1 {

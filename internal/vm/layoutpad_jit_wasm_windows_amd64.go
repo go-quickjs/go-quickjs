@@ -107,7 +107,7 @@ const (
 	layoutPadNU   = 564
 	layoutPadNGU  = -1
 	layoutPadNMU  = -1
-	layoutPadNY   = 508
+	layoutPadNY   = 489
 	layoutPadNGY  = -1
 	layoutPadNMY  = -1
 	layoutPadNV   = 0
@@ -125,7 +125,7 @@ const (
 	layoutPadNO   = 576
 	layoutPadNGO  = -1
 	layoutPadNMO  = -1
-	layoutPadNPR  = 585
+	layoutPadNPR  = 582
 	layoutPadNGPR = -1
 	layoutPadNMPR = -1
 	layoutPadNSH  = 585
@@ -140,11 +140,11 @@ const (
 	layoutPadNZ   = 861
 	layoutPadNGZ  = -1
 	layoutPadNMZ  = -1
-	layoutPadNCZ  = 1602
+	layoutPadNCZ  = 1597
 	layoutPadNHJ  = 270
 	layoutPadNH   = 67
 	layoutPadNHT  = 100
-	layoutPadNDH  = 3
+	layoutPadNDH  = 0
 	layoutPadNDW  = 0
 	layoutPadNDG  = 0
 )

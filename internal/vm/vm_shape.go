@@ -692,8 +692,8 @@ func (s *shape) orRoot(c Class, p *Object) *shape {
 // kept in the literal's cache. Objects made at different sites mostly have
 // different properties, and a root of their own saves each of them a search
 // among the others' transitions out of their class's root. What a literal
-// whose keys are known starts from is had before it asks, its cache then
-// holding the realm's root for them (literalkeys.go). It is nil once the
+// whose keys are known, and {}, start from is had before it asks, its cache
+// then holding the realm's root for them (literalkeys.go). It is nil once the
 // tree is full, while the realm is being made, and for a prototype other than
 // the one the literal's objects have had, proto (orRoot). A root is counted
 // only until the code stops running (settleSites), and the shapes grown from
@@ -772,9 +772,10 @@ func (s *shape) noteGrowth(n int) {
 	if s == nil || s.unique || s.loose {
 		return
 	}
-	if root := s.root(); n > int(root.slack) {
+	if root := s.root(); n > int(root.slack) && root.rootClass != emptyRootClass {
 		// Past maxSlack the room is a table of the object's own, made at
-		// that size: none is carried and outgrown.
+		// that size: none is carried and outgrown. The realm's root for
+		// {} keeps the room it was made with (emptyLiteralRoom).
 		root.slack = uint8(min(n, maxRoom))
 	}
 }

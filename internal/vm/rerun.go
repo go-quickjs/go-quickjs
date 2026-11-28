@@ -13,12 +13,12 @@ import (
 // and so, as each object literal first runs, a new root and new shapes grown
 // from it, of which nothing the run before it learned knows. V8's literals
 // reach the same map run after run, along the transitions out of their
-// function's initial map. Here a literal whose keys the compiler says starts
-// from the realm's root for them (literalkeys.go), which is the same from
-// run to run; any other's objects start from a root of its site's own, which
-// keeps their room and their transitions apart from every other site's, and
-// that it is the same root from run to run is had by keeping it: {}, filled in
-// after, is the most of them.
+// function's initial map. Here a literal whose keys the compiler says, and
+// {}, starts from the realm's root for them (literalkeys.go), which is the
+// same from run to run; any other's objects -- a literal with a spread or a
+// computed key -- start from a root of its site's own, which keeps their
+// room and their transitions apart from every other site's, and that it is
+// the same root from run to run is had by keeping it.
 // A realm keeps a root for each object literal of each Program it runs, and
 // each run's caches start with them, as a literal's first run would leave
 // them (siteRoot): a run after the first makes none of the shapes its literals
@@ -32,7 +32,8 @@ import (
 // runs, and saves the allocation of each it does.
 //
 // Code compiled for one run -- Eval, a direct eval, new Function -- has nothing
-// to keep. The shapes of its literals with no keys go with it (chargeChild).
+// to keep. The shapes of its literals that say no list of keys -- a spread, a
+// computed key -- go with it (chargeChild).
 //
 // What keeps the roots is the layout of the realm's Object.prototype, which
 // keeps the roots of the objects made on it, as any prototype's does
@@ -72,7 +73,12 @@ type programSites struct {
 	// (keysOf).
 	keys []uint64
 	// from is the realm's roots they are of, nil for none: those the realm
-	// has let go, which would otherwise be kept, are not asked for again.
+	// has let go, which would otherwise be kept, are not asked for again,
+	// nor those grown past literalShapes, which asking for again lets go.
+	// The shapes its {} and its literals of keys grow are theirs, not the
+	// program's (budget): a program giving its {} objects keys it makes up
+	// had kept them for good, its own budget never spent, until the tree
+	// was full.
 	from *literalRoots
 	// fns is the functions with literals, or making functions that do, each
 	// before the functions it makes: the program's, then, the first.
@@ -120,7 +126,7 @@ func seedLiterals[_ any](r *Runtime, cl *closure) {
 		maps.DeleteFunc(ps.byCode, func(k weak.Pointer[bytecode.Function], _ *programSites) bool { return k.Value() == nil })
 		ps.at = max(32, 2*len(ps.byCode))
 	}
-	if p == nil || p.budget.b.n.Load() >= programShapes || p.from != nil && p.from != ps.roots {
+	if p == nil || p.budget.b.n.Load() >= programShapes || p.from != nil && (p.from != ps.roots || p.from.budget.b.n.Load() >= literalShapes) {
 		p = newProgramSites[struct{}](r, cl)
 		ps.byCode[key] = p
 	}
