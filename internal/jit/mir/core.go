@@ -184,11 +184,11 @@ func (c *core) loopBudget(b *ssa.Block) int {
 // counter but for the calls of Go any operation may make, which
 // goCalling stores it back around.
 //
-// The bodies of the loops with no other header in them come from two
-// passes over the function (innerLoops), not a walk of each loop's own: a
-// loop's walk takes in the loops inside it, and a nest of d loops had
-// walked d²/2 loops' blocks to find that only the innermost may count in
-// a register.
+// The bodies of the loops with no other header in them come from one
+// search over the function, and a second where the first asks for it
+// (innerLoops), not a walk of each loop's own: a loop's walk takes in the
+// loops inside it, and a nest of d loops had walked d²/2 loops' blocks to
+// find that only the innermost may count in a register.
 func (c *core) findBudgets() {
 	f := c.f
 	if c.ws != nil {
@@ -197,21 +197,23 @@ func (c *core) findBudgets() {
 	}
 	n := c.innerLoops()
 	var chains chainTables
-	for _, h := range f.Blocks {
-		if !h.LoopHeader || n.span[h.ID] == 0 {
+	for _, h := range f.Blocks[n.first:] {
+		if !h.LoopHeader {
 			continue
 		}
-		s := n.spans[n.span[h.ID]-1]
-		body := n.members[s.start:s.end]
-		// The body's marks, as turnChain reads them: h.ID+1 on each of
-		// its blocks.
-		mark := h.ID + 1
+		// h's component has a header, h, so it is listed; it is h's body
+		// where it has no other header and nothing comes into it from
+		// outside (open). Two such bodies are two components: no block is
+		// in two.
+		r := n.star[h.ID]
+		k := foundComp(r)
+		comp := n.comps[k]
+		if comp.header < 0 || n.members[comp.header] != h || comp.open {
+			continue
+		}
+		body := n.members[comp.start:n.end(k)]
 		ok := true
 		for _, b := range body {
-			n.mark[b.ID] = mark
-			if b != h && b.LoopHeader || b.ID < len(c.budgetOf) && c.budgetOf[b.ID] != 0 {
-				ok = false
-			}
 			c.steps += len(b.Values)
 			for _, v := range b.Values {
 				if v.Op == ssa.OpCall || v.Op == ssa.OpTailSelf {
@@ -223,7 +225,8 @@ func (c *core) findBudgets() {
 				break
 			}
 		}
-		if !ok || c.turnChain(h, body, n.mark, &chains) >= counterChain {
+		// The body's blocks are those whose mark in the table is h's.
+		if !ok || c.turnChain(h, body, n.star, r, &chains) >= counterChain {
 			continue
 		}
 		if c.budgetOf == nil {
@@ -236,7 +239,7 @@ func (c *core) findBudgets() {
 	}
 	if c.ws != nil {
 		c.ws.budgetStack, c.ws.budgetPath, c.ws.budgetBody = n.stack[:0], n.path[:0], n.members[:0]
-		c.ws.budgetOuts, c.ws.budgetSpans = n.outs[:0], n.spans[:0]
+		c.ws.budgetComps, c.ws.budgetOuts = n.comps[:0], n.outs[:0]
 	}
 	if verifyBudgets {
 		c.checkBudgets()
@@ -260,21 +263,57 @@ func (c *core) findBudgets() {
 	}
 }
 
-// innerLoops are the loops with no other loop's header in their bodies
-// (core's innerLoops), and their bodies.
-type innerLoops struct {
-	// members holds the bodies, one after another; spans says where each
-	// is in it, and span, by header ID, 1 plus its span's index, or 0 for
-	// a loop with another's header in its body.
+// loopSearch is innerLoops' answer, and its searches' state.
+type loopSearch struct {
+	// first is where the function's first loop header is in its blocks,
+	// or their count.
+	first int
+	// star is, by block ID, what the search of the graph without the
+	// edges into a header that are not back edges found of the block: 0
+	// where it did not come to it, its component otherwise (found).
+	star []int
+	// members holds the blocks of each component with a header in it, one
+	// after another; comps says where each one's are.
 	members []*ssa.Block
-	spans   []loopSpan
-	span    []int
-	// mark is a table by block ID that findBudgets marks a body in.
-	mark []int
-	// stack and path are the searches' tables, and outs the edges into
-	// star components from outside them, for the workspace.
-	stack, path []*ssa.Block
-	outs        []loopEdge
+	comps   []loopComp
+	// outs are the edges into a component from a block of another that a
+	// header reaches in that graph (found), each of which may make a body
+	// more than its header's component.
+	outs []loopEdge
+	// stack holds the blocks a search has left whose components are not
+	// found yet, and path the blocks it is in, each with where it is in
+	// the block's predecessors; count numbers the blocks it comes to, and
+	// ncomp the whole graph's components it finds.
+	stack        []*ssa.Block
+	path         []loopFrame
+	count, ncomp int
+}
+
+// loopComp is a component with a header in it: its blocks are members'
+// from start to the next one's (end), and header is where its header is
+// in members, -1 where it has more than one. It is open where a body holds
+// more than it (innerLoops).
+type loopComp struct {
+	start, header int32
+	open          bool
+}
+
+// end is where the blocks of comps[k] end in members.
+func (n *loopSearch) end(k int) int {
+	if k+1 < len(n.comps) {
+		return int(n.comps[k+1].start)
+	}
+	return len(n.members)
+}
+
+// loopFrame is a block a search is in: i is its next predecessor; root,
+// that it reaches no block the search came to before it and has not left;
+// behind, that a header reaches it, or a block of its component, in the
+// star graph (innerLoops).
+type loopFrame struct {
+	b            *ssa.Block
+	i            int32
+	root, behind bool
 }
 
 // loopEdge is the edge into to from its i'th predecessor.
@@ -283,15 +322,35 @@ type loopEdge struct {
 	i  int
 }
 
-type loopSpan struct {
-	header     *ssa.Block
-	start, end int
+// A search's table holds, by block ID, 0 for a block it has not come to;
+// while the block's component is not found, the least of the numbers of
+// the blocks the search came to that the block reaches and that are not
+// yet in a component, at first its own (Pearce's variant of Tarjan's
+// search, a table where Tarjan's has two); and the block's component, once
+// it is found, as a negative number. Of the first search's (star), that
+// number says the component's index in comps, or none for a component
+// with no header, and whether a header reaches it (behind): found(comp,
+// behind), comp -1 for none.
+func found(comp int, behind bool) int {
+	x := 2 * (comp + 1)
+	if behind {
+		x++
+	}
+	return -2 - x
 }
+
+func foundComp(r int) int { return (-r-2)>>1 - 1 }
+
+func foundBehind(r int) bool { return (-r-2)&1 != 0 }
+
+// foundAhead is whether a block the star search found no header reaches:
+// r, its entry in the table, is found(_, false).
+func foundAhead(r int) bool { return r < 0 && (-r-2)&1 == 0 }
 
 // innerLoops finds the loops whose bodies hold no other loop's header, and
 // their bodies, in time linear in the function: a search for strongly
-// connected components, a look at each component's predecessors, and, if
-// that asks, a second search.
+// connected components, a look at some of the edges into them from
+// outside, and, if one of those asks, a second search.
 //
 // Of a loop of header h whose body holds no other header, the body is the
 // component of h in the graph without the edges into a header that are not
@@ -304,163 +363,184 @@ type loopSpan struct {
 // the component only if a block reached from h, of h's component in the
 // function's graph (whole), comes into the star component other than at h,
 // or is a back edge's source outside it: the first block outside the star
-// component on a way back from a block of the body to h's back edge. Each
-// edge into a star component from outside it is noted as the search meets
-// it (outs) and looked at once.
+// component on a way back from a block of the body to h's back edge.
+//
+// Such a block p is of h's whole component only if h reaches it, by a path
+// that enters a header other than by a back edge -- a path of the star graph
+// would put p in h's star component -- and so p is reached from the last
+// header it enters by a path of the star graph: a header reaches p in the
+// star graph (behind). The search finds that as it finds the components,
+// over predecessors: a component is behind where it has a header in it, or
+// an edge into it comes from a component that is. Only the edges into a
+// component from one behind are noted (outs), and only one of those into a
+// component of one header asks for the second search: none in a function
+// of one loop, nor where the blocks before a loop entered at its test, at
+// its end, go into the test, but where a loop is in another, or follows
+// one.
 //
 // The searches are Tarjan's, over predecessors -- the reverse graph has the
 // same components -- where an edge's being a back edge is known, and from
 // the headers alone: a component with a header in it is found whole from
 // it, and a block that reaches no header is of no loop's body. The whole
-// graph's is made only where a block outside a star component goes into it
-// other than at its header, as where a loop is entered at its test, at its
-// end.
-func (c *core) innerLoops() innerLoops {
+// graph's is made from the headers whose components an edge asks about, and
+// leaves out the blocks the first search came to and found no header
+// reaches: of a component with a block a header reaches, a header reaches
+// every block.
+func (c *core) innerLoops() loopSearch {
 	f := c.f
-	var n innerLoops
+	var n loopSearch
 	if c.ws != nil {
 		n.stack, n.path, n.members = c.ws.budgetStack[:0], c.ws.budgetPath[:0], c.ws.budgetBody[:0]
-		n.outs, n.spans = c.ws.budgetOuts[:0], c.ws.budgetSpans[:0]
+		n.comps, n.outs = c.ws.budgetComps[:0], c.ws.budgetOuts[:0]
 	}
-	headers := false
-	for _, b := range f.Blocks {
-		if b.LoopHeader {
-			headers = true
-			break
-		}
+	for n.first < len(f.Blocks) && !f.Blocks[n.first].LoopHeader {
+		n.first++
 	}
-	if !headers {
+	if n.first == len(f.Blocks) {
 		return n
 	}
 	nb := numBlocks(f)
-	// index and low are Tarjan's, by block ID, from 1; next a block's next
-	// predecessor while the search is in it; whole and star, 1 plus a
-	// block's component's number in each graph, 0 while it has none.
-	index, low, next := c.ints(nb), c.ints(nb), c.ints(nb)
-	whole, star := c.ints(nb), c.ints(nb)
-	// components finds comp's components, in the graph without the edges
-	// into a header that are not back edges where starOnly is set; where
-	// list is set, it lists the blocks of each component one after
-	// another in n.members, and returns where each begins.
-	components := func(comp []int, starOnly, list bool, starts []int) []int {
-		count, ncomp := 0, 0
-		for _, r := range f.Blocks {
-			if !r.LoopHeader || index[r.ID] != 0 {
-				continue
-			}
-			count++
-			index[r.ID], low[r.ID] = count, count
-			n.stack = append(n.stack, r)
-			n.path = append(n.path[:0], r)
-			for len(n.path) > 0 {
-				b := n.path[len(n.path)-1]
-				if i := next[b.ID]; i < len(b.Preds) {
-					next[b.ID]++
-					c.steps++
-					if starOnly && b.LoopHeader && !b.Backedge[i] {
-						continue
-					}
-					switch p := b.Preds[i]; {
-					case index[p.ID] == 0:
-						count++
-						index[p.ID], low[p.ID] = count, count
-						n.stack = append(n.stack, p)
-						n.path = append(n.path, p)
-					case comp[p.ID] == 0: // on the stack
-						low[b.ID] = min(low[b.ID], index[p.ID])
-					case list:
-						n.outs = append(n.outs, loopEdge{b, i})
-					}
-					continue
-				}
-				n.path = n.path[:len(n.path)-1]
-				var up *ssa.Block
-				if k := len(n.path); k > 0 {
-					up = n.path[k-1]
-					low[up.ID] = min(low[up.ID], low[b.ID])
-				}
-				if low[b.ID] != index[b.ID] {
-					continue
-				}
-				if list && up != nil {
-					n.outs = append(n.outs, loopEdge{up, next[up.ID] - 1})
-				}
-				ncomp++
-				if list {
-					starts = append(starts, len(n.members))
-				}
-				for {
-					x := n.stack[len(n.stack)-1]
-					n.stack = n.stack[:len(n.stack)-1]
-					comp[x.ID] = ncomp
-					if list {
-						n.members = append(n.members, x)
-					}
-					if x == b {
-						break
-					}
-				}
-			}
-		}
-		return starts
-	}
-	var starts []int
-	if c.ws != nil {
-		starts = c.ws.budgetStarts[:0]
-		defer func() { c.ws.budgetStarts = starts[:0] }()
-	}
-	starts = components(star, true, true, starts)
-	starts = append(starts, len(n.members))
-	// hdr is, by star component, 1 plus where its one header is in
-	// n.members, -1 where it has more than one; a component with one
-	// header is the loop's body unless an edge from outside it, of h's
-	// whole component, goes into it other than at h (open). The whole
-	// graph's components are searched for only where an edge asks.
-	hdr, open := c.ints(len(starts)), c.bools(len(starts))
-	for k := range len(starts) - 1 {
-		for j := starts[k]; j < starts[k+1]; j++ {
-			if n.members[j].LoopHeader {
-				if hdr[k+1] != 0 {
-					hdr[k+1] = -1
-					break
-				}
-				hdr[k+1] = j + 1
-			}
+	n.star = c.ints(nb)
+	for _, h := range f.Blocks[n.first:] {
+		if h.LoopHeader {
+			n.search(c, n.star, h, true)
 		}
 	}
-	searched := false
+	var whole []int
 	c.steps += len(n.outs)
 	for _, e := range n.outs {
-		k := star[e.to.ID]
-		if hdr[k] <= 0 || open[k] {
+		k := foundComp(n.star[e.to.ID])
+		if k < 0 {
 			continue
 		}
-		h := n.members[hdr[k]-1]
+		comp := &n.comps[k]
+		if comp.header < 0 || comp.open {
+			continue
+		}
+		h := n.members[comp.header]
 		if e.to == h && !h.Backedge[e.i] {
 			continue
 		}
-		if !searched {
-			searched = true
-			clear(index)
-			clear(next)
-			components(whole, false, false, nil)
+		if whole == nil {
+			whole = c.ints(nb)
 		}
+		n.search(c, whole, h, false)
 		if whole[e.to.Preds[e.i].ID] == whole[h.ID] {
-			open[k] = true
+			comp.open = true
 		}
-	}
-	for k := 1; k < len(starts); k++ {
-		if hdr[k] > 0 && !open[k] {
-			n.spans = append(n.spans, loopSpan{n.members[hdr[k]-1], starts[k-1], starts[k]})
-		}
-	}
-	n.span, n.mark = next, low
-	clear(n.span)
-	clear(n.mark)
-	for i, s := range n.spans {
-		n.span[s.header.ID] = i + 1
 	}
 	return n
+}
+
+// search finds the components of the blocks that reach r, over
+// predecessors, in the table t (found): in the star graph, which has no
+// edges into a header that are not back edges, where star is set, listing
+// the components with a header in them and noting the edges into a
+// component from one behind (outs); in the function's graph otherwise,
+// without the blocks the star search found not behind, only numbering
+// them. It takes a step for each predecessor it looks at but a header's
+// ways in in the star graph.
+func (n *loopSearch) search(c *core, t []int, r *ssa.Block, star bool) {
+	if t[r.ID] != 0 {
+		return
+	}
+	n.count++
+	t[r.ID] = n.count
+	n.path = append(n.path, loopFrame{b: r, root: true, behind: star && r.LoopHeader})
+	for len(n.path) > 0 {
+		top := &n.path[len(n.path)-1]
+		b := top.b
+		if i := int(top.i); i < len(b.Preds) {
+			top.i++
+			// A header's way in, other than by a back edge, the star
+			// search looks at as a loop's walk looked at its own: no
+			// step.
+			if star && b.LoopHeader && !b.Backedge[i] {
+				continue
+			}
+			c.steps++
+			p := b.Preds[i]
+			if !star && foundAhead(n.star[p.ID]) {
+				continue
+			}
+			switch x := t[p.ID]; {
+			case x == 0:
+				n.count++
+				t[p.ID] = n.count
+				n.path = append(n.path, loopFrame{b: p, root: true, behind: star && p.LoopHeader})
+			case x > 0: // not in a component yet: in b's
+				if x < t[b.ID] {
+					t[b.ID], top.root = x, false
+				}
+			case star && foundBehind(x):
+				top.behind = true
+				n.outs = append(n.outs, loopEdge{b, i})
+			}
+			continue
+		}
+		fr := *top
+		n.path = n.path[:len(n.path)-1]
+		var up *loopFrame
+		if k := len(n.path); k > 0 {
+			up = &n.path[k-1]
+		}
+		if !fr.root {
+			// b's component is that of a block the path came through,
+			// which is up's.
+			n.stack = append(n.stack, b)
+			if t[b.ID] < t[up.b.ID] {
+				t[up.b.ID], up.root = t[b.ID], false
+			}
+			up.behind = up.behind || fr.behind
+			continue
+		}
+		// b's component: b, and the blocks left after it not yet in a
+		// component, whose numbers are b's or after.
+		low := t[b.ID]
+		j := len(n.stack)
+		for j > 0 && t[n.stack[j-1].ID] >= low {
+			j--
+		}
+		rest := n.stack[j:]
+		n.stack = n.stack[:j]
+		var x int
+		if !star {
+			n.ncomp++
+			x = -1 - n.ncomp
+		} else {
+			// The component is b and rest; h is where its header is in it,
+			// and hs how many it has.
+			h, hs := 0, 0
+			if b.LoopHeader {
+				hs = 1
+			}
+			for i, m := range rest {
+				if m.LoopHeader {
+					h, hs = i+1, hs+1
+				}
+			}
+			if hs == 0 {
+				x = found(-1, fr.behind)
+			} else {
+				start := len(n.members)
+				n.members = append(append(n.members, b), rest...)
+				header := int32(start + h)
+				if hs > 1 {
+					header = -1
+				}
+				n.comps = append(n.comps, loopComp{start: int32(start), header: header})
+				x = found(len(n.comps)-1, true)
+			}
+		}
+		t[b.ID] = x
+		for _, m := range rest {
+			t[m.ID] = x
+		}
+		if up != nil && star && foundBehind(x) {
+			up.behind = true
+			n.outs = append(n.outs, loopEdge{up.b, int(up.i) - 1})
+		}
+	}
 }
 
 // counterChain is how long, in cycles, a loop's turn waits on a budget
@@ -469,17 +549,17 @@ func (c *core) innerLoops() innerLoops {
 // addition, ran 1.3 to 1.7 ns a turn counting so.
 const counterChain = 6
 
-// turnChain is how long a turn of the loop of header h, its blocks in,
-// waits on itself: of each header phi, the latency (latency) of the
-// longest path through the loop's values from the phi to its value on a
-// back edge. A loop whose chain is as long as the counter's own
+// turnChain is how long a turn of the loop of header h, its blocks in
+// body, those whose entry in the table in is mark, waits on itself: of
+// each header phi, the latency (latency) of the longest path through the
+// loop's values from the phi to its value on a back edge. A loop whose chain is as long as the counter's own
 // (counterChain) or longer hides the counter in memory, and a register
 // would save it nothing a turn, while each entry paid the register's load
 // and each exit its store: AWFY's List, 1.5 to 2.9% slower with the
 // budget in a register, whose isShorterThan walks two lists of a few
 // nodes a call (x = x.next: an object's check, its shape's, its field's
 // cell, the field, each a load the next waits on).
-func (c *core) turnChain(h *ssa.Block, body []*ssa.Block, in []int, t *chainTables) int {
+func (c *core) turnChain(h *ssa.Block, body []*ssa.Block, in []int, mark int, t *chainTables) int {
 	nv := c.f.NumValues()
 	if t.at == nil {
 		t.at, t.memo, t.seen = c.ints(nv), c.ints(nv), c.ints(nv)
@@ -506,7 +586,7 @@ func (c *core) turnChain(h *ssa.Block, body []*ssa.Block, in []int, t *chainTabl
 		}
 		t.phi++
 		for i, a := range p.Args {
-			if h.Backedge[i] && in[h.Preds[i].ID] == h.ID+1 {
+			if h.Backedge[i] && in[h.Preds[i].ID] == mark {
 				chain = max(chain, t.path(a, p, nv))
 			}
 		}

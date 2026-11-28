@@ -115,7 +115,7 @@ func (c *core) budgetsRef() ([]*ssa.Block, []int) {
 				break
 			}
 		}
-		if !ok || c.turnChain(h, body, fwd, &chains) >= counterChain {
+		if !ok || c.turnChain(h, body, fwd, h.ID+1, &chains) >= counterChain {
 			continue
 		}
 		if budgetOf == nil {

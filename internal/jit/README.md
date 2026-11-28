@@ -3841,12 +3841,16 @@ A loop with no other loop's header in its body, that calls nothing and
 whose turn is shorter than the counter's load, decrement and store, counts
 the budget in a register of its own (mir's `findBudgets`), loaded where the
 loop is entered and stored back where Go may read it. Such loops and their
-bodies come from two searches for strongly connected components over the
-whole function (`innerLoops`): the body of a loop with no other header in
-it is its header's component once the edges into headers that are not back
-edges are gone, and it is the whole body unless a block the header reaches
-comes into it other than at the header. The pass is linear in the function
-however deep its loops nest. The `quickjs_verify` build checks it against
+bodies come from a search for strongly connected components over the
+function (`innerLoops`): the body of a loop with no other header in it is
+its header's component once the edges into headers that are not back edges
+are gone, and it is the whole body unless a block the header reaches comes
+into it other than at the header. Such a block is reached from some header
+without those edges, which the search notes as it goes, and only then does
+a second search, of the function's own components, say whether it is the
+loop's: where a loop is in another or follows one, not in a function of
+one loop. The pass is linear in the function however deep its loops nest,
+and its table is one entry a block, two with the second search. The `quickjs_verify` build checks it against
 a walk of each loop's own on every compile (`budgetsRef`).
 
 A poll is a pause, not an exit, whether it calls Go or exits: how often one

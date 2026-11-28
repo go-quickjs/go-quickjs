@@ -103,17 +103,16 @@ type Workspace struct {
 		exits      []*abi.ExitDescriptor
 	}
 	// findBudgets' tables, kept from compile to compile: innerLoops'
-	// searches' stack and path, the blocks of their components and where
-	// each begins, the edges into them, the bodies found, the loops found
-	// and the values their registers are given.
-	budgetStack  []*ssa.Block
-	budgetPath   []*ssa.Block
-	budgetBody   []*ssa.Block
-	budgetStarts []int
-	budgetOuts   []loopEdge
-	budgetSpans  []loopSpan
-	budgets      []budget
-	budgetVals   []ssa.Value
+	// searches' stack and path, the blocks of the components with a header
+	// in them and where each one's are, the edges into them, the loops
+	// found and the values their registers are given.
+	budgetStack []*ssa.Block
+	budgetPath  []loopFrame
+	budgetBody  []*ssa.Block
+	budgetComps []loopComp
+	budgetOuts  []loopEdge
+	budgets     []budget
+	budgetVals  []ssa.Value
 }
 
 // callScratch is what the states of a compile's calls are built with: the
