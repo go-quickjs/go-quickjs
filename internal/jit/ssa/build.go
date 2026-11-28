@@ -1789,6 +1789,14 @@ func (b *builder) keyedStore(pc int) (KeyedStoreSite, bool) {
 // another string had evicted the constant's, the store went the way of a
 // key the site never met and left native code, and the code was compiled
 // again for what that taught, as run by run the table's evictions fell.
+//
+// A key that is no constant is tested so, the first test having Go look
+// its string up and fill the table where it has no entry for it, or one
+// that it names none (KeyIsFill): what the store does is what the key
+// names. An entry evicted had made a key the site met one it never met,
+// its store left native code, which the code learned from and was
+// compiled again for; and a key it never met one stored as any key is,
+// where it deoptimizes.
 func (b *builder) keyedStores(blk *Block, site KeyedStoreSite, obj, key, value *Value, generic bool, state func() *FrameState) (_ *Block, stored bool) {
 	f := b.f
 	var cont *Block
@@ -1816,9 +1824,12 @@ func (b *builder) keyedStores(blk *Block, site KeyedStoreSite, obj, key, value *
 			}
 		}
 	}
-	for _, ks := range site.Keys {
+	for i, ks := range site.Keys {
 		is := f.newValue(blk, OpKeyIs, Bool, key)
 		is.Const = ir.Value{Bits: uint64(ks.Key)}
+		if i == 0 {
+			is.Index = KeyIsFill
+		}
 		yes, no, c := b.split(blk, is, true)
 		if cont == nil {
 			cont = c
@@ -2760,6 +2771,15 @@ type GoOp uint8
 // as the return would, and the cursor is done; it refuses any other, which
 // leaves for Go to close after an exit.
 //
+// GoKeyFill is a keyed store's test of its key (OpKeyIs's KeyIsFill)
+// whose string the VM's table of key strings has no entry for, or one of
+// none: Go looks the string's atom up -- making none -- and remembers it
+// in the table, or that it names none, as a property read's conversion of
+// the key does, the string the first operand's pointer word; and writes 1
+// to its number word where the string names the atom of the second's
+// number word -- with the call's index KeyIsAny, any atom but an index's
+// -- and 0 otherwise. It runs nothing and never refuses.
+//
 // GoAwait is what an async function's await of an object, its one
 // operand, goes on with in place (OpAwaitReady): a fulfilled promise of
 // the realm's own constructor's value, as the interpreter's await finds it
@@ -2807,6 +2827,7 @@ const (
 	GoTypedView
 	GoIterClose
 	GoAwait
+	GoKeyFill
 )
 
 // GoNewArray's flags, in its CallSite's Argc. With NewArraySort, the

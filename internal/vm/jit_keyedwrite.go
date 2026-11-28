@@ -2,6 +2,13 @@
 
 package vm
 
+import (
+	"unsafe"
+
+	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
+)
+
 // jitKeyedWrite is o[k] = v where storing it runs nothing and throws
 // nothing (ssa.GoKeyedWrite), made if store is set, or only asked: an
 // array's or a typed array's element as native code's call of Go stores it
@@ -107,6 +114,33 @@ func (r *Runtime) jitStoreProp(obj *Object, key Atom, v Value, store, keyed bool
 	if !keyed {
 		// Natively next time, by the megamorphic cache's entry.
 		r.jitMegaFillAdd(obj, from, key)
+	}
+	return true
+}
+
+// jitKeyFill is ssa.GoKeyFill: a keyed store's test of its key, the string
+// in ctx's first operand, which keyAtoms has no entry for or one of none,
+// converted as a property read converts it (toPropertyName), which looks
+// its atom up, making none, and remembers the answer; then whether it
+// names the atom of the second operand -- with the call's index
+// ssa.KeyIsAny, any atom but an index's -- 1 or 0 in the first's number
+// word. The entry an eviction took is so filled and gone on from, and
+// what the store does is what the key names, wherever the table's sets
+// fall.
+func (r *Runtime) jitKeyFill(ctx *abi.Context) bool {
+	is := false
+	if s := *(**String)(unsafe.Pointer(&ctx.GoArgs[0].Ref)); s != nil {
+		if p, err := r.toPropertyName(Str(s)); err == nil && p.hasAtom {
+			if ctx.GoOp>>abi.GoOpIndexShift&ssa.KeyIsAny != 0 {
+				is = !p.atom.IsIndex()
+			} else {
+				is = p.atom == Atom(uint32(ctx.GoArgs[1].Num))
+			}
+		}
+	}
+	ctx.GoArgs[0].Num = 0
+	if is {
+		ctx.GoArgs[0].Num = 1
 	}
 	return true
 }

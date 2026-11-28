@@ -2104,6 +2104,8 @@ func jitHostCall(ctx *abi.Context) bool {
 		return r.jitIterClose(ctx)
 	case ssa.GoAwait:
 		return r.jitAwaitSettled(ctx)
+	case ssa.GoKeyFill:
+		return r.jitKeyFill(ctx)
 	case ssa.GoTypedSeen:
 		return r.jitTypedSeen(ctx)
 	case ssa.GoTypedView:

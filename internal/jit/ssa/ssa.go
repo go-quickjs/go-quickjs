@@ -677,8 +677,13 @@ const (
 	// strings (Func's KeyAtoms) names atom Const.Bits by: a keyed store's
 	// test of its key (KeyedStoreSite), before the store of that key's
 	// shapes; with Index KeyIsAny, by any atom but an index's. Anything
-	// else -- no string, a string the table has no entry for, or one of
-	// another atom or of none -- is false. It never exits.
+	// else -- no string, a string of another atom or of none -- is false.
+	// With Index's KeyIsFill, a string the table has no entry for, or one
+	// of none, Go looks up and remembers (GoKeyFill) and answers for: what
+	// the test answers is what the string names, not what the table
+	// holds. Without it, such a string is false, as the tests after a
+	// site's first, which its fill has given an entry, answer. It never
+	// exits.
 	OpKeyIs // tagged -> bool
 	// OpHeapBase and OpHeapLen are the base address and the length of the
 	// heap whose abi.HeapCell is at Const's address, as its cell holds
@@ -704,9 +709,14 @@ const (
 	TailPolled = 8
 )
 
-// KeyIsAny is OpKeyIs's Index for a string the VM's table of key strings
-// names any atom by but an index's.
-const KeyIsAny = 1
+// OpKeyIs's Index bits: KeyIsAny for a string the VM's table of key
+// strings names any atom by but an index's; KeyIsFill for a test that has
+// Go fill the table where it has no entry for the string, or one of none
+// (GoKeyFill).
+const (
+	KeyIsAny  = 1
+	KeyIsFill = 2
+)
 
 // OpNumberIs's Aux: which of Number's predicates.
 const (

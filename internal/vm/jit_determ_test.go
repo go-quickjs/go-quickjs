@@ -61,6 +61,72 @@ func TestJITKeyedStoreConstantKeyEvicted(t *testing.T) {
 	}
 }
 
+// A keyed store of a key that is no constant, o[k] = v, tests its key
+// against each key its site met by the VM's table of key strings, whose
+// entries a string's address slots: a string another had evicted is
+// looked up and its entry filled by Go from native code, and tested
+// again, so that what the store does is what its key is, not what the
+// table holds. An evicted key had been one the site never met:
+// the store left native code, and the code was compiled again for what
+// that taught. The key the test floods out is one the site met, and one
+// it did not, which deoptimizes, entry or none.
+func TestJITKeyedStoreKeyEvicted(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range []bool{false, true} {
+		t.Run(fmt.Sprint("marking=", marking), func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			events := jitTierTraceForTest(t)
+			r, run := jitTierRuntimeForTest(t, 8, `var keys = ["x", "y"], other = "z", made = { z: 0 }
+				function set(o, k, v) { o[k] = v; return o }
+				function flood(n) { var o = {}; for (var i = 0; i < n; i++) o["k" + i] = i; return 0 }`)
+			r.jitStress = jitStressConfig{}
+			for i := range 20 {
+				run(fmt.Sprintf("set({ a: 1 }, keys[%d], %d)[keys[%d]]", i&1, i, i&1))
+			}
+			cl := jitGlobalClosure(r, "set")
+			e := cl.closureCode.jitReg
+			if e == nil || e.code == nil {
+				t.Fatalf("set has no native code: no test of its keyed store\n%s", jitTierLines(*events))
+			}
+			flood := func() {
+				run("flood(4096)")
+				for _, k := range []string{"x", "y", "z"} {
+					if keyAtomsHoldForTest(r, k) {
+						t.Fatalf("%q is still in the table of key strings: the flood evicted nothing, and the test tests nothing", k)
+					}
+				}
+			}
+			flood()
+			*events = (*events)[:0]
+			st := r.RegNativeStats()
+			for i := range 20 {
+				run(fmt.Sprintf("set({ a: 1 }, keys[%d], %d)[keys[%d]]", i&1, i, i&1))
+			}
+			after := r.RegNativeStats()
+			if !keyAtomsHoldForTest(r, "x") || !keyAtomsHoldForTest(r, "y") {
+				t.Errorf("the stores' keys are not in the table of key strings again")
+			}
+			if after.Hosts != st.Hosts || after.Interpreted != st.Interpreted {
+				t.Errorf("the evicted keys' stores left native code: %d exits to Go, %d invocations finished in the interpreter", after.Hosts-st.Hosts, after.Interpreted-st.Interpreted)
+			}
+			if e.life.reopt || e.invalid || cl.closureCode.jitReg != e || len(*events) != 0 {
+				t.Fatalf("the evicted keys' stores taught set's code (reopt %v, invalid %v, replaced %v):\n%s", e.life.reopt, e.invalid, cl.closureCode.jitReg != e, jitTierLines(*events))
+			}
+			// A key the site did not meet, its entry evicted: the store
+			// deoptimizes, as it does with the entry there.
+			flood()
+			run("set({ a: 1 }, other, 1).z")
+			if got := jitTierLines(*events); !strings.HasPrefix(got, "D set ") {
+				t.Errorf("a key the site never met, its entry evicted, did not deoptimize the store:\n%s", got)
+			}
+		})
+	}
+}
+
 // A megamorphic read's miss of the megamorphic cache (abi.MegaCache) --
 // an entry another has displaced from its set, which the shapes' addresses
 // choose -- is filled and gone on from as a hit is: no exit, no compile

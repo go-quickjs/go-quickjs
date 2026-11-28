@@ -1795,10 +1795,16 @@ key's shapes deoptimizes, and so does a string the table names an atom by
 that none of the keys is (`OpKeyIs`'s `KeyIsAny`), the interpreter's store
 teaching the cache the new pair; once the site has deoptimized (`Generic`)
 such a receiver exits to Go, which stores and goes on natively, and such a
-key goes the way any other key goes -- a string the table does not know,
-made anew for each store, or no string: an element's store, Go's keyed
-write (`ssa.GoKeyedWrite`), or the define's call of Go. A site whose cache
-gave up (`maxCacheFills`) is compiled as before.
+key goes the way any other key goes -- a string naming no atom, or no
+string: an element's store, Go's keyed write (`ssa.GoKeyedWrite`), or the
+define's call of Go. The table's entries a string's address slots, so the
+first of a site's tests (`KeyIsFill`) has Go look a string it has no entry
+for, or one of none, up and fill the entry (`ssa.GoKeyFill`, out of line),
+and answer: what the store does is what the key names, whatever the table
+held, and an entry another string evicted is filled and gone on from --
+no exit, no deoptimization, nothing learned. A key that is a string
+constant one of the site's keys is, is that key's store with no test. A
+site whose cache gave up (`maxCacheFills`) is compiled as before.
 
 **The in operator.** `k in o` (`ir.HasProperty`) is a call of Go from native
 code (`ssa.GoHas`), as V8's code calls its HasProperty builtin: Go searches

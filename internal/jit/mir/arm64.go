@@ -7257,6 +7257,11 @@ func (c *a64Compiler) keyIs(v *ssa.Value, to *a64Target) {
 		c.setBool(v, to, t, 1)
 		return
 	}
+	miss := t.no
+	fill := v.Index&ssa.KeyIsFill != 0 && c.enc.CallGo != 0
+	if fill {
+		miss = c.a.NewLabel()
+	}
 	if w := c.gpr(key, a64A); w != a64A {
 		c.a.MovRR(a64A, w)
 	}
@@ -7266,11 +7271,28 @@ func (c *a64Compiler) keyIs(v *ssa.Value, to *a64Target) {
 	c.pointerWord(key, a64A)
 	c.a.Cbz(a64B, t.no, true)
 	c.keyAtomSet(a64A, a64B, a64C)
-	c.keyAtomFind(a64A, a64B, a64C, t.no)
+	c.keyAtomFind(a64A, a64B, a64C, miss)
 	c.a.LoadU8(a64C, a64A, abi.KeyAtomNone)
-	c.a.Cbnz(a64C, t.no, false)
+	c.a.Cbnz(a64C, miss, false)
 	c.a.LoadU32(a64C, a64A, abi.KeyAtomAtom)
-	if v.Index == ssa.KeyIsAny {
+	if fill {
+		budget := c.budget
+		c.cold = append(c.cold, func() {
+			saved := c.budget
+			c.budget = budget
+			c.a.Bind(miss)
+			size := int32(unsafe.Sizeof(abi.GoArg{}))
+			c.goArg(abi.OffGoArgs, key)
+			c.movImm(a64A, uint64(uint32(v.Const.Bits)))
+			c.a.Store(a64Ctx, abi.OffGoArgs+size+c.enc.NumOffset, a64A)
+			c.goSaving(uint64(ssa.GoKeyFill)|uint64(v.Index&ssa.KeyIsAny)<<abi.GoOpIndexShift, nil)
+			c.a.Load(a64A, a64Ctx, abi.OffGoArgs+c.enc.NumOffset)
+			c.a.Cbnz(a64A, t.yes, true)
+			c.a.B(t.no)
+			c.budget = saved
+		})
+	}
+	if v.Index&ssa.KeyIsAny != 0 {
 		// Any atom but an index's, whose top bit is set.
 		c.a.ShiftImm(arm64.Lsr, a64C, a64C, 31, false)
 		c.a.CmpImm(a64C, 0, false)

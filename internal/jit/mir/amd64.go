@@ -8585,9 +8585,10 @@ func (c *compiler) typeIs(v *ssa.Value, guard guardTo, to *target) {
 // ssa.KeyIsAny any atom but an index's (ssa.OpKeyIs): its
 // pointer word looked for in the string's set, as keyedRead looks for it,
 // the entry naming an atom and that one. A value that is no string, a
-// string with no entry or one of none or of another atom, is false; so is
-// any where the table is not the code's to read. It uses every scratch
-// register.
+// string of none or of another atom, is false; so is any where the table
+// is not the code's to read. A string with no entry, or one of none, is
+// false too, but with Index's ssa.KeyIsFill, where Go fills the entry and
+// answers (ssa.GoKeyFill), out of line. It uses every scratch register.
 func (c *compiler) keyIs(v *ssa.Value, to *target) {
 	t := c.tests(to, false)
 	key := v.Args[0]
@@ -8595,6 +8596,11 @@ func (c *compiler) keyIs(v *ssa.Value, to *target) {
 		c.jumpTo(t, t.no)
 		c.setBool(v, to, t, 1)
 		return
+	}
+	miss := t.no
+	fill := v.Index&ssa.KeyIsFill != 0 && c.enc.CallGo != 0
+	if fill {
+		miss = c.a.NewLabel()
 	}
 	if w := c.gpr(key, scratchA); w != scratchA {
 		c.a.MovRR(scratchA, w)
@@ -8605,12 +8611,30 @@ func (c *compiler) keyIs(v *ssa.Value, to *target) {
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
 	c.a.Jcc(amd64.CondE, t.no)
 	c.keyAtomSet(scratchA, scratchB, scratchC)
-	c.keyAtomFind(scratchA, scratchB, t.no)
+	c.keyAtomFind(scratchA, scratchB, miss)
 	c.a.LoadU8(scratchC, scratchA, abi.KeyAtomNone)
 	c.a.Op(amd64.Test, scratchC, scratchC, false)
-	c.a.Jcc(amd64.CondNE, t.no)
+	c.a.Jcc(amd64.CondNE, miss)
 	c.a.LoadU32(scratchC, scratchA, abi.KeyAtomAtom)
-	if v.Index == ssa.KeyIsAny {
+	if fill {
+		budget := c.budget
+		c.cold = append(c.cold, func() {
+			saved := c.budget
+			c.budget = budget
+			c.a.Bind(miss)
+			size := int32(unsafe.Sizeof(abi.GoArg{}))
+			c.goArg(abi.OffGoArgs, key)
+			c.movImm(scratchA, uint64(uint32(v.Const.Bits)))
+			c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.NumOffset, scratchA)
+			c.goSaving(uint64(ssa.GoKeyFill)|uint64(v.Index&ssa.KeyIsAny)<<abi.GoOpIndexShift, nil)
+			c.a.Load(scratchA, regCtx, abi.OffGoArgs+c.enc.NumOffset)
+			c.a.Op(amd64.Test, scratchA, scratchA, true)
+			c.a.Jcc(amd64.CondNE, t.yes)
+			c.a.Jmp(t.no)
+			c.budget = saved
+		})
+	}
+	if v.Index&ssa.KeyIsAny != 0 {
 		// Any atom but an index's, whose top bit is set.
 		c.a.Op(amd64.Test, scratchC, scratchC, false)
 		c.jumpIf(t, amd64.CondNS)
