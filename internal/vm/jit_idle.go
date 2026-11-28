@@ -634,7 +634,7 @@ func (s *jitState) jitRegParkSome(n int) {
 			e == s.regGoOnFrom || e == s.regGoMark.e || e.osrJob != nil {
 			continue
 		}
-		cands = append(cands, jitParkCand{key, e, s.regUsedAt(e)})
+		cands = append(cands, jitParkCand{key, e, s.regUsedAt(e), s.regVictimSerial(key, uint64(e.serial))})
 	}
 	if len(cands) > n {
 		sort.Sort(cands)
@@ -658,20 +658,28 @@ func (s *jitState) jitRegParkSome(n int) {
 }
 
 // jitParkCand is an entry a parking may park, with the epoch the cache
-// last saw it used at (regUsedAt).
+// last saw it used at (regUsedAt), and its function's state's serial
+// (regVictimSerial).
 type jitParkCand struct {
-	key jitKey
-	e   *jitRegEntry
-	at  uint64
+	key        jitKey
+	e          *jitRegEntry
+	at, serial uint64
 }
 
 // jitParkCands are a parking's candidates, the least recently used first
-// once sorted.
+// once sorted, of those used at one epoch the state made first: ordered by
+// the epoch alone, the cache's map's order, which is the process's, chose
+// among them.
 type jitParkCands []jitParkCand
 
-func (c jitParkCands) Len() int           { return len(c) }
-func (c jitParkCands) Less(i, j int) bool { return c[i].at < c[j].at }
-func (c jitParkCands) Swap(i, j int)      { c[i], c[j] = c[j], c[i] }
+func (c jitParkCands) Len() int { return len(c) }
+func (c jitParkCands) Less(i, j int) bool {
+	if c[i].at != c[j].at {
+		return c[i].at < c[j].at
+	}
+	return c[i].serial < c[j].serial
+}
+func (c jitParkCands) Swap(i, j int) { c[i], c[j] = c[j], c[i] }
 
 // regUsedAt is the epoch the cache last saw e used at (jitRegEntry's
 // used, which its looks set, regAge), the latest of all where e was used

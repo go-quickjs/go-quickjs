@@ -4336,8 +4336,12 @@ type jitLowering struct {
 	// (treeSeen) when they were last taken into hints.
 	hints jitcompile.Hints
 	// serial counts its relowerings (relower): a lowering made in the
-	// background from hints a later relowering replaced is stale.
+	// background from hints a later relowering replaced is stale. made
+	// orders the lowerings by when they were made, numbered as the
+	// functions' states are (jitState's serial), for the cache to let go
+	// of the older of two used at one epoch first (listVictims).
 	serial uint32
+	made   uint64
 	// busy counts the compiles of the function's register code under way,
 	// which keep its programs (regLoweringSpare).
 	busy uint8
@@ -4370,7 +4374,8 @@ func (s *jitState) lowering(fn *bytecode.Function) *jitLowering {
 		if s.lowered == nil {
 			s.lowered = map[weak.Pointer[bytecode.Function]]*jitLowering{}
 		}
-		l = &jitLowering{bytes: jitLoweringFixed}
+		s.serial++
+		l = &jitLowering{bytes: jitLoweringFixed, made: s.serial}
 		s.lowered[key] = l
 		s.lowerBytes += l.bytes
 	}

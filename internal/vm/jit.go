@@ -1803,7 +1803,7 @@ func (s *jitState) listVictims(now uint64, need int) bool {
 	clear(s.victims)
 	v, reclaimable := s.victims[:0], 0
 	for key, l := range s.lowered {
-		v = append(v, jitVictim{key: jitKey{Pointer: key}, l: l, class: jitVictimLowering, used: l.used, bytes: l.bytes})
+		v = append(v, jitVictim{key: jitKey{Pointer: key}, l: l, class: jitVictimLowering, used: l.used, serial: l.made, bytes: l.bytes})
 	}
 	v = s.regVictims(v, now)
 	for i := range v {

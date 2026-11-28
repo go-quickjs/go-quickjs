@@ -243,7 +243,8 @@ func (s *jitState) regLowering(key jitKey) *jitLowering {
 		if s.regLowered == nil {
 			s.regLowered = map[jitKey]*jitLowering{}
 		}
-		l = &jitLowering{bytes: jitLoweringFixed}
+		s.serial++
+		l = &jitLowering{bytes: jitLoweringFixed, made: s.serial}
 		s.regLowered[key] = l
 		s.lowerBytes += l.bytes
 	} else if len(l.hints.StringAdds) != len(h.StringAdds) || len(l.hints.ElementReads) != len(h.ElementReads) ||

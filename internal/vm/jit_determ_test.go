@@ -4,9 +4,13 @@ package vm
 
 import (
 	"fmt"
+	"runtime"
+	"slices"
+	"sort"
 	"testing"
 	"unsafe"
 
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 )
@@ -203,4 +207,57 @@ func jitReadCompiledMegamorphicForTest(t *testing.T, r *Runtime, cl *closure) bo
 		}
 	}
 	return false
+}
+
+// The cache lets go of the lowerings used at one epoch in the order they
+// were made, whatever order its map gives them, which is the process's:
+// ordered by their epoch alone, which went first had a budget's compiles
+// differ from one run to the next.
+func TestJITVictimsTieByMade(t *testing.T) {
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	s := r.jitState()
+	fns := make([]*bytecode.Function, 12)
+	for i := range fns {
+		fns[i] = &bytecode.Function{Name: fmt.Sprint(i)}
+		s.lowering(fns[i])
+	}
+	for _, l := range s.lowered {
+		l.used = 7
+	}
+	s.budget = 1 << 40
+	for range 20 {
+		if !s.listVictims(8, 0) {
+			t.Fatal("nothing listed")
+		}
+		var made []uint64
+		for _, v := range s.victims {
+			if v.class == jitVictimLowering && !v.reg {
+				made = append(made, v.l.made)
+			}
+		}
+		if len(made) != len(fns) || !slices.IsSorted(made) {
+			t.Fatalf("lowerings of one epoch listed in the order %v, not as they were made", made)
+		}
+	}
+	runtime.KeepAlive(fns)
+}
+
+// A parking's candidates used at one epoch go in the order their
+// functions' states were made, whatever order the cache's map listed them
+// in, which is the process's.
+func TestJITParkCandsTieBySerial(t *testing.T) {
+	var c jitParkCands
+	for _, s := range []uint64{9, 3, 12, 1, 7, 5, 11, 2, 8, 4, 10, 6} {
+		c = append(c, jitParkCand{at: 3, serial: s})
+	}
+	c = append(c, jitParkCand{at: 1, serial: 99})
+	sort.Sort(c)
+	if c[0].serial != 99 {
+		t.Fatalf("the least recently used, %+v, is not first", c[0])
+	}
+	for i := 2; i < len(c); i++ {
+		if c[i-1].serial > c[i].serial {
+			t.Fatalf("candidates of one epoch in the order %v, not their states'", c)
+		}
+	}
 }

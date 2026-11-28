@@ -1286,7 +1286,7 @@ func (s *jitState) regHoldLinks(fb *jitFeedback, d int) {
 func (s *jitState) regVictims(v []jitVictim, now uint64) []jitVictim {
 	for key, l := range s.regLowered {
 		if n := s.regLoweringSpare(key, l); n > 0 {
-			v = append(v, jitVictim{key: key, l: l, reg: true, class: jitVictimLowering, used: l.used, serial: s.regVictimSerial(key, 0), bytes: n})
+			v = append(v, jitVictim{key: key, l: l, reg: true, class: jitVictimLowering, used: l.used, serial: s.regVictimSerial(key, l.made), bytes: n})
 		}
 	}
 	called := s.regCalledFns()
