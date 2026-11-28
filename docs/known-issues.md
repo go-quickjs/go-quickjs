@@ -1654,3 +1654,20 @@ Paths are relative to this repository; `go-intl:` paths are in
   range, which the operators refuse, and a class's value carries the
   grammar's MayContainStrings, which the negations ask
   (`TestClassSetEarlyErrors`).
+
+### KI-100 The memory limit misses the room an object outgrew
+- **Where:** `internal/vm/memory.go`. An object built from `{}` starts
+  with in-object room for four properties, fixed since `{}` shares the
+  realm's literal root. Past four, its properties move to a table of their
+  own, and the four slots in the object's own allocation stay there,
+  unused. The meter counts the table but cannot see the dead room, since
+  the object doesn't record how much room it was made with.
+- **Effect:** objects of 5 to 16 properties are counted at 0.75 to 0.84 of
+  their live heap. Larger objects are counted closer to their heap (0.96
+  at 20 properties, after the meter's count of a property table was
+  corrected). Before the shared root, a site learned its objects' room, so
+  objects that outgrew theirs were rare.
+- **Status:** open. Counting the room needs it recorded on the object, for
+  example in a byte of `Object`'s padding. That touches the object's
+  layout, its equality functions, the inliner's costs and the layout lock,
+  so it is an item of its own.
