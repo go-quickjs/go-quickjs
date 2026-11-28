@@ -177,7 +177,10 @@ func differs(p, q *nativeRecord) string {
 func isAddress(v uint64) bool { return v >= 1<<32 && v < 1<<47 }
 
 // differsAMD64 finds a difference that is not in a movabs's immediate, or a
-// word of the code's constants, that may be an address.
+// word of the code's constants, that may be an address. The constants are
+// words at a multiple of 8 bytes from the code's start, after the
+// instructions and the padding to there; code compiled before they were
+// aligned so has them at a multiple of 8 from the instructions' end.
 func differsAMD64(a, b []byte, text int) string {
 	if len(a) != len(b) {
 		return fmt.Sprintf("%d bytes, against %d", len(a), len(b))
@@ -187,7 +190,7 @@ func differsAMD64(a, b []byte, text int) string {
 			return false
 		}
 		if o >= text {
-			return (o-text)%8 == 0
+			return o%8 == 0 || (o-text)%8 == 0
 		}
 		return o >= 2 && a[o-2]&^1 == 0x48 && a[o-1]&^7 == 0xB8
 	}

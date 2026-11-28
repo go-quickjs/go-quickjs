@@ -221,6 +221,21 @@ func TestNativeCompare(t *testing.T) {
 		b := inst(vs...)
 		return nativeRecord{Arch: "arm64", Bytes: b, Text: len(b)}
 	}
+	word := func(v uint64) []byte { return binary.LittleEndian.AppendUint64(nil, v) }
+	// pool is amd64's code with its constants where they are now: 13
+	// bytes of instructions, padded to 16, then the 8-byte words.
+	pool := func(v uint64) nativeRecord {
+		b := append([]byte{0x90}, addr(0xc000111111)...)
+		b = append(b, 0x90, 0x90)
+		b = append(append(b, 0x0f, 0x1f, 0), word(v)...)
+		return nativeRecord{Bytes: b, Text: 13}
+	}
+	// armTable is arm64's code with a table of a word, its text padded
+	// with a NOP to a multiple of 8 bytes.
+	armTable := func(v uint64) nativeRecord {
+		b := append(inst(0x91000421, 0xD503201F), word(v)...)
+		return nativeRecord{Arch: "arm64", Bytes: b, Text: 8}
+	}
 	const movz, movk, high = 0xD2800000, 0xF2A00000, 0xF2C00000
 	for _, tc := range []struct {
 		name string
@@ -229,6 +244,12 @@ func TestNativeCompare(t *testing.T) {
 	}{
 		{"address", nativeRecord{Bytes: addr(0xc000123456), Text: 10}, nativeRecord{Bytes: addr(0xc000654321), Text: 10}, true},
 		{"constant", nativeRecord{Bytes: addr(7), Text: 10}, nativeRecord{Bytes: addr(8), Text: 10}, false},
+		{"pool's address", pool(0xc000123456), pool(0xc000654321), true},
+		{"pool's constant", pool(7), pool(8), false},
+		{"unaligned pool's address", nativeRecord{Bytes: append([]byte{0x90, 0x90, 0x90}, word(0xc000123456)...), Text: 3},
+			nativeRecord{Bytes: append([]byte{0x90, 0x90, 0x90}, word(0xc000654321)...), Text: 3}, true},
+		{"arm64 table's address", armTable(0xc000123456), armTable(0xc000654321), true},
+		{"arm64 table's constant", armTable(7), armTable(8), false},
 		{"not a movabs", nativeRecord{Bytes: append([]byte{0x90, 0x90}, addr(0xc000123456)[2:]...), Text: 10},
 			nativeRecord{Bytes: append([]byte{0x90, 0x90}, addr(0xc000654321)[2:]...), Text: 10}, false},
 		{"length", nativeRecord{Bytes: []byte{1}}, nativeRecord{Bytes: []byte{1, 2}}, false},
