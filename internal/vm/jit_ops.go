@@ -683,6 +683,51 @@ func (r *Runtime) jitRegReadSeen(f *frame, c *regCode, run jitRegRun, rpc int, r
 	}
 }
 
+// jitMegaMissMade makes, for native code, a call of Go that is a property
+// read's miss of the megamorphic cache (abi.MegaCache), at any level: the
+// cache, filled for the receiver's shape here, answers the read
+// (jitMegaFilled) -- a data property the receiver or its prototypes have,
+// or none -- as it never answers an accessor's, the one other read native
+// code calls Go for. Whether the cache had the entry before depends on what else its set
+// holds, which the shapes' addresses choose, and so differs from one
+// process to the next: such a miss is filled, read and gone on from as a hit
+// is, and teaches nothing -- no case, no compile again, no call of Go
+// counted in the code's profit, no frame. It reports whether the call was
+// one.
+func (r *Runtime) jitMegaMissMade(ctx *abi.Context) bool {
+	if ctx.GoOp>>abi.GoOpKindShift&0xff != abi.GoCallGet {
+		return false
+	}
+	recv, key := jitGoArg(ctx, 0), Atom(ctx.GoOp>>abi.GoOpIndexShift)
+	if !r.jitMegaFilled(recv, key) {
+		return false
+	}
+	v, err := r.getValueProp(recv, key)
+	if err != nil {
+		return false
+	}
+	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+	return true
+}
+
+// jitMegaFilled fills the megamorphic cache for a read of key from recv and
+// reports whether it answers the read now as native code would
+// (megaAnswers): a data property, or none, that reading runs no script
+// for. An entry along a chain whose prototype has since changed -- an
+// accessor defined on it -- answers nothing.
+func (r *Runtime) jitMegaFilled(recv Value, key Atom) bool {
+	if !recv.IsObject() || r.jit.mega == nil {
+		return false
+	}
+	o := recv.Object()
+	if o.class != ClassObject && o.class != ClassFunction {
+		return false
+	}
+	r.jit.megaFill(o, key)
+	r.jitMegaFillProto(o, key)
+	return r.jit.megaAnswers(o, key)
+}
+
 // jitRegSiteMegamorphic reports whether the property site of the register
 // instruction at rpc of c, cl's code, l what it learned, is megamorphic:
 // its cache met more shapes than a polymorphic site holds

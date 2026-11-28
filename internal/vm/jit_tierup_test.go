@@ -1005,14 +1005,30 @@ func TestJITMegamorphicReadsByGo(t *testing.T) {
 		t.Fatal("look's read is not megamorphic: no test of its misses")
 	}
 	ee := jitNativeForTest(t, r, "each")
-	hosts, ehosts, interpreted := e.ssaStats.hosts, ee.ssaStats.hosts, r.jit.interpreted
+	hosts, ehosts := e.ssaStats.hosts, ee.ssaStats.hosts
+	guards, eguards, deopts, edeopts := e.ssaStats.guards, ee.ssaStats.guards, e.deopts, ee.deopts
 	run(`each(600)`)
 	run(`JSON.stringify(shapes.map(o=>look(o)))`)
 	if n := e.ssaStats.hosts - hosts + ee.ssaStats.hosts - ehosts; n != 0 {
 		t.Errorf("look, or each calling it, left native code %d times", n)
 	}
-	if n := r.jit.interpreted - interpreted; n != 0 {
-		t.Errorf("the interpreter finished %d invocations", n)
+	// Look's and each's own guards and deoptimizations, not the runtime's
+	// count of invocations the interpreter finished: that counts the
+	// getter's too, whose own read of this.p0 meets, in the last run,
+	// shapes[2]'s shape, which no copy each made has, and deoptimizes
+	// there wherever its code is entered then. It had not been entered:
+	// look's misses of the megamorphic cache, made by Go through look's
+	// site cache, had filled that cache to its last fill, after which Go
+	// read every getter's receiver by the runtime's cache and called the
+	// getter generically, its code entered and judged slow -- and so left
+	// to the interpreter in the last run. A miss fills no site cache now
+	// (jitMegaMissMade), the getter is called by the site cache's entry,
+	// and its code meets the new shape.
+	if n := e.ssaStats.guards - guards + ee.ssaStats.guards - eguards; n != 0 {
+		t.Errorf("look, or each calling it, failed a guard %d times", n)
+	}
+	if n := e.deopts - deopts + ee.deopts - edeopts; n != 0 {
+		t.Errorf("look, or each calling it, was deoptimized %d times", n)
 	}
 }
 
@@ -1225,7 +1241,7 @@ func TestJITMegamorphicMethodReadsByGo(t *testing.T) {
 	}
 	e := jitNativeForTest(t, r, "call")
 	cl := r.global.getOwn(r.atoms.intern("call")).value().Object().fn().closure
-	if !jitSiteMegamorphicForTest(t, r, cl, e, bytecode.OpGetPropThis, bytecode.RGetMethod, bytecode.RGetMethodW) {
+	if !jitSiteMegamorphicForTest(t, r, cl, e, bytecode.OpGetPropThis, bytecode.RGetMethod, bytecode.RGetMethodW) && !jitReadCompiledMegamorphicForTest(t, r, cl) {
 		t.Fatal("call's method read is not megamorphic: no test of its misses")
 	}
 	run(`each(600)`)

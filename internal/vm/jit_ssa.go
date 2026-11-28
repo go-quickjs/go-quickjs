@@ -697,6 +697,39 @@ func (s *jitState) megaPut(n abi.MegaEntry) {
 	set[0] = n
 }
 
+// megaAnswers reports whether the megamorphic cache answers a read of key
+// from o as native code reads it (mir's mega): an entry of o's shape and
+// key, o's own property, or along a chain whose every prototype is still
+// o's chain's, of the shape it names -- the last's prototype none, for a
+// property none of them has.
+func (s *jitState) megaAnswers(o *Object, key Atom) bool {
+	sh := o.shape
+	if s.mega == nil || sh == nil {
+		return false
+	}
+	for _, e := range s.mega[abi.MegaSet(uintptr(unsafe.Pointer(sh)), uint32(key)):][:abi.MegaWays] {
+		if e.Shape != unsafe.Pointer(sh) || e.Key != uint32(key) {
+			continue
+		}
+		if e.Chain == nil {
+			return true
+		}
+		p := o
+		for _, l := range e.Chain {
+			if l.Object == nil {
+				break
+			}
+			next := p.proto()
+			if next == nil || unsafe.Pointer(next) != l.Object || unsafe.Pointer(next.shape) != l.Shape {
+				return false
+			}
+			p = next
+		}
+		return e.Index&abi.MegaAbsent == 0 || p.proto() == nil
+	}
+	return false
+}
+
 // jitNoteChainRead has the megamorphic cache name what a read of key from o
 // found up its chain, or that nothing on it has the key, as an interpreter
 // cache remembers the read by the chain's cell (fillChainCache): native
@@ -2227,6 +2260,9 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 		// run, nor its PC for what it would learn: the exit makes its
 		// frame, and the interpreter the call.
 		return false
+	}
+	if r.jitMegaMissMade(ctx) {
+		return true
 	}
 	if ctx.Live == abi.LiveCall {
 		if len(s.regRuns) != 0 {

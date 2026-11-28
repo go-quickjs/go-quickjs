@@ -1205,7 +1205,13 @@ func (r *Runtime) jitRegHostSeen(f *frame, c *regCode, wb, rpc int) jitRegWrite 
 		}
 		return x
 	}
-	r.jitPolySeenOp(r.jit.regLearnedOf(r.jitRegKeyOf(f.cl)), rpc, op)
+	l := r.jit.regLearnedOf(r.jitRegKeyOf(f.cl))
+	if r.jitRegSiteMegamorphic(f.cl, c, l, rpc) && r.jitMegaFilled(op.recv, op.key) {
+		// The megamorphic cache's miss, filled, which teaches nothing
+		// (jitRegMegaMiss).
+		return jitRegWrite{}
+	}
+	r.jitPolySeenOp(l, rpc, op)
 	return jitRegWrite{}
 }
 
