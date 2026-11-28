@@ -941,9 +941,27 @@ these are the gaps that widen on the M5 Max (RegExp's by 14%, Splay's by
   slot's address, `[table+off]`, after c1 `[obj+off]`, and the cell's
   address is never materialized, kept live or spilled; Richards spills
   three such addresses an iteration.
+- **Allocation, lsra's strengths in mir (W8).** mir keeps its own scan:
+  its single-span intervals and hints are cheap, it needs no function
+  built for it, its spill classes spill least on four of the five
+  programs the lsra shadow measures, and it takes a function of any
+  size, which lsra's dense liveness would bound and so need mir behind
+  it. What lsra does better is taken into mir one part at a time
+  (stage 2's lsra bullet has the figures): its phi coalescing, webs of a
+  phi and its arguments joined where they do not interfere, at mir's
+  hints and groups, with the spill classes kept, which leaves 78 to 96%
+  fewer weighted edge moves on four programs while zlib keeps the
+  classes' sharing of the phis' slots; slots coloured by liveness with
+  holes, which uses 50 to 70% fewer slots (Typescript 10,962 against
+  27,318); and its liveness, 64 registers at once, cheaper than mir's
+  on all five programs. Each part is judged first by the
+  shadow's own measures on the same input -- spill cost, edge cost,
+  slots, against both mir's and lsra's -- and then as code runs.
 
-Together +1.6 / +3.3 / +6.8% of the composite, compile-neutral or cheaper,
-changes in ssa and mir alone that touch nothing the interpreter runs.
+W5 to W7 together are +1.6 / +3.3 / +6.8% of the composite,
+compile-neutral or cheaper, changes in ssa and mir alone that touch
+nothing the interpreter runs. W8 is not projected: what fewer edge moves
+and slots buy as run time is what its first part measures.
 
 ### Compile speed
 
@@ -1972,14 +1990,22 @@ stage 1's lattice.
 3 to 5 weeks, 2,000 to 4,000 lines, low risk. Needs nothing of stage 7
 and may go before it; the projection counts it after.
 
-- **Builds:** W5, W6 and W7 (above).
+- **Builds:** W5, W6 and W7 (above), and W8, lsra's coalescing, slot
+  colouring and liveness taken into mir, a part at a time.
 - **Gain:** the composite +1.6 / +3.3 / +6.8%, more of W6 once stage 7's
-  int32 phis want registers; Typescript small.
+  int32 phis want registers; Typescript small. W8's is measured, not
+  projected.
 - **Compile time:** neutral: optimize +3 to 5% for `thread`, emit -2 to
-  3%.
+  3%. W8's coalescing adds to the hints phase what its webs cost, which
+  the lsra shadow puts at 1.0 to 5.7 ms a run against the hints' 0.8 to
+  3.4 (Typescript 4.9 against 3.4); its liveness costs less than mir's
+  on all five programs (Typescript 11.5 against 16.2 ms).
 - **Gate:** `compilediff native` showing only the intended instructions;
   `internal/jit/verify`'s encoders; Richards, Crypto and NavierStokes at
-  the JIT offsets; `-jitcompile 10` per phase.
+  the JIT offsets; `-jitcompile 10` per phase. For W8, the lsra shadow's
+  spill cost, edge cost and slots no worse than mir's on any of
+  Typescript, zlib, Mandreel, PdfJS and Gameboy, and the edge cost
+  approaching lsra's, before anything is timed.
 - **Status:** not started.
 
 ### Stage 8: allocation and final shapes
