@@ -164,3 +164,18 @@ func awfyRun(module string, inner, n int) string {
 	return "";
 })()`, "./"+module, n, inner, module)
 }
+
+// awfyRunTimed is awfyRun with each run timed, for -perrun: the script
+// returns the runs' times, in milliseconds separated by spaces.
+func awfyRunTimed(module string, inner, n int) string {
+	return fmt.Sprintf(`(() => {
+	const b = __awfyRequire(%q).newInstance();
+	const t = [];
+	for (let i = 0; i < %d; i++) {
+		const t0 = now();
+		if (!b.innerBenchmarkLoop(%d)) throw new Error(%q + ": the result is wrong");
+		t.push(now() - t0);
+	}
+	return t.join(" ");
+})()`, "./"+module, n, inner, module)
+}

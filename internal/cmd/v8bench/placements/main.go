@@ -63,7 +63,26 @@
 // again in a process of its own as many times as fill about one -- 3, 10,
 // 30, 100 or 300 -- so that a long one, Octane's zlib, takes its run's
 // time and no more, and a short one, the V8 suite's Richards, more than
-// the timer's grain.
+// the timer's grain. A short one's figure is its steady time a run: that
+// process prints each run's time (v8bench -perrun), and the figure is the
+// mean of the runs after the first half of them, without the compiles and
+// first runs that warm it up. The process's total over its runs had been
+// the figure, warm-up and all, and so it depended on how many runs there
+// were: Octane's Box2D with the JIT, which compiles over its first ten
+// runs or so, was 43 ms a run over 10 and 28.5 over 30, and its one run,
+// about 100 ms, gave it 10 runs in one comparison and 30 in another. The
+// runs are decided once for a comparison, by the first run that times a
+// benchmark, so both labels have the same; -reps NAME=N pins them, so that
+// two comparisons do. A build of v8bench without -perrun prints no runs'
+// times, and then both labels' figures are the total over the runs, as
+// before, which compare says.
+//
+// A long one's figure is its one run, its compiles and warm-up in it.
+// -steady runs every benchmark again, a long one twice, and reports two
+// figures of each: its steady time a run, as a short one's above, and
+// "first+steady", its one run in the suite's process, compiles, warm-up
+// and the run's own work together, which is what a program that runs it
+// once pays.
 //
 // -k 4 takes placements 0, 3, 5 and 6 of the eight, over which runReg,
 // rhCallW and the native block are each at each phase twice and each pair
@@ -121,6 +140,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"os"
 	"os/exec"
@@ -159,7 +179,7 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   placements build -label NAME [-k 8|4] [-out DIR]
-  placements compare -dir SUITE [-bench NAME] [-k 8|4] [-rounds 3] [-suite NAMES] [-jit]
+  placements compare -dir SUITE [-bench NAME] [-k 8|4] [-rounds 3] [-suite NAMES] [-jit] [-steady] [-reps NAME=N,...]
   placements compare -micro [-k 8|4] [-rounds 3] [-suite TESTS] [-jit]
                      [-parallel] [-cpus auto|halves|LIST;LIST] [-v] [-out DIR] A B
   (a label NAME@VAR=VALUE runs NAME's build with VAR=VALUE in its environment)`)
@@ -529,6 +549,9 @@ func compareCmd(args []string) error {
 	out := fs.String("out", defaultOut(), "where the builds are")
 	fresh := fs.Bool("freshcopy", fixedbase.Default, "run each process from a fresh copy of its build, so that its speed is not its file's (windows/amd64)")
 	micro := fs.Bool("micro", false, "run v8bench's micro mode, QuickJS's micro-benchmarks and ours, rather than a suite: -suite names tests by the start of their names, and -dir is not needed")
+	steadyAll := fs.Bool("steady", false, "run every benchmark again, a long one twice, and report each one's steady time a run and its one run, first+steady")
+	var reps repsTable
+	fs.Func("reps", "NAME=N[,NAME=N...]: run benchmark NAME again N times (0: its one run is its figure), rather than as many as its first run says; repeatable", reps.pin)
 	fs.Parse(args)
 	freshCopy = *fresh
 	if (*dir == "" && !*micro) || fs.NArg() != 2 {
@@ -567,21 +590,42 @@ func compareCmd(args []string) error {
 			}
 		}
 	}
+	// Whether the builds print their runs' times: both labels', or
+	// neither's figures are taken from them.
+	c := runConfig{dir: *dir, bench: *bench, suite: *suite, jit: *jitEnabled, jitBackground: *jitBackground, micro: *micro, perRun: !*micro, steady: *steadyAll && !*micro}
+	for _, label := range labels {
+		exe, _ := labelExe(*out, label, ns[0])
+		if c.perRun && !printsRuns(exe) {
+			fmt.Printf("%s's build prints no runs' times (v8bench -perrun): a benchmark's figure from its runs again is its process's total over them, its warm-up in it, for both labels; rebuild it for its steady time\n", label)
+			c.perRun = false
+		}
+	}
+	// best[label][i][benchmark] is placement ns[i]'s fastest round, with
+	// what its figure was taken from, for -v.
+	best := [2][]map[string]named{}
+	for l := range labels {
+		best[l] = make([]map[string]named, len(ns))
+		for i := range ns {
+			best[l][i] = map[string]named{}
+		}
+	}
 	var names []string
-	var reps repsTable
 	add := func(l, i int, got []named) {
 		for _, nv := range got {
 			if !slices.Contains(names, nv.name) {
 				names = append(names, nv.name)
 			}
 			res[l][i][nv.name] = append(res[l][i][nv.name], nv.ms)
+			if b, ok := best[l][i][nv.name]; !ok || nv.ms < b.ms {
+				best[l][i][nv.name] = nv
+			}
 		}
 	}
 	for round := range *rounds {
 		for i, n := range ns {
 			if !*parallel {
 				for l := range labels {
-					got, err := runPlacement(labels[l], *out, *dir, *bench, *suite, n, *jitEnabled, *jitBackground, *micro, nil, &reps)
+					got, err := runPlacement(labels[l], *out, n, c, nil, &reps)
 					if err != nil {
 						return err
 					}
@@ -597,7 +641,7 @@ func compareCmd(args []string) error {
 			for l := range labels {
 				g := groups[(l+i+round)%2]
 				go func() {
-					got[l], errs[l] = runPlacement(labels[l], *out, *dir, *bench, *suite, n, *jitEnabled, *jitBackground, *micro, g, &reps)
+					got[l], errs[l] = runPlacement(labels[l], *out, n, c, g, &reps)
 					done <- struct{}{}
 				}()
 			}
@@ -615,8 +659,20 @@ func compareCmd(args []string) error {
 		reportMicro(os.Stdout, labels, names, res, len(ns), *verbose)
 		return nil
 	}
-	fmt.Printf("%-14s%12s%12s   change  (spread of %s over placements; ms a run)\n", "", labels[0], labels[1], labels[1])
+	var steadyNames, firstNames []string
 	for _, name := range names {
+		if strings.HasSuffix(name, firstSuffix) {
+			firstNames = append(firstNames, name)
+		} else {
+			steadyNames = append(steadyNames, name)
+		}
+	}
+	what := "ms a run"
+	if c.steady {
+		what = "ms a run, steady: the runs after the warm-up"
+	}
+	fmt.Printf("%-14s%12s%12s   change  (spread of %s over placements; %s)\n", "", labels[0], labels[1], labels[1], what)
+	row := func(name string) {
 		var per [2][]float64
 		for l := range labels {
 			for i := range ns {
@@ -624,19 +680,69 @@ func compareCmd(args []string) error {
 			}
 		}
 		ma, mb := mean(per[0]), mean(per[1])
-		fmt.Printf("%-14s%12.1f%12.1f  %+6.1f%%   %.1f..%.1f\n", name, ma, mb, 100*(mb-ma)/ma,
+		fmt.Printf("%-14s%12.1f%12.1f  %+6.1f%%   %.1f..%.1f\n", strings.TrimSuffix(name, firstSuffix), ma, mb, 100*(mb-ma)/ma,
 			slices.Min(per[1]), slices.Max(per[1]))
 		if *verbose {
-			for l := range labels {
-				fmt.Printf("    %s:", labels[l])
-				for _, v := range per[l] {
-					fmt.Printf(" %.2f", v)
-				}
-				fmt.Println()
-			}
+			printInputs(os.Stdout, labels, name, per, best, len(ns))
+		}
+	}
+	for _, name := range steadyNames {
+		row(name)
+	}
+	if len(firstNames) > 0 {
+		fmt.Printf("\nfirst+steady%14s%12s   change  (ms of the one run in the suite's process: its compiles and warm-up, and the run)\n", labels[0], labels[1])
+		for _, name := range firstNames {
+			row(name)
 		}
 	}
 	return nil
+}
+
+// printInputs is -v's account of a benchmark's row: each label's figure at
+// each placement, its fastest round's, and what the figures were taken
+// from -- the runs it was given again (r), which of them the figure is the
+// mean of, and from that process the first run's time and the mean of all
+// its runs, warm-up and all, which is the figure where the builds print no
+// runs' times.
+func printInputs(w io.Writer, labels [2]string, name string, per [2][]float64, best [2][]map[string]named, placements int) {
+	r, how, timed := 0, "its one run in the suite's process", false
+	for l := range labels {
+		for i := range placements {
+			if b := best[l][i][name]; b.reps > r {
+				r, how, timed = b.reps, b.how(), b.dropped >= 0
+			}
+		}
+	}
+	if strings.HasSuffix(name, firstSuffix) {
+		r, how = 0, "its one run in the suite's process"
+	}
+	if strings.TrimSuffix(name, firstSuffix) == "TOTAL" {
+		fmt.Fprintf(w, "    the sum of the figures above\n")
+	} else {
+		fmt.Fprintf(w, "    r %d: %s\n", r, how)
+	}
+	for l := range labels {
+		fmt.Fprintf(w, "    %s:", labels[l])
+		for _, v := range per[l] {
+			fmt.Fprintf(w, " %.2f", v)
+		}
+		if r > 0 {
+			fmt.Fprintf(w, "   (")
+			if timed {
+				fmt.Fprintf(w, "first run")
+				for i := range placements {
+					fmt.Fprintf(w, " %.2f", best[l][i][name].first)
+				}
+				fmt.Fprintf(w, "; ")
+			}
+			fmt.Fprintf(w, "all runs' mean")
+			for i := range placements {
+				fmt.Fprintf(w, " %.2f", best[l][i][name].mean)
+			}
+			fmt.Fprintf(w, ")")
+		}
+		fmt.Fprintln(w)
+	}
 }
 
 // longRun is the time, in milliseconds, past which a benchmark's one run
@@ -661,9 +767,81 @@ func repsFor(ms float64) int {
 	return repeats[len(repeats)-1]
 }
 
+// named is a benchmark's figure, in milliseconds a run, or a micro test's,
+// in nanoseconds an operation; for a benchmark run again, what it was
+// taken from: the runs (reps), how many of the first were left out of it
+// (dropped, -1 where the build printed no runs' times and the figure is
+// mean), the first run's time and the mean of them all.
 type named struct {
-	name string
-	ms   float64
+	name        string
+	ms          float64
+	reps        int
+	dropped     int
+	first, mean float64
+}
+
+// firstSuffix names a benchmark's first+steady figure, under -steady: its
+// one run in the suite's process.
+const firstSuffix = " first+steady"
+
+// runConfig is what compare runs each placement with: the suite, the JIT,
+// the micro mode, whether the builds print their runs' times (perRun), and
+// -steady.
+type runConfig struct {
+	dir, bench, suite                         string
+	jit, jitBackground, micro, perRun, steady bool
+}
+
+// how says what n's figure is the mean of.
+func (n named) how() string {
+	if n.dropped < 0 {
+		return "the mean of all its runs: the build prints no runs' times"
+	}
+	return fmt.Sprintf("the mean of runs %d to %d", n.dropped+1, n.reps)
+}
+
+// steady is the time a run of a benchmark whose runs took ms, once it is
+// warm: the mean of the runs after the first half of them, and how many it
+// left out. A benchmark's first runs compile and warm up -- Octane's Box2D
+// with the JIT has compiled 44 functions after its first run, 101 after
+// its third, 130 after its tenth and 156 after its thirtieth -- and the
+// mean of the runs after the first alone was still 36 ms over 10 runs and
+// 26 over 30. The mean, not the fastest, so that the collector's cycles
+// count as often as they come.
+func steady(ms []float64) (float64, int) {
+	drop := len(ms) / 2
+	sum := 0.0
+	for _, v := range ms[drop:] {
+		sum += v
+	}
+	return sum / float64(len(ms)-drop), drop
+}
+
+// runsLine is a line of v8bench -perrun's: a benchmark's runs' times.
+var runsLine = regexp.MustCompile(`(?m)^(\w+) runs ms:((?: [\d.]+)*)\s*$`)
+
+// parseRuns reads v8bench -perrun's runs' times, by benchmark.
+func parseRuns(out string) (map[string][]float64, error) {
+	runs := map[string][]float64{}
+	for _, m := range runsLine.FindAllStringSubmatch(out, -1) {
+		var ms []float64
+		for _, f := range strings.Fields(m[2]) {
+			v, err := strconv.ParseFloat(f, 64)
+			if err != nil {
+				return nil, fmt.Errorf("%s's runs: %w", m[1], err)
+			}
+			ms = append(ms, v)
+		}
+		runs[m[1]] = ms
+	}
+	return runs, nil
+}
+
+// printsRuns reports whether exe, a build of v8bench, has -perrun: its
+// usage, which -h prints, names it.
+func printsRuns(exe string) bool {
+	out, _ := exec.Command(exe, "-h").CombinedOutput()
+	return bytes.Contains(out, []byte("-perrun"))
 }
 
 // repsTable is how many runs each benchmark is given again, decided once
@@ -676,6 +854,25 @@ type named struct {
 type repsTable struct {
 	mu   sync.Mutex
 	reps map[string]int
+}
+
+// pin is compare's -reps: NAME=N[,NAME=N...] gives benchmark NAME N runs
+// again, whatever its first run.
+func (t *repsTable) pin(s string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.reps == nil {
+		t.reps = map[string]int{}
+	}
+	for _, kv := range strings.Split(s, ",") {
+		name, v, ok := strings.Cut(strings.TrimSpace(kv), "=")
+		r, err := strconv.Atoi(v)
+		if !ok || name == "" || err != nil || r < 0 || r == 1 {
+			return fmt.Errorf("-reps %q: want NAME=N, N 0 or at least 2", kv)
+		}
+		t.reps[name] = r
+	}
+	return nil
 }
 
 // of is the runs name is given again, decided by ms, its one run, if no
@@ -700,12 +897,18 @@ var freshCopy bool
 
 // runPlacement runs one build and reads its times, in milliseconds a run,
 // in the order it printed them, then the total of theirs: every benchmark
-// once, then those reps says are short again, in a process for each of
-// repeats that one needs. With micro, it runs v8bench's micro mode once,
-// whose tests each do the same work every run, and reads each test's time
-// of one operation, in nanoseconds, with no total. On cpus, if any, with
-// GOMAXPROCS as many.
-func runPlacement(label, out, dir, bench, suite string, n int, jitEnabled, jitBackground, micro bool, cpus cpuset.Set, reps *repsTable) ([]named, error) {
+// once, then those reps says are short again, in a process for each number
+// of runs they need, and with c.steady the long ones too, twice. Such a
+// one's time is its steady time (steady) from its runs' times, with
+// c.perRun, which the build prints with -perrun; without, the process's
+// total over its runs, a run. With c.steady, the one runs in the suite's
+// process follow, each named with firstSuffix, and their total. With
+// c.micro, it runs v8bench's micro mode once, whose tests each do the same
+// work every run, and reads each test's time of one operation, in
+// nanoseconds, with no total. On cpus, if any, with GOMAXPROCS as many.
+func runPlacement(label, out string, n int, c runConfig, cpus cpuset.Set, reps *repsTable) ([]named, error) {
+	dir, bench, suite := c.dir, c.bench, c.suite
+	jitEnabled, jitBackground, micro, perRun := c.jit, c.jitBackground, c.micro, c.perRun
 	exe, env := labelExe(out, label, n)
 	built := exe
 	run := func(reps int, only string) ([]named, error) {
@@ -734,6 +937,10 @@ func runPlacement(label, out, dir, bench, suite string, n int, jitEnabled, jitBa
 		if only != "" {
 			args = append(args, "-suite", only)
 		}
+		timed := perRun && !micro && reps > 1
+		if timed {
+			args = append(args, "-perrun")
+		}
 		cmd := exec.Command(exe, args...)
 		cmd.Env = append(os.Environ(), "V8BENCH_STACKPAD="+strconv.Itoa(5*n), "V8BENCH_JITPAD="+strconv.Itoa(jitPads[n%len(jitPads)]), "V8BENCH_JITSEED="+strconv.Itoa(n+1), "V8BENCH_JITLINE="+strconv.Itoa(jitLines[n%len(jitLines)]))
 		cmd.Env = append(cmd.Env, env...)
@@ -758,12 +965,31 @@ func runPlacement(label, out, dir, bench, suite string, n int, jitEnabled, jitBa
 		if micro {
 			return parseMicro(outb.String()), nil
 		}
+		var runs map[string][]float64
+		if timed {
+			var err error
+			if runs, err = parseRuns(outb.String()); err != nil {
+				return nil, fmt.Errorf("%s %s: %w", exe, strings.Join(args, " "), err)
+			}
+		}
 		for _, m := range timeLine.FindAllStringSubmatch(outb.String(), -1) {
 			if m[1] == "TOTAL" {
 				continue
 			}
 			v, _ := strconv.ParseFloat(m[2], 64)
-			got = append(got, named{m[1], v / float64(reps)})
+			nv := named{name: m[1], ms: v / float64(reps), dropped: -1}
+			if reps > 1 {
+				nv.reps, nv.mean = reps, nv.ms
+			}
+			if timed {
+				ms := runs[m[1]]
+				if len(ms) != reps {
+					return nil, fmt.Errorf("%s %s: %s printed %d runs' times, not %d", exe, strings.Join(args, " "), m[1], len(ms), reps)
+				}
+				nv.ms, nv.dropped = steady(ms)
+				nv.first = ms[0]
+			}
+			got = append(got, nv)
 		}
 		return got, nil
 	}
@@ -771,18 +997,21 @@ func runPlacement(label, out, dir, bench, suite string, n int, jitEnabled, jitBa
 	if err != nil || micro {
 		return got, err
 	}
-	// The short ones again, grouped by the runs each needs.
+	once := slices.Clone(got)
+	// The short ones again, grouped by the runs each needs, and with
+	// c.steady the long ones too, twice.
 	byReps := map[int][]string{}
 	for _, g := range got {
-		if r := reps.of(g.name, g.ms); r > 0 {
+		r := reps.of(g.name, g.ms)
+		if r == 0 && c.steady {
+			r = 2
+		}
+		if r > 0 {
 			byReps[r] = append(byReps[r], g.name)
 		}
 	}
-	for _, r := range repeats {
+	for _, r := range slices.Sorted(maps.Keys(byReps)) {
 		names := byReps[r]
-		if len(names) == 0 {
-			continue
-		}
 		again, err := run(r, strings.Join(names, ","))
 		if err != nil {
 			return nil, err
@@ -793,7 +1022,7 @@ func runPlacement(label, out, dir, bench, suite string, n int, jitEnabled, jitBa
 			}
 			for i := range got {
 				if got[i].name == a.name {
-					got[i].ms = a.ms
+					got[i] = a
 				}
 			}
 		}
@@ -802,7 +1031,16 @@ func runPlacement(label, out, dir, bench, suite string, n int, jitEnabled, jitBa
 	for _, g := range got {
 		total += g.ms
 	}
-	return append(got, named{"TOTAL", total}), nil
+	got = append(got, named{name: "TOTAL", ms: total})
+	if c.steady {
+		total := 0.0
+		for _, g := range once {
+			total += g.ms
+			got = append(got, named{name: g.name + firstSuffix, ms: g.ms, dropped: -1})
+		}
+		got = append(got, named{name: "TOTAL" + firstSuffix, ms: total, dropped: -1})
+	}
+	return got, nil
 }
 
 // jitPads is where each placement has the JIT place its first code in its
@@ -845,7 +1083,7 @@ func parseMicro(out string) []named {
 	for _, m := range microLine.FindAllStringSubmatch(out, -1) {
 		v, err := strconv.ParseFloat(m[2], 64)
 		if err == nil {
-			got = append(got, named{m[1], v})
+			got = append(got, named{name: m[1], ms: v})
 		}
 	}
 	return got

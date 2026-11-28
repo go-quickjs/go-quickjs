@@ -889,7 +889,11 @@ the code. `build` makes eight builds of the working tree, each placing
 and the assembly -- the native handlers and the JIT's leaf stubs --
 differently in a balanced design, and checks every one with `go tool
 nm`; `-tags quickjs_jit` builds them with the JIT. `compare` runs two
-labels' placements in turn and reports each side's mean. Build both sides in
+labels' placements in turn and reports each side's mean: of a benchmark
+under a second, its steady time a run, the runs that warm it up left out;
+of a longer one, its one run, unless `-steady` runs it again too and adds
+each benchmark's one run, first+steady, beside (docs/optimizing.md,
+"Builds and the machine"). Build both sides in
 the same checkout, and leave the machine idle while they run. On
 windows/amd64 `build` clears DYNAMICBASE in each build's PE header and
 checks it loads at its image base, and `compare` runs each process from a

@@ -35,6 +35,11 @@
 //     the fastest time of one operation, in nanoseconds (see micro.go). It
 //     needs no -dir; -suite names tests by the start of their names.
 //
+// -perrun has the fixed mode print, after each benchmark's line, the time
+// of each of its runs, "NAME runs ms: T1 T2 ...": a run's first few, which
+// compile and warm up, apart from the rest. internal/cmd/v8bench/placements
+// takes its figure from the runs after the warm-up so.
+//
 // -cpuprofile and -memprofile write profiles for go tool pprof.
 package v8bench
 
@@ -48,6 +53,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -106,6 +112,7 @@ func Main(name string, e Engine) {
 	only := flag.String("suite", "", "comma-separated suites to run, all by default (fixed); tests by the start of their names (micro)")
 	cpu := flag.String("cpuprofile", "", "write a CPU profile to this file")
 	mem := flag.String("memprofile", "", "write an allocation profile to this file")
+	flag.BoolVar(&perRun, "perrun", false, "fixed mode: after each benchmark's line, print each of its runs' time, \"NAME runs ms: T1 T2 ...\"")
 	flag.Parse()
 	s := suiteNamed(*which)
 	src := map[string]string{}
@@ -243,12 +250,7 @@ func runFixed(e Engine, s *suite, src map[string]string, n int, only string) Run
 		if only != "" && !strings.Contains(","+only+",", ","+name+",") {
 			continue
 		}
-		var m0, m1 runtime.MemStats
-		runtime.ReadMemStats(&m0)
-		c0, t0 := processCPU(), clock()
-		var err error
-		pprof.Do(context.Background(), pprof.Labels("bench", name), func(context.Context) {
-			_, err = rt.EvalString(fmt.Sprintf(`(() => {
+		script := fmt.Sprintf(`(() => {
 			const s = BenchmarkSuite.suites.find(s => s.name === %q);
 			// Octane's Math.random, seeded again for each suite as its
 			// harness does, which its checksums assume.
@@ -259,7 +261,33 @@ func runFixed(e Engine, s *suite, src map[string]string, n int, only string) Run
 				b.TearDown();
 			}
 			return "";
-		})()`, name, n))
+		})()`, name, n)
+		if perRun {
+			// Each run timed: the i-th run of each of the suite's
+			// benchmarks, together, is the suite's i-th run.
+			script = fmt.Sprintf(`(() => {
+			const s = BenchmarkSuite.suites.find(s => s.name === %q);
+			if (BenchmarkSuite.ResetRNG) BenchmarkSuite.ResetRNG();
+			const t = new Array(%d).fill(0);
+			for (const b of s.benchmarks) {
+				b.Setup();
+				for (let i = 0; i < t.length; i++) {
+					const t0 = now();
+					b.run();
+					t[i] += now() - t0;
+				}
+				b.TearDown();
+			}
+			return t.join(" ");
+		})()`, name, n)
+		}
+		var m0, m1 runtime.MemStats
+		runtime.ReadMemStats(&m0)
+		c0, t0 := processCPU(), clock()
+		var err error
+		var times string
+		pprof.Do(context.Background(), pprof.Labels("bench", name), func(context.Context) {
+			times, err = rt.EvalString(script)
 		})
 		d, c := clock()-t0, processCPU()-c0
 		runtime.ReadMemStats(&m1)
@@ -267,6 +295,7 @@ func runFixed(e Engine, s *suite, src map[string]string, n int, only string) Run
 			fail(fmt.Errorf("%s: %w", name, err))
 		}
 		report(name, d, c, &m0, &m1)
+		printRunsOf(name, times)
 		if r, ok := rt.(Reporter); ok {
 			r.Report(name)
 		}
@@ -285,12 +314,17 @@ func runAWFY(e Engine, s *suite, src map[string]string, n int, only string) Runt
 		if only != "" && !strings.Contains(","+only+",", ","+w.name+",") {
 			continue
 		}
+		script := awfyRun(w.module, w.inner, n)
+		if perRun {
+			script = awfyRunTimed(w.module, w.inner, n)
+		}
 		var m0, m1 runtime.MemStats
 		runtime.ReadMemStats(&m0)
 		c0, t0 := processCPU(), clock()
 		var err error
+		var times string
 		pprof.Do(context.Background(), pprof.Labels("bench", w.name), func(context.Context) {
-			_, err = rt.EvalString(awfyRun(w.module, w.inner, n))
+			times, err = rt.EvalString(script)
 		})
 		d, c := clock()-t0, processCPU()-c0
 		runtime.ReadMemStats(&m1)
@@ -298,6 +332,7 @@ func runAWFY(e Engine, s *suite, src map[string]string, n int, only string) Runt
 			fail(fmt.Errorf("%s: %w", w.name, err))
 		}
 		report(w.name, d, c, &m0, &m1)
+		printRunsOf(w.name, times)
 		if r, ok := rt.(Reporter); ok {
 			r.Report(w.name)
 		}
@@ -312,6 +347,52 @@ func report(name string, d, cpu time.Duration, m0, m1 *runtime.MemStats) {
 	fmt.Printf("%-13s %9.1f ms %9.1f cpu %10.1f MB %11d allocs\n", name,
 		float64(d.Microseconds())/1000, float64(cpu.Microseconds())/1000,
 		float64(m1.TotalAlloc-m0.TotalAlloc)/(1<<20), m1.Mallocs-m0.Mallocs)
+}
+
+// perRun is -perrun: the fixed mode prints each benchmark's runs' times.
+var perRun bool
+
+// laps collects each run's time of a benchmark the fixed mode runs from Go,
+// for -perrun.
+type laps []float64
+
+// run runs f as one run and records its time.
+func (l *laps) run(f func() error) error {
+	t0 := clock()
+	err := f()
+	*l = append(*l, float64((clock()-t0).Nanoseconds())/1e6)
+	return err
+}
+
+// printRuns prints, with -perrun, each of a benchmark's runs' time, in
+// milliseconds: "NAME runs ms: T1 T2 ...".
+func printRuns(name string, ms []float64) {
+	if !perRun {
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s runs ms:", name)
+	for _, v := range ms {
+		fmt.Fprintf(&b, " %.3f", v)
+	}
+	fmt.Println(b.String())
+}
+
+// printRunsOf prints, with -perrun, the runs' times a script returned, in
+// milliseconds separated by spaces.
+func printRunsOf(name, times string) {
+	if !perRun {
+		return
+	}
+	var ms []float64
+	for _, f := range strings.Fields(times) {
+		v, err := strconv.ParseFloat(f, 64)
+		if err != nil {
+			fail(fmt.Errorf("%s: a run's time %q: %w", name, f, err))
+		}
+		ms = append(ms, v)
+	}
+	printRuns(name, ms)
 }
 
 // newRuntime is a runtime with the print, load and now the suite expects.

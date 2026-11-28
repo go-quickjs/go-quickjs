@@ -82,18 +82,24 @@ func runSSR(e Engine, s *suite, src map[string]string, n int, only string) Runti
 	picked := func(name string) bool { return only == "" || strings.Contains(","+only+",", ","+name+",") }
 	if picked("FirstRender") {
 		var last Runtime
+		var runs laps
 		measure("FirstRender", func() error {
 			for i := 0; i < n; i++ {
-				if last != nil {
-					closeRuntime(last)
-				}
-				last = loadSSR(e, s, src)
-				if _, err := last.EvalString(ssrRun(1)); err != nil {
+				err := runs.run(func() error {
+					if last != nil {
+						closeRuntime(last)
+					}
+					last = loadSSR(e, s, src)
+					_, err := last.EvalString(ssrRun(1))
+					return err
+				})
+				if err != nil {
 					return err
 				}
 			}
 			return nil
 		})
+		printRuns("FirstRender", runs)
 		if r, ok := last.(Reporter); ok {
 			r.Report("FirstRender")
 		}
@@ -102,14 +108,20 @@ func runSSR(e Engine, s *suite, src map[string]string, n int, only string) Runti
 	var rt Runtime
 	if picked("Render") {
 		rt = loadSSR(e, s, src)
+		var runs laps
 		measure("Render", func() error {
 			for i := 0; i < n; i++ {
-				if _, err := rt.EvalString(ssrRun(ssrRenders)); err != nil {
+				err := runs.run(func() error {
+					_, err := rt.EvalString(ssrRun(ssrRenders))
+					return err
+				})
+				if err != nil {
 					return err
 				}
 			}
 			return nil
 		})
+		printRuns("Render", runs)
 		if r, ok := rt.(Reporter); ok {
 			r.Report("Render")
 		}

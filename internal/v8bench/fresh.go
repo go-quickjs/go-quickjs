@@ -128,15 +128,17 @@ func runFresh(e Engine, s *suite, src map[string]string, n int, only string) Run
 		}
 		check := freshCheck(name, want)
 		i := 0
+		var runs laps
 		measure(name, func() error {
 			for range n {
-				if err := step(i, check); err != nil {
+				if err := runs.run(func() error { return step(i, check) }); err != nil {
 					return err
 				}
 				i++
 			}
 			return nil
 		})
+		printRuns(name, runs)
 		if r, ok := rt.(Reporter); ok {
 			r.Report(name)
 		}

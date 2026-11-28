@@ -16,7 +16,7 @@ TOTAL            1945.1 ms    2748.8 cpu      960.8 MB    16175778 allocs
 peak heap 23.8 MB, live after GC 6.5 MB
 `
 	got := parseMicro(out)
-	if len(got) != 2 || got[0] != (named{"empty_loop", 5.073}) || got[1] != (named{"prop_read", 10.25}) {
+	if len(got) != 2 || got[0] != (named{name: "empty_loop", ms: 5.073}) || got[1] != (named{name: "prop_read", ms: 10.25}) {
 		t.Fatalf("parseMicro = %v", got)
 	}
 }

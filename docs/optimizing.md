@@ -578,6 +578,31 @@ tooling").
   and the matrix's `-fixedbase` and `-freshcopy` -- never as the go
   command made it.
 - **Single builds are for profiles, not verdicts.**
+- **What a placement's figure is.** `placements compare` runs a suite
+  once, then each benchmark whose run took under a second again, in a
+  process of its own, r times -- 3, 10, 30, 100 or 300, the fewest that
+  fill a second, decided by the first run that times it and kept for both
+  labels and every placement. That process prints each run's time
+  (`v8bench -perrun`), and the figure is the benchmark's steady time a
+  run: the mean of its runs after the first half of them, which leaves out
+  the compiles and first runs that warm it up. The figure had been the
+  process's total over its r runs, warm-up and all, so it depended on r:
+  Octane's Box2D with the JIT, which compiles over its first ten runs or
+  so, takes about 100 ms in its first run, 43 ms a run over 10 and 28.5
+  over 30, and slot after slot it was 28 or 40 ms, both labels alike,
+  as its first run fell under 100 ms (r 30) or over (r 10). `-v` prints
+  each benchmark's r, which runs the figure is the mean of, and each
+  placement's first run and mean of all its runs; `-reps NAME=N` pins r,
+  so that two comparisons run a benchmark alike. A benchmark of a second
+  or more is figured by its one run, its compiles in it. `-steady` runs it
+  again too, twice, and its figure is its second run; it then also
+  reports every benchmark's one run in the suite's process, as
+  first+steady: what a program that runs it once pays, compiles, warm-up
+  and the run's own work together. A build of v8bench from before
+  `-perrun` prints no runs' times, and compare then figures both labels
+  by the process's total a run, as before, and says so: rebuild the base
+  to compare steady times. `-micro` has no r: each test does the same
+  work in one process, whatever the machine's speed.
 - **An idle machine.** Check per-process CPU before a comparison, and run
   nothing else during one. `-parallel` gives each label its own level-3
   group; compare a label with itself first on a machine new to it.
