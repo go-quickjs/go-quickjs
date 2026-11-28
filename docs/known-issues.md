@@ -542,6 +542,15 @@ Paths are relative to this repository; `go-intl:` paths are in
     program's, up to a quarter of the tree.
   - A realm's roots for literals' keys stay for as long as the realm, up to a
     quarter of the tree, what grew from them with them.
+  - Objects that live, of literals of new code that name no keys, hold their
+    roots and what grew from them: Octane's CodeLoad, which evaluates a
+    library anew some thousands of times and keeps each copy's namespace
+    object, fills the tree, and every object made after it in the runtime
+    has a layout of its own, which no cache remembers, so that Box2D and
+    Typescript run slower after it than alone. With the JIT, the objects a
+    native construction's pool held then shared one such layout, each
+    adding its keys to the others' table, until each was given its own
+    (`jitPoolRoot`, `TestJITPoolObjectsTreeFull`).
 
 ### KI-68 Code run once stays for what it left in a realm's tables
 - **Where:** `internal/vm/vm.go` (`templateObject`), `vm_shape.go` (`chainCell`)

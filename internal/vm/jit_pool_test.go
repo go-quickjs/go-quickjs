@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"fmt"
 	"runtime"
 	"testing"
 	"unsafe"
@@ -59,5 +60,79 @@ func TestJITObjectPoolIndependentLifetimes(t *testing.T) {
 			t.Fatalf("size %d: keeping one object retains another", n)
 		}
 		runtime.KeepAlive(kept)
+	}
+}
+
+// jitFullTreeSrc builds, in functions the JIT compiles, objects of
+// constructors -- one that hands its arguments on to an initializer, as
+// Box2D's classes do -- and of a literal given properties after it is
+// made, all made from pools, and keeps some of each; then says each kept
+// object's keys and classes, which a pool that gave its objects one layout
+// of their own had mixed up: each object's keys added to the others'.
+const jitFullTreeSrc = `
+function P(x, y) { this.x = x; this.y = y; }
+function F() { F.init.apply(this, arguments); }
+F.init = function (a) { this.a = a; this.b = a + 1; this.c = new P(a, -a); };
+function lit(i) { var o = {}; o.u = i; o.v = i * 2; return o; }
+var kept = [], bad = 0;
+for (var i = 0; i < 3000; i++) {
+  var p = new P(i, i + 1), f = new F(i), l = lit(i);
+  if (i % 2) { p.odd = i; f.odd = i; l.odd = i; } else { p.even = i; f.even = i; l.even = i; }
+  if (Object.keys(p).join() !== (i % 2 ? "x,y,odd" : "x,y,even") || p.x !== i || p.y !== i + 1 || !(p instanceof P)) bad++;
+  if (Object.keys(f).join() !== (i % 2 ? "a,b,c,odd" : "a,b,c,even") || f.b !== i + 1 || !(f instanceof F) || !(f.c instanceof P) || f.c.y !== -i) bad++;
+  if (Object.keys(l).join() !== (i % 2 ? "u,v,odd" : "u,v,even") || l.v !== 2 * i) bad++;
+  if (i % 501 === 0) kept.push(p, f, l);
+}
+var out = [];
+for (var j = 0; j < kept.length; j++) {
+  var o = kept[j];
+  out.push(Object.keys(o).join("") + (o instanceof P ? "P" : o instanceof F ? "F" : "-") + (o.odd !== undefined ? o.odd : o.even));
+}
+bad + " " + out.join(" ")
+`
+
+// With the tree of shapes full, an object a pool holds starts from a
+// layout of its own, as each the interpreter makes does (newOrdinary): a
+// pool had given all of its objects the one unique root it was refilled
+// with, so that each object built natively added its keys to the others'
+// table -- a constructor's field lost or another's in its place, a slot
+// read past an object's values. Each object answers as the interpreter's,
+// natively built, under every stress setting, with the collector idle and
+// while it marks.
+func TestJITPoolObjectsTreeFull(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const want = "0 xyevenP0 abcevenF0 uveven-0 xyoddP501 abcoddF501 uvodd-501 xyevenP1002 abcevenF1002 uveven-1002 " +
+		"xyoddP1503 abcoddF1503 uvodd-1503 xyevenP2004 abcevenF2004 uveven-2004 xyoddP2505 abcoddF2505 uvodd-2505"
+	run := func(t *testing.T, jit bool, c jitStressConfig) (string, JITStats) {
+		r := newTestRuntime(t, Config{JIT: jit})
+		defer r.Close()
+		r.jitCallThreshold, r.jitICThreshold = 1, 1
+		r.jitStress = c
+		r.shapes.count, r.shapes.settled = maxShapes, maxShapes
+		got, _ := jitRunWithin(t, r, jitFullTreeSrc, jitTestWindow)
+		return got, r.JITStats()
+	}
+	if got, _ := run(t, false, jitStressConfig{}); got != want {
+		t.Fatalf("interpreter: got %q, want %q", got, want)
+	}
+	stress := []jitStressConfig{{}, {threshold: true}, {threshold: true, budget: 3, deopt: 7},
+		{threshold: true, background: true, checks: 1}}
+	for _, marking := range jitMarkingModes() {
+		for _, c := range stress {
+			t.Run(fmt.Sprintf("marking=%v/%+v", marking, c), func(t *testing.T) {
+				if marking {
+					jitMarkingForTest(t)
+				}
+				got, st := run(t, true, c)
+				if got != want {
+					t.Errorf("got %q, want %q", got, want)
+				}
+				if st.SSAEntries == 0 {
+					t.Errorf("no native entry: %+v", st)
+				}
+			})
+		}
 	}
 }

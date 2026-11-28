@@ -4043,11 +4043,17 @@ func (r *Runtime) jitConstructLayout(o *Object) (proto *Object, root *shape, pro
 
 // jitFillObjectPool fills pool with objects of proto, of shape root, each
 // with room for n properties, as newLiteralObject makes them: the layout
-// chosen once for the refill, not for each object. Each is an allocation
-// of its own, so that keeping one keeps none of the others.
+// chosen once for the refill, not for each object, unless it is unique.
+// Each is an allocation of its own, so that keeping one keeps none of the
+// others.
 func jitFillObjectPool(pool *abi.ObjectPool, proto *Object, root *shape, n int) {
 	// The layout says the prototype: a constructor's or a literal's root,
-	// or, where there is none, the class's for proto.
+	// or, where there is none, the class's for proto. Where the class's is
+	// a layout of its own -- the tree full, or the realm being made -- it is
+	// its one object's, which changes it in place as it is given properties
+	// (shapeAdded), and each object is given one, as newOrdinary gives each
+	// it makes (jitPoolRoot): shared, each object's properties had been
+	// added to the others' table, its own count of them left behind.
 	root = root.orRoot(ClassObject, proto)
 	switch n {
 	case 1:
@@ -4070,10 +4076,20 @@ func jitFillObjectPool(pool *abi.ObjectPool, proto *Object, root *shape, n int) 
 		jitFillSmallObjects[largeLiteralObject[[8]Value]](pool, proto, root)
 	default:
 		for i := range int(pool.Size) {
-			pool.Objects[i] = unsafe.Pointer(newShapedLiteral(root, ClassObject, n))
+			pool.Objects[i] = unsafe.Pointer(newShapedLiteral(jitPoolRoot(root, proto, i), ClassObject, n))
 		}
 	}
 	pool.Count, pool.Proto = pool.Size, unsafe.Pointer(proto)
+}
+
+// jitPoolRoot is the layout of the i-th object of a pool of proto's whose
+// first is of root: root, or, where root is unique, a root of the object's
+// own, the class's for proto as newOrdinary asks for it.
+func jitPoolRoot(root *shape, proto *Object, i int) *shape {
+	if i == 0 || root == nil || !root.unique {
+		return root
+	}
+	return rootFor(ClassObject, proto)
 }
 
 // jitInlineObject is a pointer to one of the layouts newLiteralObject
@@ -4105,7 +4121,7 @@ func (lo *largeLiteralObject[A]) jitObject() *Object {
 func jitFillSmallObjects[L any, P jitInlineObject[L]](pool *abi.ObjectPool, proto *Object, root *shape) {
 	for i := range int(pool.Size) {
 		o := P(new(L)).jitObject()
-		o.shape = root
+		o.shape = jitPoolRoot(root, proto, i)
 		o.class, o.flags = ClassObject, objExtensible|objInlineProps
 		pool.Objects[i] = unsafe.Pointer(o)
 	}
