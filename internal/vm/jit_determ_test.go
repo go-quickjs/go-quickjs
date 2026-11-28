@@ -4,9 +4,12 @@ package vm
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -260,4 +263,142 @@ func TestJITParkCandsTieBySerial(t *testing.T) {
 			t.Fatalf("candidates of one epoch in the order %v, not their states'", c)
 		}
 	}
+}
+
+// Two runtimes in one process running one program compile the same, at
+// the same points of it: their tier traces are the same event by event,
+// with the invocations, the work and the budgets of each. The runtimes'
+// objects, and so their layouts, are at addresses of their own -- the
+// second's moved by what it made first -- so a cache slotted by an
+// address fills and misses at other points in each: a megamorphic read
+// over hundreds of AST-like nodes of layouts of their own, which the
+// megamorphic cache's sets hold most of, and a constructor's keyed store
+// of a constant key, Typescript's BlockIntrinsics'. With
+// QUICKJS_JIT_CORPUS, Octane's benchmarks of QUICKJS_JIT_CORPUS_SUITES
+// (Typescript where it names none) too, run as v8bench runs them: their
+// AST walks are where the misses had come at other points of the run.
+func TestJITTwoRuntimesCompileAlike(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const setup = `
+		function BlockIntrinsics() { this.prototype = undefined; this["constructor"] = undefined; this.toString = undefined }
+		function Node(kind, i) { this.kind = kind; this.minChar = i; this.limChar = i + 1 }
+		const kinds = []
+		for (let k = 0; k < 40; k++) kinds.push(function (i) { Node.call(this, k, i); this["f" + k] = i })
+		const nodes = []
+		for (let i = 0; i < 400; i++) {
+			const n = new kinds[i % 40](i)
+			n["u" + i] = i
+			nodes.push(n)
+		}
+		function pre(n) { return n.kind + (n.parent === undefined ? 1 : 0) }
+		function walk(round) {
+			let t = 0
+			for (let i = 0; i < nodes.length; i++) t = (t + pre(nodes[(i * 7 + round) % nodes.length])) | 0
+			new BlockIntrinsics()
+			return t
+		}`
+	traces := make([][]JITTierEvent, 2)
+	var events []JITTierEvent
+	jitTestSwitch(t, func(c *jitTestConfig) {
+		c.tierHook = func(e JITTierEvent) { events = append(events, e) }
+	})
+	jitNoInlineForTest(t, "pre")
+	holdCollector(t)
+	var hold []any
+	for k := range traces {
+		events = nil
+		r := jitRuntimeForTest(t, Config{JIT: true})
+		r.jitCallThreshold, r.jitICThreshold = 8, 8
+		r.jitStress = jitStressConfig{}
+		if k == 1 {
+			// The second runtime's heap moved on by what it made first.
+			for i := range 5000 {
+				hold = append(hold, make([]byte, 16+i%200))
+			}
+		}
+		if _, err := r.Run(compileForTest(t, setup)); err != nil {
+			t.Fatal(err)
+		}
+		for i := range 40 {
+			if _, err := r.Run(compileForTest(t, fmt.Sprintf("walk(%d)", i))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		traces[k] = events
+	}
+	runtime.KeepAlive(hold)
+	if len(traces[0]) == 0 {
+		t.Fatal("nothing compiled: the test tests nothing")
+	}
+	jitSameTraces(t, traces)
+	dir := os.Getenv("QUICKJS_JIT_CORPUS")
+	if dir == "" {
+		return
+	}
+	suites := os.Getenv("QUICKJS_JIT_CORPUS_SUITES")
+	if suites == "" {
+		suites = "Typescript"
+	}
+	files := []string{"base.js", "richards.js", "deltablue.js", "crypto.js", "raytrace.js",
+		"earley-boyer.js", "regexp.js", "splay.js", "navier-stokes.js", "pdfjs.js",
+		"box2d.js", "typescript.js", "typescript-input.js", "typescript-compiler.js"}
+	for k := range traces {
+		events = nil
+		r := jitRuntimeForTest(t, Config{JIT: true})
+		if k == 1 {
+			for i := range 5000 {
+				hold = append(hold, make([]byte, 16+i%200))
+			}
+		}
+		if _, err := r.Run(compileForTest(t, `var print = function () {}, alert = function () {};`)); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range files {
+			src, err := os.ReadFile(filepath.Join(dir, f))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.Run(compileForTest(t, string(src))); err != nil {
+				t.Fatalf("%s: %v", f, err)
+			}
+		}
+		if _, err := r.Run(compileForTest(t, fmt.Sprintf(`(() => {
+			for (const s of BenchmarkSuite.suites) {
+				if (!(",%s,").includes(","+s.name+",")) continue;
+				if (BenchmarkSuite.ResetRNG) BenchmarkSuite.ResetRNG();
+				for (const b of s.benchmarks) { b.Setup(); b.run(); b.TearDown(); }
+			}
+		})()`, suites))); err != nil {
+			t.Fatal(err)
+		}
+		traces[k] = events
+	}
+	runtime.KeepAlive(hold)
+	jitSameTraces(t, traces)
+}
+
+// jitSameTraces fails t where two runtimes' tier traces differ, at the
+// first event that does.
+func jitSameTraces(t *testing.T, traces [][]JITTierEvent) {
+	t.Helper()
+	a, b := strings.Split(jitTierLinesFull(traces[0]), "\n"), strings.Split(jitTierLinesFull(traces[1]), "\n")
+	for i := range min(len(a), len(b)) {
+		if a[i] != b[i] {
+			t.Fatalf("the two runtimes' tier traces differ at event %d of %d and %d:\n%s\nagainst\n%s", i, len(a)-1, len(b)-1, a[i], b[i])
+		}
+	}
+	if len(a) != len(b) {
+		t.Fatalf("one runtime's tier trace has %d events, the other's %d", len(a)-1, len(b)-1)
+	}
+}
+
+// jitTierLinesFull is events a line each, with every count an event has.
+func jitTierLinesFull(events []JITTierEvent) string {
+	var b strings.Builder
+	for _, e := range events {
+		fmt.Fprintf(&b, "%v %s %s %d %d %d %d %d %d %d\n", e.Deopt, e.Func.Name, e.Reason, e.Length, e.Invocations, e.Age, e.Budget, e.Deopts, e.Compiles, e.PC)
+	}
+	return b.String()
 }
