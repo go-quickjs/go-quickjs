@@ -2707,8 +2707,15 @@ func (r *Runtime) jitRegStretchWork(e *jitRegEntry, ctx *abi.Context, ipc, edges
 	if back := edges - (r.backEdges - r.jit.pollCredit); back > 0 {
 		work = uint64(back) * uint64(e.loopMean)
 	}
-	if ctx.ExitKind == abi.ExitHost || ctx.ExitKind == abi.ExitDeopt || ctx.ExitKind == abi.ExitReturn {
+	if ctx.ExitKind == abi.ExitHost || ctx.ExitKind == abi.ExitDeopt {
 		if x := e.ipc(int(ctx.ExitPC)); x > ipc {
+			work += uint64(x - ipc)
+		}
+	} else if ctx.ExitKind == abi.ExitReturn {
+		// A return writes no exit PC, but its block's instruction, as
+		// ExitSite: the exit PC is the last call of Go's, or an earlier
+		// exit's, of whatever code ran in the context before.
+		if x := int(int64(ctx.ExitSite)); x > ipc {
 			work += uint64(x - ipc)
 		}
 	}

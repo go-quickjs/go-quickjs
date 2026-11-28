@@ -66,8 +66,10 @@ func TestJITTierTrace(t *testing.T) {
 	// Compiled at its ninth call, eight runs having spent the budget; run
 	// natively for the twelve calls after, up to the thirteenth's failure:
 	// their invocations and the work its native stretches counted, fewer
-	// where the Go table (QJS_NONATIVE) calls g with a frame of its own.
-	if deopt.Deopts != 1 || deopt.Compiles != 1 || deopt.Age < 1 || deopt.Age > 20 || deopt.Budget != 8 {
+	// where the Go table (QJS_NONATIVE) calls g with a frame of its own:
+	// each stretch's at most its function's length, an invocation's worth,
+	// to where it returned.
+	if deopt.Deopts != 1 || deopt.Compiles != 1 || deopt.Age < 1 || deopt.Age > 26 || deopt.Budget != 8 {
 		t.Errorf("deoptimization: %+v", deopt)
 	}
 	if again.Deopts != 1 || again.Compiles != 1 {

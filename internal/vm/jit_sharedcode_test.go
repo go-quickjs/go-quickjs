@@ -118,9 +118,12 @@ func TestJITSlowLoopGoesBackNative(t *testing.T) {
 	// arrays, which judges it slow; and called natively by one compiled, on
 	// arrays of one, its call learning inc: a long invocation's call of dbl
 	// leaves, for Go to learn it, and Go finishes the level
-	// (jitRegUnwind), the interpreter going on with the rest.
+	// (jitRegUnwind), the interpreter going on with the rest. An empty
+	// array's call returns at once, at its first instructions: a stretch's
+	// work is the instructions to where it returned (jitRegStretchWork),
+	// and a return past the loop counts the loop's too.
 	setup := `
-		function each(a, fn) { let s = 0; for (let i = 0; i < a.length; i++) s = (s + fn(a[i])) | 0; return s }
+		function each(a, fn) { if (a.length === 0) return 0; let s = 0; for (let i = 0; i < a.length; i++) s = (s + fn(a[i])) | 0; return s }
 		function inc(x) { return x + 1 }
 		function dbl(x) { return x * 2 }
 		var none = [], one = [1], big = []

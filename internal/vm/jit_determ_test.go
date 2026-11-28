@@ -160,6 +160,26 @@ func TestJITMegaMissTeachesNothing(t *testing.T) {
 	}
 }
 
+// A stretch that returns counts its work to its return's block, which the
+// code writes as the exit's site, not to the exit PC, which a return does
+// not write: that is the last call of Go's, or an earlier exit's, of
+// whatever code ran in the context before. Counted from it, a miss of the
+// megamorphic cache -- a call of Go, at a PC of its own -- changed what
+// the next return counted, and the code's profit with it.
+func TestJITReturnWorkIsItsSite(t *testing.T) {
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	at := make([]int32, 64)
+	for i := range at {
+		at[i] = int32(i)
+	}
+	e := &jitRegEntry{life: &jitEntry{}, at: at}
+	ctx := &abi.Context{ExitKind: abi.ExitReturn, ExitPC: 60, ExitSite: 9}
+	r.jitRegStretchWork(e, ctx, 2, r.backEdges-r.jitState().pollCredit, false)
+	if got := e.life.ssaStats.work; got != 7 {
+		t.Fatalf("a return at instruction 9 of a stretch begun at 2 counted %d instructions of work, want 7", got)
+	}
+}
+
 // jitReadCompiledMegamorphicForTest reports whether a property read of
 // cl's code is megamorphic in the feedback its code is compiled from
 // (ssa.PropertySite's Megamorphic): its misses Go's from native code. Its
