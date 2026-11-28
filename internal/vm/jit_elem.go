@@ -769,6 +769,12 @@ func jitKeyedStoreAt(code *jitPropCode, rpc int, define bool, src jitPropSrc, fb
 			note(&p.entries[i])
 		}
 	}
+	if len(site.Keys) != 0 {
+		site.Names = make([]string, len(site.Keys))
+		for i := range site.Keys {
+			site.Names[i] = src.keyName(Atom(site.Keys[i].Key))
+		}
+	}
 	return site, len(site.Keys) != 0
 }
 

@@ -32,8 +32,11 @@ type jitPropSrc interface {
 	// polyAt is what the code learned at register pc rpc (jitPolySite),
 	// nil for nothing.
 	polyAt(rpc int) *jitPolySite
-	// symbol is the symbol a private member's key atom denotes.
+	// symbol is the symbol a private member's key atom denotes; keyName
+	// a string key's text, "" for an index's or a symbol's (KeyedStoreSite's
+	// Names).
 	symbol(a Atom) *Symbol
+	keyName(a Atom) string
 	// unindexed reports whether next, the shape an addition makes, wants
 	// its table's index built, which native code leaves to Go; cellAdd is
 	// the addition a cache of a chain's cell makes (fb.add).
@@ -90,6 +93,13 @@ func (l jitPropLive) polyAt(rpc int) *jitPolySite {
 }
 
 func (l jitPropLive) symbol(a Atom) *Symbol { return l.r.atoms.symbol(a) }
+
+func (l jitPropLive) keyName(a Atom) string {
+	if a.IsIndex() || l.r.atoms.symbol(a) != nil {
+		return ""
+	}
+	return l.r.atoms.name(a)
+}
 
 func (l jitPropLive) unindexed(next *shape) bool {
 	return next.index == nil && int(next.n) > linearScanLimit
@@ -194,6 +204,8 @@ func (d *jitPropData) forward(rpc int, key Atom) (ssa.PropertySite, bool) {
 func (d *jitPropData) polyAt(rpc int) *jitPolySite { return jitPolyAt(d.poly, rpc) }
 
 func (d *jitPropData) symbol(a Atom) *Symbol { return d.syms[a] }
+
+func (d *jitPropData) keyName(Atom) string { return "" }
 
 func (d *jitPropData) unindexed(next *shape) bool { return d.unindex[next] }
 

@@ -1743,8 +1743,14 @@ type KeyedStoreFeedback interface {
 // properties objects of Shape and of Cases' shapes have, the additions
 // Add and Adds make, a define's marked so (PropertyAdd's Define, whose
 // Key is the key's) where Define says the site is one.
+//
+// Names, where the VM gives it, is each key's string, as Keys has them, ""
+// for an index's or a symbol's: a store of a string constant the builder
+// knows is one of them is that key's store, at compile time
+// (keyedStores).
 type KeyedStoreSite struct {
 	Keys   []PropertySite
+	Names  []string
 	Define bool
 }
 
@@ -1775,7 +1781,15 @@ func (b *builder) keyedStore(pc int) (KeyedStoreSite, bool) {
 // each store, no string at all: in the block keyedStores returns, where
 // the instruction makes its store as it would have. The instructions
 // after go on where all meet.
-func (b *builder) keyedStores(blk *Block, site KeyedStoreSite, obj, key, value *Value, generic bool, state func() *FrameState) *Block {
+//
+// A key that is a string constant one of the site's keys is (Names) is
+// that key's store with no test of it, and stored reports true: the
+// instruction's own store is not made. Its test would ask the VM's table
+// of key strings, whose entries a string's address slots, so that where
+// another string had evicted the constant's, the store went the way of a
+// key the site never met and left native code, and the code was compiled
+// again for what that taught, as run by run the table's evictions fell.
+func (b *builder) keyedStores(blk *Block, site KeyedStoreSite, obj, key, value *Value, generic bool, state func() *FrameState) (_ *Block, stored bool) {
 	f := b.f
 	var cont *Block
 	kind := ir.GuardExit
@@ -1788,6 +1802,20 @@ func (b *builder) keyedStores(blk *Block, site KeyedStoreSite, obj, key, value *
 		v.State.addUse()
 		return v
 	}
+	store := func(blk *Block, ks PropertySite) {
+		object := at(blk, OpObjectOf, Ptr, obj)
+		w := at(blk, OpPropWrite, None, object, value)
+		w.Const, w.Index, w.Key = ir.Value{Bits: uint64(ks.Shape)}, int(ks.Index), ks.Key
+		f.setProperty(w, nil, ks.Cases, ks.Add, ks.Adds)
+	}
+	if text, ok := constKeyText(key); ok {
+		for i, ks := range site.Keys {
+			if i < len(site.Names) && site.Names[i] != "" && site.Names[i] == text {
+				store(blk, ks)
+				return blk, true
+			}
+		}
+	}
 	for _, ks := range site.Keys {
 		is := f.newValue(blk, OpKeyIs, Bool, key)
 		is.Const = ir.Value{Bits: uint64(ks.Key)}
@@ -1795,10 +1823,7 @@ func (b *builder) keyedStores(blk *Block, site KeyedStoreSite, obj, key, value *
 		if cont == nil {
 			cont = c
 		}
-		object := at(yes, OpObjectOf, Ptr, obj)
-		w := at(yes, OpPropWrite, None, object, value)
-		w.Const, w.Index, w.Key = ir.Value{Bits: uint64(ks.Shape)}, int(ks.Index), ks.Key
-		f.setProperty(w, nil, ks.Cases, ks.Add, ks.Adds)
+		store(yes, ks)
 		blk = no
 	}
 	if !generic {
@@ -1808,7 +1833,16 @@ func (b *builder) keyedStores(blk *Block, site KeyedStoreSite, obj, key, value *
 		at(blk, OpCheckTrue, None, f.newValue(blk, OpBoxBool, Tagged, f.newValue(blk, OpNot, Bool, known)))
 	}
 	b.next = cont
-	return blk
+	return blk, false
+}
+
+// constKeyText is the text of key where it is a string constant's, loaded
+// from its cell (ir.StringConst), whose content the builder knows.
+func constKeyText(key *Value) (string, bool) {
+	if key.Op != OpLoadCell || len(key.Args) != 1 {
+		return "", false
+	}
+	return key.Args[0].ConstString()
 }
 
 // StringElementFeedback is Feedback that knows the element reads whose
@@ -8922,8 +8956,12 @@ func (b *builder) instruction(blk *Block, pc int) {
 		gd.guard(OpElemKey, None, ir.GuardExit, number(in.Right, ir.GuardExit))
 	case ir.ArrayWrite:
 		if site, ok := b.keyedStore(pc); ok && !site.Define {
-			blk = b.keyedStores(blk, site, operand(in.Left), operand(in.Right), operand(in.Third), b.fb.Generic(pc), state)
+			var stored bool
+			blk, stored = b.keyedStores(blk, site, operand(in.Left), operand(in.Right), operand(in.Third), b.fb.Generic(pc), state)
 			gd.blk = blk
+			if stored {
+				break
+			}
 		}
 		if b.keyedWrite(pc) {
 			// Any receiver's, by Go from native code; what Go does not
@@ -9790,8 +9828,12 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// A computed key's define the site's keys tell, ahead of Go's.
 			if site, ok := b.keyedStore(pc); ok && site.Define {
 				if reads, n, _, _ := in.WholeOperands(b.p.Regs); n == 3 {
-					blk = b.keyedStores(blk, site, b.read(reads[0], blk), b.read(reads[1], blk), b.read(reads[2], blk), b.fb.Generic(pc), state)
+					var stored bool
+					blk, stored = b.keyedStores(blk, site, b.read(reads[0], blk), b.read(reads[1], blk), b.read(reads[2], blk), b.fb.Generic(pc), state)
 					gd.blk = blk
+					if stored {
+						break
+					}
 				}
 			}
 		}

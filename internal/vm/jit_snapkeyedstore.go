@@ -29,6 +29,9 @@ type jitKeyedStoreData struct {
 	unindex  map[*shape]bool
 	cells    []jitPropCellAdd
 	sites    []jitKeyedSite
+	// keyNames are the keys' texts the answers read (jitPropSrc's
+	// keyName).
+	keyNames map[Atom]string
 }
 
 // jitKeyedSite is a keyed store a gather took, by register pc.
@@ -70,6 +73,15 @@ func (g jitKeyedGather) unindexed(next *shape) bool {
 	return u
 }
 
+func (g jitKeyedGather) keyName(a Atom) string {
+	n := g.jitPropLive.keyName(a)
+	if g.d.keyNames == nil {
+		g.d.keyNames = map[Atom]string{}
+	}
+	g.d.keyNames[a] = n
+	return n
+}
+
 func (g jitKeyedGather) cellAdd(c *propCache) (jitDeepAdd, bool) {
 	a, ok := g.jitPropLive.cellAdd(c)
 	g.d.cells = append(g.d.cells, jitPropCellAdd{from: c.shape, next: c.next, p1: c.p1, add: a, ok: ok})
@@ -93,6 +105,7 @@ func (k jitKeyedSrc) knownRead(int, Atom) (*propCache, bool)                { re
 func (k jitKeyedSrc) forward(int, Atom) (ssa.PropertySite, bool)            { return ssa.PropertySite{}, false }
 func (k jitKeyedSrc) polyAt(int) *jitPolySite                               { return nil }
 func (k jitKeyedSrc) symbol(Atom) *Symbol                                   { return nil }
+func (k jitKeyedSrc) keyName(a Atom) string                                 { return k.d.keyNames[a] }
 func (k jitKeyedSrc) unindexed(next *shape) bool                            { return k.d.unindex[next] }
 func (k jitKeyedSrc) ctx() jitPropCtx                                       { return jitPropCtx{} }
 
