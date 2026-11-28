@@ -647,7 +647,8 @@ type Context struct {
 	RecordAt uint64
 	// GlobalEpoch is the VM's count of changes to the global object's
 	// bindings other than appends, and of the script-level lexical
-	// bindings declared: a global's read compiled with it (ssa.GlobalSite's
+	// bindings declared of a name the global object has, which shadow
+	// its binding: a global's read compiled with it (ssa.GlobalSite's
 	// Epoch) finds the binding at its position while it is unchanged.
 	GlobalEpoch *uint64
 	// HighSeen is the VM stack's high water (StackHigh's) as a call entry

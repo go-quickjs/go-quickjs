@@ -4540,17 +4540,22 @@ func (fb *jitFeedback) globalSite(name Atom, siteIdx int, write, check bool) (ss
 		}
 		return site, true
 	}
-	if s, p := env.shape, env.shape.keys[i]; env.flags&objGlobalBindings != 0 && s.unique && !s.loose && s.tree == fb.r.shapes &&
-		s.tree.globalEpoch < jitGlobalEpochs && !p.isAccessor() && p.flags&(propUninit|propPrivate|propDeleted) == 0 {
+	if p := env.shape.keys[i]; p.isAccessor() || p.flags&(propUninit|propPrivate|propDeleted) != 0 {
+		// Not data the cell's guard finds, which deoptimizes where it
+		// does not: Go reads it.
+		return ssa.GlobalSite{}, false
+	}
+	if s := env.shape; env.flags&objGlobalBindings != 0 && s.unique && !s.loose && s.tree == fb.r.shapes && s.tree.globalEpoch < jitGlobalEpochs {
 		// Plain, initialized data at its position, unshadowed: so while no
 		// binding of the global object has changed but by appends, and no
-		// script-level lexical binding has been declared (globalEpoch),
-		// which the read checks rather than each of those.
+		// script-level lexical binding of a name the global object has
+		// has been declared (globalEpoch), which the read checks rather
+		// than each of those.
 		site.Epoch, site.Scope = uint32(s.tree.globalEpoch)+1, uintptr(unsafe.Pointer(env))
 	}
-	site.Typed = !env.shape.keys[i].isAccessor() && jitTypedArray(env.vals()[i])
+	site.Typed = jitTypedArray(env.vals()[i])
 	site.TypedKind = jitTypedKind(site.Typed, env.vals()[i])
-	if p := env.shape.keys[i]; !p.isAccessor() && p.flags&(propWritable|propConfigurable) == 0 {
+	if p := env.shape.keys[i]; p.flags&(propWritable|propConfigurable) == 0 {
 		switch {
 		case env.vals()[i].IsUndefined():
 			site.Fixed, site.Constant = true, ir.Value{Kind: ir.Undefined}

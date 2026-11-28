@@ -50,7 +50,7 @@ const (
 	layoutPadNIN  = 0
 	layoutPadNGIN = -1
 	layoutPadNMIN = -1
-	layoutPadNL   = 690
+	layoutPadNL   = 685
 	layoutPadNGL  = -1
 	layoutPadNML  = -1
 	layoutPadNB   = 488

@@ -3,6 +3,8 @@
 package vm
 
 import (
+	"slices"
+
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
@@ -70,7 +72,16 @@ func (f *jitRegFeedback) globalAt(rpc int, w bytecode.RInstr) (ssa.GlobalSite, b
 	if !ok {
 		return ssa.GlobalSite{}, false
 	}
-	return f.fb.globalSite(name, site, write, check)
+	s, ok := f.fb.globalSite(name, site, write, check)
+	if ok && s.Epoch != 0 && f.fb.e != nil && slices.Contains(f.fb.e.failed, int32(rpc)) {
+		// A read whose guard has failed is generic, Go's where it fails
+		// again (ssa's Generic), which goes on in the code after it: it
+		// checks its own binding from then on, which a change to another
+		// of the global object's bindings, which moves the epoch, does
+		// not fail.
+		s.Epoch, s.Scope = 0, 0
+	}
+	return s, ok
 }
 
 // jitGlobalData is a snapshot's Global answers, asked by register pc, and

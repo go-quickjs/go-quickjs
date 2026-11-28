@@ -3268,8 +3268,9 @@ func (b *builder) inlineExit(pc int) bool {
 //
 // Epoch, for a read of the global object's own binding, is one more than
 // the VM's count of changes to the global object's bindings other than
-// appends, and of the script-level lexical bindings declared, when the
-// code was compiled (abi.Context's GlobalEpoch), and Scope that object:
+// appends, and of the script-level lexical bindings declared of a name it
+// has, when the code was compiled (abi.Context's GlobalEpoch), and Scope
+// that object:
 // while the count is unchanged the binding is where it was, plain data,
 // unshadowed, and the read checks the count and the object rather than
 // each of those. 0 for none.
@@ -8967,9 +8968,18 @@ func (b *builder) instruction(blk *Block, pc int) {
 			blk.State.addUse()
 			break
 		}
-		kind := ir.HostExit
-		if site.Fixed {
-			kind = ir.GuardExit
+		// Where the binding is no longer where the site found it -- a
+		// script's lexical binding shadows it, or the global object's
+		// bindings have changed but by appends -- the code deoptimizes:
+		// compiled again, it reads the binding where the interpreter's
+		// cache then has it. As a host exit, it had left native code at
+		// that read for good, with nothing at the exit to learn from. A
+		// site that goes on failing is generic (Generic), and Go's, which
+		// goes on after it; a fixed one never fails, and has no entry
+		// after it to go on at.
+		kind := ir.GuardExit
+		if !site.Fixed && b.fb.Generic(pc) {
+			kind = ir.HostExit
 		}
 		cell := b.globalCell(site, gd, kind)
 		if site.Fixed {

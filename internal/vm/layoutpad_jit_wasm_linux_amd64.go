@@ -50,7 +50,7 @@ const (
 	layoutPadNIN  = 456
 	layoutPadNGIN = -1
 	layoutPadNMIN = -1
-	layoutPadNL   = 420
+	layoutPadNL   = 415
 	layoutPadNGL  = -1
 	layoutPadNML  = -1
 	layoutPadNB   = 488
@@ -71,10 +71,10 @@ const (
 	layoutPadNJN  = 146
 	layoutPadNGJN = -1
 	layoutPadNMJN = -1
-	layoutPadNJS  = 708
+	layoutPadNJS  = 680
 	layoutPadNGJS = -1
 	layoutPadNMJS = -1
-	layoutPadNKO  = 575
+	layoutPadNKO  = 584
 	layoutPadNGKO = -1
 	layoutPadNMKO = -1
 	layoutPadNCC  = 484

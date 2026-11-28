@@ -141,10 +141,20 @@ func evalVarProp(o *Object, name Atom) ownProp {
 
 // declareGlobalLex adds a script-level lexical binding of name, in its dead
 // zone, and records that globalLex has one of the name.
+//
+// Of what code has cached, it changes the global object's binding of the
+// name alone, which it shadows from now on: the global epoch moves only
+// where the global object has one of its own -- the one kind of binding a
+// site caches at the epoch (regNoteGlobal, jitFeedback's globalSite) --
+// and a read of any other name cached at the epoch stays where it is. A
+// binding of the name the global object comes to have later is behind
+// this one from the start, which a site asks (lexShadows) before it
+// caches one of the global object's.
 func (r *Runtime) declareGlobalLex(name Atom, flags propFlags) {
 	r.globalLex.setOwnRaw(name, uninitialized, flags)
-	// It may shadow a global native code reads by its position.
-	r.shapes.globalEpoch++
+	if g := r.global; g != nil && g.findOwn(name) >= 0 {
+		r.shapes.globalEpoch++
+	}
 	i := int(uint32(name) >> 6)
 	for len(r.lexNames) <= i {
 		r.lexNames = append(r.lexNames, 0)

@@ -12681,11 +12681,11 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpGlobalCell, ssa.OpBindingCell:
 		if v.Op == ssa.OpGlobalCell && v.Epoch != 0 {
 			// The global object's bindings as they were, but for appends,
-			// and no lexical binding declared since (ssa.GlobalSite's
-			// Epoch); the scope's object the one compiled for, at
-			// Const's address: the binding is at its position. The count
-			// is compared whole: its low half comes back to the same value
-			// after 2**32 changes.
+			// and none shadowed by a lexical binding declared since
+			// (ssa.GlobalSite's Epoch); the scope's object the one
+			// compiled for, at Const's address: the binding is at its
+			// position. The count is compared whole: its low half comes
+			// back to the same value after 2**32 changes.
 			c.a.Load(scratchA, regCtx, abi.OffGlobalEpoch)
 			c.a.Load(scratchB, scratchA, 0)
 			c.a.OpImm(amd64.Cmp, scratchB, int32(v.Epoch-1), true)

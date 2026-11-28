@@ -1837,14 +1837,22 @@ bindings are read and assigned where they are (`ssa.OpGlobalCell`,
 `OpLexCell`). A global's read finds its binding at the position in the
 global object's table it was compiled for while the runtime's count of
 changes to that table other than appends -- a binding deleted, its
-attributes changed -- and of script-level lexical bindings declared is what
-it was then (`abi.Context`'s `GlobalEpoch`, the VM's `objGlobalBindings`): a
+attributes changed -- and of script-level lexical bindings declared of a
+name the global object has, which shadow its binding, is what it was then
+(`abi.Context`'s `GlobalEpoch`, the VM's `objGlobalBindings`): a
 comparison of the whole count, whose low half comes round again, and of the
 object, where it had checked that no lexical binding shadowed the name, that
 the key at the position was the name's and that its binding was plain data,
-at every read. Past 64 such changes a read is compiled to check them again,
-so that a program that keeps deleting globals does not leave its code at
-each. A module's bindings are fixed once it is linked, so its code reads
+at every read. A lexical binding of a name the global object has none of
+changes none of its bindings, and moves nothing. Past 64 such changes a
+read is compiled to check them again, so that a program that keeps
+deleting globals does not leave its code at each. Where its check fails,
+a read deoptimizes: the code is compiled again from the interpreter's
+caches, which then have the binding where it is -- the lexical binding
+that shadows it among them -- and the read, generic, checks its own
+binding rather than the count from then on, Go reading it where that
+fails. A global that is an accessor is Go's to read from the first
+compile. A module's bindings are fixed once it is linked, so its code reads
 each one in the object that has it, at that object's address
 (`ssa.OpBindingCell`), as V8 reads a module's variables in its context and
 an import in its exporter's cell. An imported `const` is a constant.

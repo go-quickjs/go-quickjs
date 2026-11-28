@@ -1520,9 +1520,10 @@ func (r *Runtime) regSetGlobal(f *frame, cl *closure, c *regCode, pc int, w byte
 // initialized -- out of its dead zone for good -- and, for a write, not a
 // constant, in a frame whose scope is the realm's global one with no
 // variables of a direct eval in front of it. globalLex's table is only
-// appended to, and a binding declared bumps the epoch, so that while the
-// epoch is what it was the slot is the binding's, as for the global
-// object's (rhGetGlobal reads either); otherwise the site stays Go's.
+// appended to, and no binding of it is declared again, so that the slot
+// is the binding's for good: the epoch is the one rhGetGlobal checks of
+// the global object's sites, which it reads either of; otherwise the site
+// stays Go's.
 func (r *Runtime) regNoteGlobalLex(f *frame, cl *closure, site uint16, name Atom, write bool) {
 	if cl.regEpochs == nil {
 		cl.regEpochs = make([]uint64, len(cl.ic))
@@ -1556,8 +1557,9 @@ func (r *Runtime) regNoteGlobalLex(f *frame, cl *closure, site uint16, name Atom
 // layout of its own, which no script-level lexical binding shadows. While
 // the epoch is what it was, nothing of that has changed (shapeTree's
 // globalEpoch): the global object's table has only been appended to and no
-// lexical binding declared. The epoch is kept as one more than it is, so
-// that a site never filled is never current.
+// lexical binding of a name it has declared (declareGlobalLex). The epoch
+// is kept as one more than it is, so that a site never filled is never
+// current.
 func (r *Runtime) regNoteGlobal(cl *closure, site uint16, name Atom, write bool) {
 	if cl.regEpochs == nil {
 		cl.regEpochs = make([]uint64, len(cl.ic))

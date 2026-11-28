@@ -230,7 +230,11 @@ func TestJITGlobalReads(t *testing.T) {
 				t.Fatalf("global read JIT %v: %v, %v", enabled, v, err)
 			}
 		}
-		if calls != 1 || enabled && (r.jit == nil || r.jit.guards != 0) {
+		// The read's code deoptimizes at the first change of g, the
+		// accessor, after which the read is generic: Go's where its
+		// binding is not where it was, which a change of it never
+		// deoptimizes again.
+		if calls != 1 || enabled && (r.jit == nil || r.jit.guards > 1) {
 			t.Fatal("global resolution did not preserve accessors or lexical shadowing")
 		}
 	}
