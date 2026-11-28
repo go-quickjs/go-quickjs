@@ -5,9 +5,113 @@
 #include "textflag.h"
 
 // layoutPadH is the layout lock's assembly pad H for linux/amd64 wasm:
-// 208 slots of 32 bytes (layoutlock.txt). It is never called: see
+// 312 slots of 32 bytes (layoutlock.txt). It is never called: see
 // internal/cmd/layoutpad.
 TEXT ·layoutPadH(SB), NOSPLIT|NOFRAME, $0-0
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
+	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
 	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
 	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
 	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc

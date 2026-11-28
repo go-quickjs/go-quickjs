@@ -494,29 +494,29 @@ regTypedSlowTable 219 with_delete vm.rsTGlobal
 regTypedSlowTable 220 with_set vm.rsTGlobal
 regTypedSlowTable 221 with_resolve vm.rsTGlobal
 regTypedSlowTable 238 add_i32 vm.rsAddI32
-leafChecks 22 closure: str := func(_ *Runtime, this Value, args []Value) bool {
-leafChecks 23 closure: str := func(_ *Runtime, this Value, args []Value) bool {
-leafChecks 24 closure: str := func(_ *Runtime, this Value, args []Value) bool {
-leafChecks 25 closure: str := func(_ *Runtime, this Value, args []Value) bool {
-leafChecks 26 closure: str := func(_ *Runtime, this Value, args []Value) bool {
-leafChecks 27 closure: str := func(_ *Runtime, this Value, args []Value) bool {
-leafChecks 28 closure: str := func(_ *Runtime, this Value, args []Value) bool {
-leafChecks 29 closure: str := func(_ *Runtime, this Value, args []Value) bool {
-leafChecks 30 closure: str := func(_ *Runtime, this Value, args []Value) bool {
-leafChecks 31 closure: str := func(_ *Runtime, this Value, args []Value) bool {
-leafChecks 32 closure: str := func(_ *Runtime, this Value, args []Value) bool {
-leafChecks 33 closure: str := func(_ *Runtime, this Value, args []Value) bool {
-leafChecks 34 closure: str := func(_ *Runtime, this Value, args []Value) bool {
-leafChecks 35 closure: str := func(_ *Runtime, this Value, args []Value) bool {
-leafChecks 36 closure: str := func(_ *Runtime, this Value, args []Value) bool {
-leafChecks 37 closure: str := func(_ *Runtime, this Value, args []Value) bool {
-leafChecks 38 closure: str := func(_ *Runtime, this Value, args []Value) bool {
-leafChecks 39 closure: str := func(_ *Runtime, this Value, args []Value) bool {
-leafChecks 40 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 22 vm.leafStrArgs
+leafChecks 23 vm.leafStrArgs
+leafChecks 24 vm.leafStrArgs
+leafChecks 25 vm.leafStrArgs
+leafChecks 26 vm.leafStrArgs
+leafChecks 27 vm.leafStrArgs
+leafChecks 28 vm.leafStrArgs
+leafChecks 29 vm.leafStrArgs
+leafChecks 30 vm.leafStrArgs
+leafChecks 31 vm.leafStrArgs
+leafChecks 32 vm.leafStrArgs
+leafChecks 33 vm.leafStrArgs
+leafChecks 34 vm.leafStrArgs
+leafChecks 35 vm.leafStrArgs
+leafChecks 36 vm.leafStrArgs
+leafChecks 37 vm.leafStrArgs
+leafChecks 38 vm.leafStrArgs
+leafChecks 39 vm.leafStrArgs
+leafChecks 40 vm.leafStrArgs
 leafChecks 41 closure: leafChecks[elemStrConcat] = func(r *Runtime, this Value, args []Value) bool {
-leafChecks 42 closure: leafChecks[elemStrRepeat] = func(r *Runtime, this Value, args []Value) bool {
-leafChecks 43 closure: pad := func(r *Runtime, this Value, args []Value) bool {
-leafChecks 44 closure: pad := func(r *Runtime, this Value, args []Value) bool {
+leafChecks 42 vm.leafStrRepeat
+leafChecks 43 vm.leafStrPad
+leafChecks 44 vm.leafStrPad
 leafChecks 45 closure: leafChecks[elemStrNormalize] = func(r *Runtime, this Value, args []Value) bool {
 leafChecks 46 closure: leafChecks[elemStrLocaleCompare] = func(r *Runtime, this Value, args []Value) bool {
 leafChecks 47 closure: leafChecks[elemStrFromCharCode] = func(_ *Runtime, _ Value, args []Value) bool {

@@ -72,17 +72,7 @@ func init() {
 		r.leafFns = append(r.leafFns, o)
 	}
 	initStringLeafChecks = func() {
-		str := func(_ *Runtime, this Value, args []Value) bool {
-			if !this.IsString() {
-				return false
-			}
-			for _, a := range args {
-				if !a.IsNumber() && !a.IsString() && !a.IsBool() && !a.IsUndefined() && !a.IsNull() {
-					return false
-				}
-			}
-			return true
-		}
+		str := leafStrArgs
 		for _, op := range []uint8{elemStrAt, elemStrCharAt, elemStrCharCodeAt, elemStrCodePointAt, elemStrIndexOf,
 			elemStrLastIndexOf, elemStrIncludes, elemStrStartsWith, elemStrEndsWith, elemStrSlice, elemStrSubstring,
 			elemStrSubstr, elemStrToUpperCase, elemStrToLowerCase, elemStrTrim, elemStrTrimStart, elemStrTrimEnd,
@@ -105,37 +95,10 @@ func init() {
 			}
 			return n <= maxStringLength
 		}
-		// repeat and the pads of a string by a number count first, asked
-		// with no call, where str's and toInteger's, beside the conversion
-		// the built-in makes again, had cost repeat in the interpreter more
-		// than the frame they save; anything else as any other leaf.
-		leafChecks[elemStrRepeat] = func(r *Runtime, this Value, args []Value) bool {
-			if len(args) == 1 && this.IsString() && args[0].IsNumber() {
-				n := args[0].num
-				return n >= 0 && n <= maxStringLength && float64(this.String().length)*math.Trunc(n) <= maxStringLength
-			}
-			if !str(r, this, args) {
-				return false
-			}
-			n, err := r.toInteger(arg(args, 0))
-			return err == nil && n >= 0 && !math.IsInf(n, 0) && float64(this.String().length)*n <= maxStringLength
-		}
-		pad := func(r *Runtime, this Value, args []Value) bool {
-			if len(args) >= 1 && len(args) <= 2 && this.IsString() && args[0].IsNumber() {
-				if len(args) == 2 {
-					if f := args[1]; !f.IsString() && !f.IsUndefined() {
-						return str(r, this, args) && args[0].num <= maxStringLength
-					}
-				}
-				return args[0].num <= maxStringLength
-			}
-			if !str(r, this, args) {
-				return false
-			}
-			n, err := r.toInteger(arg(args, 0))
-			return err == nil && n <= maxStringLength
-		}
-		leafChecks[elemStrPadStart], leafChecks[elemStrPadEnd] = pad, pad
+		// repeat and the pads of a string by a number count first
+		// (leafStrRepeat, leafStrPad).
+		leafChecks[elemStrRepeat] = leafStrRepeat
+		leafChecks[elemStrPadStart], leafChecks[elemStrPadEnd] = leafStrPad, leafStrPad
 		leafChecks[elemStrNormalize] = func(r *Runtime, this Value, args []Value) bool {
 			if !str(r, this, args) {
 				return false
@@ -406,7 +369,9 @@ var (
 // anything (as leafPrimitives), each method's results within a string's
 // length. Like leafPrimitives, a closure assigned in init, not a package
 // variable's function literal, which the compiler lays out among the
-// package's other closures: 3.5 KB of them moved.
+// package's other closures: 3.5 KB of them moved. The checks the most
+// leaves ask, at every call, are named functions it hands out
+// (leafStrArgs).
 var initStringLeafChecks func()
 
 // leafPrimitives reports whether each of args is a primitive that converts
@@ -414,3 +379,58 @@ var initStringLeafChecks func()
 // number, a string, a boolean, undefined or null -- not an object, a
 // symbol or a BigInt.
 var leafPrimitives func(args []Value) bool
+
+// leafStrArgs is the check of String's leaves that take a string receiver
+// and arguments converting without calling anything (initStringLeafChecks).
+// It, leafStrRepeat and leafStrPad, which native code's calls of the leaves
+// ask at every call, are named functions rather than closures of the init,
+// so that the layout lock holds them: a closure is laid out after every
+// function, where nothing pins it, and any closure added before it moves it
+// (docs/optimizing.md, "The layout lock"). The repeat check, its code the
+// same, had moved 608 bytes with closures grown elsewhere and taken twice
+// the time, string_repeat 12% slower on a Ryzen 5 3600.
+func leafStrArgs(_ *Runtime, this Value, args []Value) bool {
+	if !this.IsString() {
+		return false
+	}
+	for _, a := range args {
+		if !a.IsNumber() && !a.IsString() && !a.IsBool() && !a.IsUndefined() && !a.IsNull() {
+			return false
+		}
+	}
+	return true
+}
+
+// leafStrRepeat is String.prototype.repeat's leaf's check: a count asked
+// first with no call, where leafStrArgs' and toInteger's, beside the
+// conversion the built-in makes again, had cost repeat in the interpreter
+// more than the frame they save.
+func leafStrRepeat(r *Runtime, this Value, args []Value) bool {
+	if len(args) == 1 && this.IsString() && args[0].IsNumber() {
+		n := args[0].num
+		return n >= 0 && n <= maxStringLength && float64(this.String().length)*math.Trunc(n) <= maxStringLength
+	}
+	if !leafStrArgs(r, this, args) {
+		return false
+	}
+	n, err := r.toInteger(arg(args, 0))
+	return err == nil && n >= 0 && !math.IsInf(n, 0) && float64(this.String().length)*n <= maxStringLength
+}
+
+// leafStrPad is padStart's and padEnd's leaf's check, a count asked first
+// as leafStrRepeat's is.
+func leafStrPad(r *Runtime, this Value, args []Value) bool {
+	if len(args) >= 1 && len(args) <= 2 && this.IsString() && args[0].IsNumber() {
+		if len(args) == 2 {
+			if f := args[1]; !f.IsString() && !f.IsUndefined() {
+				return leafStrArgs(r, this, args) && args[0].num <= maxStringLength
+			}
+		}
+		return args[0].num <= maxStringLength
+	}
+	if !leafStrArgs(r, this, args) {
+		return false
+	}
+	n, err := r.toInteger(arg(args, 0))
+	return err == nil && n <= maxStringLength
+}

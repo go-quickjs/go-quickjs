@@ -135,19 +135,7 @@ func (r *Runtime) initStringBuiltins() {
 	})
 
 	// The receiver of a String method may be a primitive or a wrapper.
-	thisStr := func(rt *Runtime, this Value) (*String, error) {
-		switch {
-		case this.IsString():
-			return this.String(), nil
-		case this.IsObject() && this.Object().class == ClassStringWrapper:
-			if s, ok := this.Object().dataOf().(*String); ok {
-				return s, nil
-			}
-		case this.IsNullish():
-			return nil, rt.throwTypeError("String.prototype method called on %s", this.Kind())
-		}
-		return rt.toString(this)
-	}
+	thisStr := stringReceiver
 
 	// Unlike the rest, these two are not generic: they hand back the string a
 	// receiver already is or holds, and there is nothing to hand back for a
@@ -494,51 +482,7 @@ func (r *Runtime) initStringBuiltins() {
 		return Str(out), nil
 	})
 
-	r.defMethod(p, "repeat", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		s, err := thisStr(rt, this)
-		if err != nil {
-			return Undefined, err
-		}
-		n, err := rt.toInteger(arg(args, 0))
-		if err != nil {
-			return Undefined, err
-		}
-		if n < 0 || math.IsInf(n, 0) {
-			return Undefined, rt.throwRangeError("invalid repeat count")
-		}
-		if n == 0 || s.Len() == 0 {
-			return Str(emptyString), nil
-		}
-		// Guard against a count that would exhaust memory before building it.
-		if float64(s.Len())*n > maxStringLength {
-			return Undefined, rt.throwStringLength()
-		}
-		if err := rt.reserveMemory(stringBytes(s) * int(n)); err != nil {
-			return Undefined, err
-		}
-		if s.endsHigh && s.startsLow {
-			// Each copy's high half meets the next one's low half, which
-			// together are one character, spelled as one.
-			sb := rt.newParts()
-			for i := 0; i < int(n); i++ {
-				sb.WriteString(s.Go())
-			}
-			return rt.builtString(sb.String())
-		}
-		if n == 1 {
-			return Str(s), nil
-		}
-		// The copies are written once, into the String's own allocation
-		// where they are short, with what the String knows of itself from
-		// s's: a copy's ends are s's, and no two that meet make a pair.
-		g := s.Go()
-		out, b := newFlatBytes(len(g) * int(n))
-		fillRepeat(b, g)
-		out.setBytes(b)
-		out.length, out.ascii = s.length*int(n), s.ascii
-		out.endsHigh, out.startsLow = s.endsHigh, s.startsLow
-		return Str(out), nil
-	})
+	r.defMethod(p, "repeat", 1, stringRepeat)
 
 	r.strSplitFn = r.defMethod(p, "split", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if this.IsNullish() {
@@ -1340,4 +1284,73 @@ func (r *Runtime) isRegExp(v Value) (bool, error) {
 		return m.Truthy(), nil
 	}
 	return v.Object().class == ClassRegExp, nil
+}
+
+// stringReceiver is a String method's receiver as a string: a primitive, a
+// wrapper's, or what any other value converts to. A named function, not a
+// closure of initStringBuiltins, as stringRepeat: the closures are laid out
+// after every function, where nothing the layout lock pins holds them, and
+// a closure added anywhere before them moves them (docs/optimizing.md,
+// "The layout lock").
+func stringReceiver(rt *Runtime, this Value) (*String, error) {
+	switch {
+	case this.IsString():
+		return this.String(), nil
+	case this.IsObject() && this.Object().class == ClassStringWrapper:
+		if s, ok := this.Object().dataOf().(*String); ok {
+			return s, nil
+		}
+	case this.IsNullish():
+		return nil, rt.throwTypeError("String.prototype method called on %s", this.Kind())
+	}
+	return rt.toString(this)
+}
+
+// stringRepeat is String.prototype.repeat, which native code calls as a
+// leaf (elemStrRepeat): named, at the end of the file, before the typed
+// arrays' position (TA), so that the lock holds it and it moves nothing.
+func stringRepeat(rt *Runtime, this Value, args []Value) (Value, error) {
+	s, err := stringReceiver(rt, this)
+	if err != nil {
+		return Undefined, err
+	}
+	n, err := rt.toInteger(arg(args, 0))
+	if err != nil {
+		return Undefined, err
+	}
+	if n < 0 || math.IsInf(n, 0) {
+		return Undefined, rt.throwRangeError("invalid repeat count")
+	}
+	if n == 0 || s.Len() == 0 {
+		return Str(emptyString), nil
+	}
+	// Guard against a count that would exhaust memory before building it.
+	if float64(s.Len())*n > maxStringLength {
+		return Undefined, rt.throwStringLength()
+	}
+	if err := rt.reserveMemory(stringBytes(s) * int(n)); err != nil {
+		return Undefined, err
+	}
+	if s.endsHigh && s.startsLow {
+		// Each copy's high half meets the next one's low half, which
+		// together are one character, spelled as one.
+		sb := rt.newParts()
+		for i := 0; i < int(n); i++ {
+			sb.WriteString(s.Go())
+		}
+		return rt.builtString(sb.String())
+	}
+	if n == 1 {
+		return Str(s), nil
+	}
+	// The copies are written once, into the String's own allocation
+	// where they are short, with what the String knows of itself from
+	// s's: a copy's ends are s's, and no two that meet make a pair.
+	g := s.Go()
+	out, b := newFlatBytes(len(g) * int(n))
+	fillRepeat(b, g)
+	out.setBytes(b)
+	out.length, out.ascii = s.length*int(n), s.ascii
+	out.endsHigh, out.startsLow = s.endsHigh, s.startsLow
+	return Str(out), nil
 }
