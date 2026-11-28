@@ -717,6 +717,14 @@ a debugger has an instruction at each statement no other code has, and must
 do exactly what other code does. A passing Go test command is not enough if
 its log reports newly introduced conformance failures.
 
+`-conformance.jit` (with `-tags quickjs_jit`) runs every test with the JIT
+on, and logs per area how many tests ran native code. A run in which no test
+runs natively fails, by design: a pass means nothing for code that never
+ran. Small areas, such as `language/global-code` or one statement's
+directory, rarely run long enough to compile, so give them
+`QJS_JIT_STRESS=threshold` (and CI's `threshold,budget=3,deopt=7`), which
+compiles at the first call, and say how many tests ran natively.
+
 Performance-sensitive work should compare fresh processes, not just repeated
 operations in one warmed process. Report bundle size, first-use latency,
 allocations, and peak RSS. Distinguish work moved from package startup to first
