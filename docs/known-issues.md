@@ -538,7 +538,11 @@ Paths are relative to this repository; `go-intl:` paths are in
   alike from `{}` at any site of any code share their layouts
   (`TestEmptyLiteralsShareAcrossCode`, `TestLiteralLayoutsShareAcrossSites`,
   `TestFreshRunsOfTwoLiteralsStayBounded`, `TestEmptyLiteralRoomIsFixed`,
-  `TestJITEmptyLiteralsShareAcrossSites`). What remains:
+  `TestJITEmptyLiteralsShareAcrossSites`). The room a `{}` site's objects are
+  made with is the site's, learned from its own objects and kept in its cache
+  entry, as V8 keeps a literal's AllocationSite in its feedback vector, the
+  map shared (`TestEmptySiteLearnsItsRoom`, `TestJITEmptySitePoolLearns`,
+  `TestEmptySiteProgramRerun`). What remains:
   - Shapes are given back by a cleanup, after a collection. A host with a heap
     so large that it allocates 65,536 shapes between two collections, running
     new code for each request, finds the tree full until the next one, as
@@ -1656,17 +1660,18 @@ Paths are relative to this repository; `go-intl:` paths are in
   (`TestClassSetEarlyErrors`).
 
 ### KI-100 The memory limit misses the room an object outgrew
-- **Where:** `internal/vm/memory.go`. An object built from `{}` starts
-  with in-object room for four properties, fixed since `{}` shares the
-  realm's literal root. Past four, its properties move to a table of their
-  own, and the four slots in the object's own allocation stay there,
-  unused. The meter counts the table but cannot see the dead room, since
-  the object doesn't record how much room it was made with.
-- **Effect:** objects of 5 to 16 properties are counted at 0.75 to 0.84 of
-  their live heap. Larger objects are counted closer to their heap (0.96
-  at 20 properties, after the meter's count of a property table was
-  corrected). Before the shared root, a site learned its objects' room, so
-  objects that outgrew theirs were rare.
+- **Where:** `internal/vm/memory.go`. An object that outgrows the room it
+  was made with -- one of a `{}` site's first two, before the site has
+  learned its room, or one larger than its site settled on -- moves its
+  properties to a table of their own, and the slots in the object's own
+  allocation stay there, unused. The meter counts the table but cannot see
+  the dead room, since the object doesn't record how much room it was made
+  with.
+- **Effect:** such objects of 5 to 16 properties are counted at 0.75 to
+  0.84 of their live heap. Larger objects are counted closer to their heap
+  (0.96 at 20 properties, after the meter's count of a property table was
+  corrected). A `{}` site learns its objects' room (`literalkeys.go`), so
+  objects that outgrow theirs are rare.
 - **Status:** open. Counting the room needs it recorded on the object, for
   example in a byte of `Object`'s padding. That touches the object's
   layout, its equality functions, the inliner's costs and the layout lock,

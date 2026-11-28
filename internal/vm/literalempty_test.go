@@ -151,10 +151,11 @@ func TestLiteralLayoutsShareAcrossSites(t *testing.T) {
 	}
 }
 
-// The room of {}'s objects is fixed, as V8's Object function's initial map
-// fixes its in-object properties: a site whose objects grow to a table of
-// twenty keys leaves every {} made with the room of four, its own next ones
-// too, where a root learning it had sized every {} of the realm by them.
+// The room of the realm's root for {} is fixed, as V8's Object function's
+// initial map fixes its in-object properties: a site whose objects grow to
+// a table of twenty keys leaves every other {} made with the room of four,
+// where a root learning it had sized every {} of the realm by them; its own
+// next ones are made with the twenty its site learned (literalkeys.go).
 func TestEmptyLiteralRoomIsFixed(t *testing.T) {
 	t.Parallel()
 	for _, native := range []bool{false, true} {
@@ -175,6 +176,8 @@ func TestEmptyLiteralRoomIsFixed(t *testing.T) {
 		}
 		if o := globalObject(r, "b"); o.shape.unique || o.shape.n != 20 || o.shape.root().slack != emptyLiteralRoom {
 			t.Errorf("native %v: the grown {}'s root learned room %d", native, o.shape.root().slack)
+		} else if o.valc != 20 {
+			t.Errorf("native %v: the grown {}'s site made it with room for %d, want 20", native, o.valc)
 		}
 		r.Close()
 	}

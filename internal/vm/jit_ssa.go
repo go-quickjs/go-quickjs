@@ -1282,7 +1282,12 @@ func (r *Runtime) jitObjectLiteral(e *jitEntry, cl *closure, pc int, site uint32
 	}
 	e.literals = append(e.literals, jitLiteral{pc: int32(pc), root: root, pool: new(abi.ObjectPool), n: n, fn: cl.fn})
 	l := &e.literals[len(e.literals)-1]
-	l.pool.Source = unsafe.Pointer(&jitPoolSource{root: root, n: l.n})
+	src := &jitPoolSource{root: root, n: l.n}
+	if root.rootClass == emptyRootClass {
+		// {}: its pool learns into its site's record (literalkeys.go).
+		src.site = &cl.ic[site]
+	}
+	l.pool.Source = unsafe.Pointer(src)
 	r.jitFillLiteral(l)
 	return l
 }
@@ -1346,7 +1351,19 @@ func (r *Runtime) jitFillLiteral(l *jitLiteral) {
 		if l.root != nil {
 			n = max(n, int(l.root.slack))
 		}
-		jitFillObjectPool(pool, r.proto.object, l.root, n)
+		src := (*jitPoolSource)(pool.Source)
+		if src == nil || src.site == nil {
+			jitFillObjectPool(pool, r.proto.object, l.root, n)
+			return
+		}
+		// A {}'s, of the room its site learned, the sample before read,
+		// and the object the pool gives last the next sample, as the
+		// interpreter's site's next execution reads its last (emptySiteMake).
+		sample := src.site.fills != 0 && emptySiteLearn[struct{}](r, src.site)
+		jitFillObjectPool(pool, r.proto.object, l.root, max(n, int(src.site.idx)))
+		if sample {
+			emptySiteSample[struct{}](r, src.site, (*Object)(pool.Objects[0]))
+		}
 		return
 	}
 	n := l.n
@@ -1507,9 +1524,15 @@ func jitFeedbackMark(cl *closure) uint64 {
 				held[n] = x.shape
 				n++
 			}
+			idx := x.idx
+			if x.shape.rootClass == emptyRootClass {
+				// A {} site's room, which nothing compiled reads: its
+				// pool reads it as it fills (literalkeys.go).
+				idx = 0
+			}
 			h := uint64(uintptr(unsafe.Pointer(x.shape)))*31 + uint64(uintptr(unsafe.Pointer(x.p1)))*37 +
 				uint64(uintptr(unsafe.Pointer(x.s1)))*41 + uint64(uintptr(unsafe.Pointer(x.p2)))*43 +
-				uint64(uintptr(unsafe.Pointer(x.s2)))*47 + uint64(uintptr(unsafe.Pointer(x.next)))*53 + uint64(uint32(x.idx))*59
+				uint64(uintptr(unsafe.Pointer(x.s2)))*47 + uint64(uintptr(unsafe.Pointer(x.next)))*53 + uint64(uint32(idx))*59
 			if x.getter {
 				h++
 			}
@@ -4212,6 +4235,10 @@ type jitPoolSource struct {
 	gen *Object
 	// sharedOf is the closure of sharedPC's literal.
 	sharedOf *closure
+	// site is a {}'s site's cache entry, whose record of the room its
+	// objects are made with the pool learns into (literalkeys.go), as the
+	// interpreter's executions of the site do.
+	site *propCache
 	// realm is made's realm.
 	realm *Realm
 }

@@ -417,6 +417,11 @@ type Runtime struct {
 	// nil but in a test's runtime: after every field the interpreter and
 	// the native code read, as nativeCounts is.
 	test *testConfig
+	// emptySamples is the {} sites' samples, by site: the object each
+	// learning site made last, which its next execution reads, or a sweep
+	// or the turn's end (emptySamplesLetGo), nil when none is held. After
+	// every field the interpreter and the native code read, as test is.
+	emptySamples map[*propCache]*Object
 	// jitFields is the optional native tier's state, empty in builds
 	// without it. It comes after everything the interpreter reads, so that
 	// a build with the tier moves none of their offsets, and before the last

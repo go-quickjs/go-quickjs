@@ -35,9 +35,10 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // some fifty keys, had a chain of fifty for each copy kept, until the
 // tree was full and every object made after it was of a layout of its
 // own. The root's room is fixed, as that map's is (V8's
-// kInitialGlobalObjectUnusedPropertiesCount): learned, as a site's is,
-// one {} grown to a table of hundreds of keys had sized every {} of the
-// realm. It is not the root new Object() and Object.create take
+// kInitialGlobalObjectUnusedPropertiesCount): learned on the root, one {}
+// grown to a table of hundreds of keys had sized every {} of the realm.
+// The room a site's objects are made with is the site's own, learned from
+// its own objects (emptySiteMake). It is not the root new Object() and Object.create take
 // (rootFor), which their prototype's layout keeps for as long as the
 // realm, with every transition out of it: V8 shares the two, whose
 // transitions are weak.
@@ -142,7 +143,121 @@ func keyEmptySite[_ any](r *Runtime, ic *propCache) {
 func keyedRoot[_ any](r *Runtime, keys uint64, ic *propCache) {
 	if root := rootOfKeys[struct{}](r, keys); root != nil {
 		ic.shape = root
+		if keys == noKeysHash && ic.idx == 0 {
+			emptySiteStart[struct{}](ic)
+		}
 	}
+}
+
+// A {} site's room.
+//
+// The realm's root for {} is every {} site's, and its room is fixed
+// (emptyLiteralRoom); the room a site's objects are made with is the
+// site's, kept in its own cache entry, as V8 keeps a literal's
+// AllocationSite in its function's feedback vector, a slot for each
+// literal (runtime-literals.cc:520-560), the map shared and the site its
+// own. The entry of a {} site holds the root alone, and its record takes
+// two of the fields no literal's entry uses: idx is the room, from
+// emptyLiteralRoom up to maxRoom, and fills how many samples the site has
+// left to take, slackTracking+1 before its first object, 0 once settled.
+// No literal's entry is filled again, and jitFeedbackMark leaves both
+// out.
+//
+// The site learns what its own objects came to hold, as a constructor's
+// root does (noteBuilt) and as V8's slack tracking settles a map's room
+// from what its objects reached, over kSlackTrackingCounterStart (7)
+// constructions (MapUpdater::CompleteInobjectSlackTracking,
+// map-updater.cc:469-497, Map::ComputeMinObjectSlack, map.cc:2421). A {}
+// object has no end of construction, but its site's next execution is
+// one: by then the object it made before is, almost always, as large as
+// it will get. So each execution while the site learns reads the
+// object the one before made, its sample, and the room is the most any
+// sample held, of a layout of the tree's -- a dictionary, which a table
+// of names becomes (soft limit), teaches nothing, and the soft limit
+// counts the root's fixed room, not the site's, so a table's keys never
+// size a site's objects. The new object is the next sample. After
+// slackTracking samples the room is settled, as a constructor's is, and
+// later objects that grow past it grow by doubling, as V8's past the
+// slack it settled. An object taken early -- a recursive builder makes
+// its child's {} before its own is filled -- can only teach too little,
+// never too much.
+//
+// The first execution takes no sample, so that code run once holds
+// nothing. The sample is the Runtime's (emptySamples), one for a site at
+// most, by its entry: no object points at its site. A sweep after a
+// collection and the turn's end (clearReturnedFrames) read each sample a
+// last time, as a sample, and let it go (emptySamplesLetGo), so that a
+// sample is held until its site's next execution, the next sweep or the
+// turn's end, whichever is first. Native code's pools of a {} learn into
+// the same record: each fill reads the sample and samples the object the
+// pool gives last (jitFillLiteral). A Program keeps its {} sites' records
+// from run to run (programSites' rooms).
+
+// emptySiteStart starts the record of the {} site ic, before its first
+// object.
+func emptySiteStart[_ any](ic *propCache) {
+	ic.idx, ic.fills = emptyLiteralRoom, slackTracking+1
+}
+
+// emptySiteMake is regNewObject's {} of root, the realm's root for {}, at
+// site ic while it learns its room: the sample before it read, the object
+// made with the room, and kept as the next.
+//
+//go:noinline
+func emptySiteMake[_ any](r *Runtime, ic *propCache, root *shape) *Object {
+	sample := emptySiteLearn[struct{}](r, ic)
+	o := newShapedLiteral(root, ClassObject, int(ic.idx))
+	if sample {
+		emptySiteSample[struct{}](r, ic, o)
+	}
+	return o
+}
+
+// emptySiteLearn has the {} site ic, about to make an object, read its
+// sample, and reports whether it is to sample the object it makes.
+func emptySiteLearn[_ any](r *Runtime, ic *propCache) bool {
+	if ic.fills > slackTracking {
+		// The first: no sample.
+		ic.fills = slackTracking
+		return false
+	}
+	if o := r.emptySamples[ic]; o != nil {
+		emptySiteObserve[struct{}](ic, o)
+		if ic.fills == 0 {
+			delete(r.emptySamples, ic)
+		}
+	}
+	return ic.fills != 0
+}
+
+// emptySiteSample keeps o as the {} site ic's sample.
+func emptySiteSample[_ any](r *Runtime, ic *propCache, o *Object) {
+	if r.emptySamples == nil {
+		r.emptySamples = map[*propCache]*Object{}
+	}
+	r.emptySamples[ic] = o
+}
+
+// emptySiteObserve counts o as a sample of the {} site ic: the room is the
+// most a sample of a layout of the tree's held, up to maxRoom.
+func emptySiteObserve[_ any](ic *propCache, o *Object) {
+	if s := o.shape; s != nil && !s.unique && !s.loose {
+		ic.idx = int32(max(int(ic.idx), min(int(o.valn), maxRoom)))
+	}
+	if ic.fills != 0 {
+		ic.fills--
+	}
+}
+
+// emptySamplesLetGo is clearReturnedFrames' release of the {} sites'
+// samples, each read a last time.
+//
+//go:noinline
+func emptySamplesLetGo[_ any](r *Runtime) {
+	for ic, o := range r.emptySamples {
+		emptySiteObserve[struct{}](ic, o)
+	}
+	r.emptySamples = nil
 }
 
 // rootOfKeys is the realm's root for the keys of that hash, or nil where there

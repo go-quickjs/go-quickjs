@@ -72,6 +72,12 @@ type programSites struct {
 	// keys is the hash of each literal's keys, 0 where it says none
 	// (keysOf).
 	keys []uint64
+	// rooms is, for each {} (keys noKeysHash), its site's record of the
+	// room its objects are made with (literalkeys.go) as the last run left
+	// it, which each run's caches start with, so that a run after the
+	// first goes on from what the runs before learned rather than learning
+	// it anew; nil where the program has no {}.
+	rooms []siteRoom
 	// from is the realm's roots they are of, nil for none: those the realm
 	// has let go, which would otherwise be kept, are not asked for again,
 	// nor those grown past literalShapes, which asking for again lets go.
@@ -86,6 +92,18 @@ type programSites struct {
 	// budget is the slot of a budget of its own, which all the roots hold
 	// (chargeChild).
 	budget *budgetSlot
+	// listed says the sites are listed of the code the program's first run
+	// compiled (relistSites): a function's register code is compiled at its
+	// first call, so a program listed before its first run lists the sites
+	// of its own code alone.
+	listed bool
+}
+
+// siteRoom is a {} site's record, its cache entry's idx and fills
+// (literalkeys.go), a run's to the next; zero before a run has started
+// it.
+type siteRoom struct {
+	room, fills uint8
 }
 
 // programFn is a function of a program in its programSites.
@@ -102,15 +120,88 @@ type programFn struct {
 // that instantiates it is, which is the one that exports Program.
 func RunProgram[_ any](r *Runtime, fn *bytecode.Function) (Value, error) {
 	cl := r.prepare(fn)
-	seedLiterals[struct{}](r, cl)
+	p := seedLiterals[struct{}](r, cl)
 	v, err := r.run(cl, r.globalThis, nil, Undefined, nil)
 	r.endTurn()
+	if !p.listed {
+		p = relistSites[struct{}](r, p, cl)
+	}
+	if p.rooms != nil {
+		// What the run's {} sites learned, the turn's end having read
+		// their samples, for the next run.
+		var at, fn int
+		keepRooms[struct{}](p, cl, &at, &fn)
+	}
 	return v, err
 }
 
+// relistSites is p, the sites of cl's program as its first run in the realm
+// began, listed again as the run left its code: the functions it called,
+// each compiled at its first call, with their sites. A site listed before
+// keeps its root; one of a function compiled since, a literal of keys or a
+// {}, takes the realm's root for its keys, as its first execution did
+// (regLiteralKeyedRoot), and any other is seeded with nothing, its runs'
+// objects starting from a root of the run's own, as before.
+func relistSites[_ any](r *Runtime, p *programSites, cl *closure) *programSites {
+	p.listed = true
+	n := &programSites{budget: p.budget, listed: true}
+	listSites[struct{}](n, cl.fn, 0)
+	if len(n.at) == len(p.at) {
+		return p
+	}
+	type site struct {
+		fn *bytecode.Function
+		at uint32
+	}
+	kept := make(map[site]*shape, len(p.at))
+	if len(p.fns) != 0 {
+		var at, fn int
+		eachSite[struct{}](p, cl.fn, &at, &fn, func(f *bytecode.Function, i int) {
+			kept[site{f, p.at[i]}] = p.roots[i]
+		})
+	}
+	n.roots = make([]*shape, len(n.at))
+	keyed := false
+	var at, fn int
+	eachSite[struct{}](n, cl.fn, &at, &fn, func(f *bytecode.Function, i int) {
+		if root, ok := kept[site{f, n.at[i]}]; ok {
+			n.roots[i] = root
+		} else if keys := n.keys[i]; keys != 0 {
+			n.roots[i] = rootOfKeys[struct{}](r, keys)
+		}
+		if n.roots[i] != nil && n.keys[i] != 0 {
+			keyed = true
+		}
+		if n.keys[i] == noKeysHash && n.rooms == nil {
+			n.rooms = make([]siteRoom, len(n.at))
+		}
+	})
+	if keyed {
+		n.from = sideOf[struct{}](r.proto.object.ownLayout()).programs.roots
+	}
+	ps := sideOf[struct{}](r.proto.object.ownLayout()).programs
+	ps.byCode[weak.Make(cl.fn)] = n
+	return n
+}
+
+// eachSite calls visit with each site of p, by its index, of fn, the
+// function at *fn in p's, whose sites are at *at, and of the functions it
+// makes, with the function the site is of.
+func eachSite[_ any](p *programSites, fn *bytecode.Function, at, idx *int, visit func(*bytecode.Function, int)) {
+	f := p.fns[*idx]
+	*idx++
+	for range f.sites {
+		visit(fn, *at)
+		*at++
+	}
+	for range f.inner {
+		eachSite[struct{}](p, fn.Constants[p.fns[*idx].constant].Fn, at, idx, visit)
+	}
+}
+
 // seedLiterals starts the caches of cl, a program just prepared, with the
-// roots the realm keeps for it.
-func seedLiterals[_ any](r *Runtime, cl *closure) {
+// roots the realm keeps for it, and is what it keeps.
+func seedLiterals[_ any](r *Runtime, cl *closure) *programSites {
 	side := sideOf[struct{}](r.proto.object.ownLayout())
 	ps := side.programs
 	if ps == nil {
@@ -134,6 +225,7 @@ func seedLiterals[_ any](r *Runtime, cl *closure) {
 		var at, fn int
 		seedSites[struct{}](p, cl, &at, &fn)
 	}
+	return p
 }
 
 // newProgramSites is the roots of the literals of cl, a program just prepared,
@@ -146,6 +238,12 @@ func newProgramSites[_ any](r *Runtime, cl *closure) *programSites {
 	t.chunk = nil // The chunk is the program's alone.
 	listSites[struct{}](p, cl.fn, 0)
 	p.roots = make([]*shape, len(p.at))
+	for _, keys := range p.keys {
+		if keys == noKeysHash {
+			p.rooms = make([]siteRoom, len(p.at))
+			break
+		}
+	}
 	var at, fn int
 	if len(p.fns) != 0 {
 		keyProgramSites[struct{}](r, p, cl, &at, &fn)
@@ -232,10 +330,43 @@ func seedSites[_ any](p *programSites, cl *closure, at, fn *int) {
 			copy(ic, cl.ic)
 			cl.ic = ic
 		}
+		if p.roots[*at] == nil {
+			// One of a function compiled since the program was first
+			// listed that says no keys (relistSites).
+			*at++
+			continue
+		}
 		cl.ic[site].shape = p.roots[*at]
+		if p.rooms != nil && p.keys[*at] == noKeysHash {
+			if room := p.rooms[*at]; room.room != 0 {
+				cl.ic[site].idx, cl.ic[site].fills = int32(room.room), room.fills
+			} else {
+				emptySiteStart[struct{}](&cl.ic[site])
+			}
+		}
 		*at++
 	}
 	for range f.inner {
 		seedSites[struct{}](p, cl.consts[p.fns[*fn].constant].template(), at, fn)
+	}
+}
+
+// keepRooms keeps in p the records of the {} sites of cl, the closure of
+// the function at *fn in p's, a run's, whose literals are at *at, and of
+// the functions it makes: what they learned, for the next run
+// (programSites' rooms).
+func keepRooms[_ any](p *programSites, cl *closure, at, fn *int) {
+	f := p.fns[*fn]
+	*fn++
+	for range f.sites {
+		if site := int(p.at[*at]); p.keys[*at] == noKeysHash && site < len(cl.ic) {
+			if c := &cl.ic[site]; c.shape == p.roots[*at] && c.idx != 0 {
+				p.rooms[*at] = siteRoom{room: uint8(c.idx), fills: c.fills}
+			}
+		}
+		*at++
+	}
+	for range f.inner {
+		keepRooms[struct{}](p, cl.consts[p.fns[*fn].constant].template(), at, fn)
 	}
 }

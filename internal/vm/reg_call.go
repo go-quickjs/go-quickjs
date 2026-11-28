@@ -1670,15 +1670,23 @@ func (r *Runtime) regDefineField(cl *closure, name Atom, obj, v Value) error {
 // regNewObject is new_object.
 func (r *Runtime) regNewObject(cl *closure, w bytecode.RInstr) *Object {
 	// With the room the site's objects came to need (outgrowProps learns
-	// it), where the literal says less: of the realm's root for {}, the
-	// room it is made with (literalkeys.go).
-	if ic := &cl.ic[w.C()]; ic.shape == noShape && w.B() == 0 {
+	// it on a site's own root), where the literal says less: of the
+	// realm's root for {}, the room the site learned (literalkeys.go).
+	ic := &cl.ic[w.C()]
+	if ic.shape == noShape && w.B() == 0 {
 		keyEmptySite[struct{}](r, ic)
 	}
-	root := r.shapes.siteRoot(&cl.ic[w.C()], r.proto.object)
+	root := r.shapes.siteRoot(ic, r.proto.object)
 	m := int(w.B())
 	if root != nil && int(root.slack) > m {
 		m = int(root.slack)
+	}
+	if root != nil && root.rootClass == emptyRootClass {
+		// {}: the room its site learned of its own objects (literalkeys.go).
+		if ic.fills != 0 {
+			return emptySiteMake[struct{}](r, ic, root)
+		}
+		m = max(m, int(ic.idx))
 	}
 	return newShapedLiteral(root.orRoot(ClassObject, r.proto.object), ClassObject, m)
 }

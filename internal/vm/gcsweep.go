@@ -101,5 +101,8 @@ func (r *Runtime) clearReturnedFrames() {
 	// Returned calls leave their saved arguments beyond the live prefix.
 	clear(r.argStack[len(r.argStack):cap(r.argStack)])
 	arraySamplesLetGo[struct{}](r)
+	if r.emptySamples != nil {
+		emptySamplesLetGo[struct{}](r)
+	}
 	r.regExtrasLetGo()
 }

@@ -169,3 +169,72 @@ s + ""
 		t.Errorf("room %d and %d, want %d", x.valc, y.valc, emptyLiteralRoom)
 	}
 }
+
+// Native code's pools of a {} learn into its site's record as the
+// interpreter's executions do: each fill reads the sample before it and
+// samples the object it gives last, so that a loop compiled from its first
+// turns, whose objects come from pools from then on, has its objects made
+// with the room of the twenty properties they are given, where the realm's
+// root's fixed room had each grow its table to 9, 18 and 39.
+func TestJITEmptySitePoolLearns(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const src = `
+function mk(i) {
+	var o = {};
+	o.a = i; o.b = 2; o.c = 3; o.d = 4; o.e = 5; o.f = 6; o.g = 7; o.h = 8; o.i = 9; o.j = 10;
+	for (var k = 0; k < 10; k++) o[k] = k;
+	return o;
+}
+var s = 0, x;
+for (var i = 0; i < 3000; i++) { x = mk(i); s += x.j; }
+s + ""
+`
+	r := newTestRuntime(t, Config{JIT: true})
+	defer r.Close()
+	r.jitCallThreshold, r.jitICThreshold = 1, 1
+	got, _ := jitRunWithin(t, r, src, jitTestWindow)
+	if got != "30000" {
+		t.Fatalf("got %q", got)
+	}
+	if st := r.JITStats(); st.SSAEntries == 0 {
+		t.Fatalf("no native entry: %+v", st)
+	}
+	x := globalObject(r, "x")
+	if x.valn != 20 || x.valc != 20 || x.shape.unique || x.shape.root().rootClass != emptyRootClass {
+		t.Errorf("the last object: %d properties in room for %d (unique %v)", x.valn, x.valc, x.shape.unique)
+	}
+	if ic := emptySiteOf(t, r, "mk"); ic.idx != 20 || ic.fills != 0 {
+		t.Errorf("the site's record: room %d, %d samples left, want 20 and settled", ic.idx, ic.fills)
+	}
+	if r.emptySamples != nil {
+		t.Errorf("the turn's end left %d samples", len(r.emptySamples))
+	}
+	// A {} the interpreter never ran: native code compiled before the site
+	// first made an object makes them all from its pool, whose fills alone
+	// teach the site.
+	const late = `
+function mk2(i, go) {
+	if (!go) return null;
+	var o = {};
+	o.a = i; o.b = 2; o.c = 3; o.d = 4; o.e = 5; o.f = 6; o.g = 7; o.h = 8; o.i = 9; o.j = 10;
+	for (var k = 0; k < 10; k++) o[k] = k;
+	return o;
+}
+for (var i = 0; i < 200; i++) mk2(i, false);
+var y, n = 0;
+for (var i = 0; i < 3000; i++) { y = mk2(i, true); n += y.j; }
+n + ""
+`
+	if got, _ := jitRunWithin(t, r, late, jitTestWindow); got != "30000" {
+		t.Fatalf("got %q", got)
+	}
+	y := globalObject(r, "y")
+	if y.valn != 20 || y.valc != 20 {
+		t.Errorf("the last object of a site native code ran first: %d properties in room for %d", y.valn, y.valc)
+	}
+	if ic := emptySiteOf(t, r, "mk2"); ic.idx != 20 || ic.fills != 0 {
+		t.Errorf("the site native code ran first: room %d, %d samples left, want 20 and settled", ic.idx, ic.fills)
+	}
+}
